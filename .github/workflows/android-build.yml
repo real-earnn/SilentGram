@@ -30,6 +30,31 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # Caching: without it every run recompiles all of Telegram's native
+      # C++ (ffmpeg, webrtc, tgcalls, td, ...) from scratch — ~1 hour.
+      # With it, a small fix rebuilds in ~10-15 minutes.
+      - name: Set up Gradle (cache dependencies + build outputs)
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Restore ccache (native C++ object cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          # Unique key per commit so the updated cache is saved at the end
+          # of the run; restore-keys falls back to the newest previous one.
+          key: ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-
+
+      - name: Install ccache
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ccache
+          ccache --max-size=4G
+          ccache --set-config=compression=true
+          ccache --zero-stats
+          echo "ccache dir: $(ccache --get-config cache_dir)"
+
       - name: Install SDK 36 + NDK 27.2.12479018 (preinstalled SDK)
         run: |
           # ubuntu-latest already has the Android SDK preinstalled ($ANDROID_HOME).
@@ -47,6 +72,9 @@ jobs:
         # TMessagesProj is a LIBRARY — the app lives in TMessagesProj_App
         # (Play Store build, applicationId comes from APP_PACKAGE).
         run: ./gradlew :TMessagesProj_App:assembleRelease :TMessagesProj_App:bundleRelease --stacktrace
+
+      - name: Show ccache stats (did the native cache hit?)
+        run: ccache --show-stats || true
 
       - name: Sign APK + AAB (debug keystore, for testing)
         run: |

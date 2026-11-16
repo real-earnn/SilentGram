@@ -155,7 +155,15 @@ android {
         externalNativeBuild {
             cmake {
                 version '3.22.1'
-                arguments '-DANDROID_STL=c++_static', '-DANDROID_PLATFORM=android-23' //, '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
+                // ccache (CI): reuse already-compiled C++ objects between runs so a
+                // small fix rebuilds in minutes instead of an hour. The workflow
+                // installs ccache and caches ~/.ccache. Only enabled when ccache
+                // is installed, so local builds without it are unaffected.
+                def cmakeArgs = ['-DANDROID_STL=c++_static', '-DANDROID_PLATFORM=android-23']
+                if (new File('/usr/bin/ccache').exists() || new File('/usr/local/bin/ccache').exists()) {
+                    cmakeArgs += ['-DCMAKE_C_COMPILER_LAUNCHER=ccache', '-DCMAKE_CXX_COMPILER_LAUNCHER=ccache']
+                }
+                arguments(*cmakeArgs) //, '-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON'
                 targets 'tmessages.49', 'twidget'
             }
         }
