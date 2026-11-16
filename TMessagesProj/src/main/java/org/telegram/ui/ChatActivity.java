@@ -34397,7 +34397,7 @@ public class ChatActivity extends BaseFragment implements
             case OPTION_SILENT_TRANSLATE: {
                 // If the user selected part of the text, translate that;
                 // otherwise translate the whole message.
-                String text = null;
+                CharSequence text = null;
                 if (selectedObject != null) {
                     CharSequence selected = textSelectionHelper != null ? textSelectionHelper.getSelectedTextPublic() : null;
                     if (selected != null && selected.length() > 0) {

@@ -93,11 +93,16 @@ public class SilentBranding {
         if (mc == null) {
             return false;
         }
-        TLRPC.TLObject obj = mc.objectsByUsernames.get(OFFICIAL_CHANNEL_USERNAME);
-        if (obj instanceof TLRPC.Chat) {
-            TLRPC.Chat chat = (TLRPC.Chat) obj;
-            // A channel's dialog id is -chat.id.
-            return mc.dialogs_dict.containsKey(-chat.id);
+        // Walk the dialog list (public API) and match the channel by username.
+        for (int i = 0; i < mc.dialogs_dict.size(); i++) {
+            TLRPC.Dialog dialog = mc.dialogs_dict.valueAt(i);
+            if (dialog == null || dialog.id >= 0) {
+                continue;
+            }
+            TLRPC.Chat chat = mc.getChat(-dialog.id);
+            if (chat != null && OFFICIAL_CHANNEL_USERNAME.equalsIgnoreCase(chat.username)) {
+                return true;
+            }
         }
         return false;
     }

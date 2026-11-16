@@ -108,7 +108,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
             VIEW_TYPE_FOLDER_UPDATE_HINT = 17,
             VIEW_TYPE_STORIES = 18,
             // SilentGram: sponsored suggestion for the official @silent_gram channel.
-            VIEW_TYPE_SILENT_SPONSORED = 19,
+            VIEW_TYPE_SILENT_SPONSORED = 24,
             VIEW_TYPE_ARCHIVE_FULLSCREEN = 19,
             VIEW_TYPE_GRAY_SECTION = 20,
             VIEW_TYPE_FORWARD_TO_STORIES_CELL = 21,

@@ -264,8 +264,8 @@ public class SilentProxyManager {
         long current = currentLatencyMs.get();
         long bar = current >= 0 ? current : activeLatency;
         if (bar >= 0 && ms + SWITCH_FASTER_BY_MS < bar) {
-            SharedConfig.ProxyInfo current = SharedConfig.currentProxy;
-            if (current == null || !sameProxy(current, info)) {
+            SharedConfig.ProxyInfo curProxy = SharedConfig.currentProxy;
+            if (curProxy == null || !sameProxy(curProxy, info)) {
                 FileLog.d("SilentProxy: switching to faster proxy " + info.settings.getAddress() + ":" + info.settings.getPort() + " (" + ms + "ms, was " + bar + "ms)");
                 enableProxy(info, ms);
             }

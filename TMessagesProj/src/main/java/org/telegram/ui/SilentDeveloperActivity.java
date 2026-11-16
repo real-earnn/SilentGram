@@ -39,9 +39,12 @@ public class SilentDeveloperActivity extends BaseFragment {
     public View createView(Context context) {
         actionBar.setBackButtonImage(R.drawable.ic_ab_back);
         actionBar.setTitle(LocaleController.getString(R.string.SilentDeveloperTitle));
-        actionBar.setActionBarMenuOnItemClick(view -> {
-            if (view.getId() == -1) {
-                finishFragment();
+        actionBar.setActionBarMenuOnItemClick(new ActionBar.ActionBarMenuOnItemClick() {
+            @Override
+            public void onItemClick(int id) {
+                if (id == -1) {
+                    finishFragment();
+                }
             }
         });
 
@@ -71,7 +74,7 @@ public class SilentDeveloperActivity extends BaseFragment {
         header.addView(title, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
 
         TextView version = new TextView(context);
-        version.setText(LocaleController.formatString(R.string.TelegramVersion, BuildVars.VERSION_NAME));
+        version.setText(LocaleController.formatString(R.string.TelegramVersion, BuildVars.BUILD_VERSION_STRING));
         version.setTextSize(14);
         version.setTextColor(0xCCFFFFFF);
         version.setPadding(0, AndroidUtilities.dp(4), 0, AndroidUtilities.dp(8));

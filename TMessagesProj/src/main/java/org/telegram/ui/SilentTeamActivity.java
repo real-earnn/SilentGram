@@ -40,9 +40,12 @@ public class SilentTeamActivity extends BaseFragment {
     public View createView(Context context) {
         actionBar.setBackButtonImage(R.drawable.ic_ab_back);
         actionBar.setTitle(LocaleController.getString(R.string.SilentHackersTeam));
-        actionBar.setActionBarMenuOnItemClick(view -> {
-            if (view.getId() == -1) {
-                finishFragment();
+        actionBar.setActionBarMenuOnItemClick(new ActionBar.ActionBarMenuOnItemClick() {
+            @Override
+            public void onItemClick(int id) {
+                if (id == -1) {
+                    finishFragment();
+                }
             }
         });
 
