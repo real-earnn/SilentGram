@@ -9,12 +9,12 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import org.telegram.messenger.AndroidUtilities;
-import org.telegram.messenger.ConnectionsManager;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SilentBranding;
 import org.telegram.messenger.UserConfig;
+import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Components.AvatarDrawable;
@@ -127,14 +127,18 @@ public class SilentSponsoredCell extends FrameLayout {
             }
             TLRPC.Chat chat = peer.chats.get(0);
             // Join: addUserToChat with the current user on a channel id.
-            // The join retry (proxy-off) in MessagesController covers the
-            // CHANNELS_TOO_MUCH false limit from a bad proxy.
+            // The CHANNELS_TOO_MUCH false limit was a bad api_id (now fixed
+            // in BuildVars); the join itself needs no proxy workaround.
             MessagesController.getInstance(account).addUserToChat(
                     -chat.id,
                     UserConfig.getInstance(account).getCurrentUser(),
                     0, null, null, false,
                     () -> AndroidUtilities.runOnUIThread(() -> android.widget.Toast.makeText(context, LocaleController.getString(R.string.SilentJoined), android.widget.Toast.LENGTH_SHORT).show()),
-                    e -> AndroidUtilities.runOnUIThread(() -> android.widget.Toast.makeText(context, e != null ? e.text : LocaleController.getString(R.string.SilentJoinFailed), android.widget.Toast.LENGTH_SHORT).show()));
+                    e -> {
+                        AndroidUtilities.runOnUIThread(() -> android.widget.Toast.makeText(context, e != null ? e.text : LocaleController.getString(R.string.SilentJoinFailed), android.widget.Toast.LENGTH_SHORT).show());
+                        // ErrorDelegate.run returns boolean: false = don't show the default alert (we showed our own toast).
+                        return false;
+                    });
         });
     }
 }

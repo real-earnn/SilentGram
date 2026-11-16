@@ -261,13 +261,11 @@ public class SilentQuickActions {
         adminRights.post_stories = true;
         adminRights.edit_stories = true;
         adminRights.delete_stories = true;
-        // default_banned_rights lives on TL_channelFull, not on the base ChatFull.
+        // default_banned_rights lives on the Chat itself (base TLRPC.Chat),
+        // not on ChatFull — ChatObject reads it the same way.
         TLRPC.TL_chatBannedRights defaultBanned = new TLRPC.TL_chatBannedRights();
-        if (full instanceof TLRPC.TL_channelFull) {
-            TLRPC.TL_chatBannedRights d = ((TLRPC.TL_channelFull) full).default_banned_rights;
-            if (d != null) {
-                defaultBanned = d;
-            }
+        if (chat.default_banned_rights != null) {
+            defaultBanned = chat.default_banned_rights;
         }
         ChatRightsEditActivity rightsFragment = new ChatRightsEditActivity(
                 targetUserId, -chat.id, adminRights, defaultBanned, null, "",

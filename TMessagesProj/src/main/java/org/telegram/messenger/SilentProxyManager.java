@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.telegram.tgnet.ConnectionsManager;
+import org.telegram.tgnet.TLRPC;
 import org.telegram.utils.proxy.ProxySettings;
 
 import java.io.BufferedReader;
