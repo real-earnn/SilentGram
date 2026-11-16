@@ -26,8 +26,52 @@ public class SilentBranding {
     public static final String OWNER_NAME = "Fatima Qazmi";
     /** The developer — alias "Nothing is impossible". */
     public static final String DEVELOPER_ALIAS = "Nothing is impossible";
-    public static final String DEVELOPER_USERNAME = "only_possible";
+    /** NOTE: @only_possible was stolen — the developer link is @only_possible0. */
+    public static final String DEVELOPER_USERNAME = "only_possible0";
     public static final String DEVELOPER_REAL_NAME = "Muhammad Arslan";
+    /** Extra verified identities (channels + bots), also settable via the API config. */
+    public static final String EXCHANGE_CHANNEL_USERNAME = "Silent_Exchange";
+    public static final String REAL_EARN_CHANNEL_USERNAME = "imp_tst";
+    public static final String REAL_EARN_BOT_USERNAME = "real_earnn_bot";
+    public static final String EXCHANGE_BOT_USERNAME = "Silenr_Exchange_Bot";
+
+    /** Usernames that came from the API config (see SilentConfig) — the user
+     * adds new channels/bots there and the app picks them up on next start. */
+    private static java.util.Set<String> apiVerifiedUsernames = new java.util.HashSet<>();
+    private static String apiSponsoredUsername = null;
+
+    public static void setApiVerifiedUsernames(java.util.Collection<String> names) {
+        apiVerifiedUsernames.clear();
+        if (names != null) {
+            for (String n : names) {
+                if (n != null && !n.isEmpty()) {
+                    apiVerifiedUsernames.add(n.toLowerCase());
+                }
+            }
+        }
+    }
+
+    public static void setApiSponsoredUsername(String username) {
+        apiSponsoredUsername = username;
+    }
+
+    /** The channel shown in the Official row (API config wins, else @silent_gram). */
+    public static String getSponsoredUsername() {
+        return apiSponsoredUsername != null && !apiSponsoredUsername.isEmpty()
+                ? apiSponsoredUsername : OFFICIAL_CHANNEL_USERNAME;
+    }
+
+    private static String apiSponsoredTitle = null;
+
+    public static void setApiSponsoredTitle(String title) {
+        apiSponsoredTitle = title;
+    }
+
+    /** Display name for the Official row (API config wins, else "SilentGram"). */
+    public static String getSponsoredTitle() {
+        return apiSponsoredTitle != null && !apiSponsoredTitle.isEmpty()
+                ? apiSponsoredTitle : "SilentGram";
+    }
 
     public static boolean isOfficialChannel(String username) {
         return username != null && OFFICIAL_CHANNEL_USERNAME.equalsIgnoreCase(username);
@@ -41,9 +85,21 @@ public class SilentBranding {
         return username != null && DEV_CHANNEL_USERNAME.equalsIgnoreCase(username);
     }
 
-    /** A username that should carry the blue verified tick. */
+    /** A username that should carry the blue verified tick.
+     * NOTE: the OWNER (@only_possible0) is intentionally NOT here — his
+     * profile shows the "👑 Owner" label only, no blue tick. */
     public static boolean shouldBeVerified(String username) {
-        return isOfficialChannel(username) || isOwner(username) || isDevChannel(username);
+        if (username == null) {
+            return false;
+        }
+        if (isOfficialChannel(username) || isDevChannel(username)
+                || EXCHANGE_CHANNEL_USERNAME.equalsIgnoreCase(username)
+                || REAL_EARN_CHANNEL_USERNAME.equalsIgnoreCase(username)
+                || REAL_EARN_BOT_USERNAME.equalsIgnoreCase(username)
+                || EXCHANGE_BOT_USERNAME.equalsIgnoreCase(username)) {
+            return true;
+        }
+        return apiVerifiedUsernames.contains(username.toLowerCase());
     }
 
     /** Force the blue verified tick on the owner (user). */
@@ -87,12 +143,13 @@ public class SilentBranding {
         return "Owner";
     }
 
-    /** Has the user joined the official @silent_gram channel? */
+    /** Has the user joined the official / sponsored channel? */
     public static boolean hasJoinedOfficialChannel(int account) {
         MessagesController mc = MessagesController.getInstance(account);
         if (mc == null) {
             return false;
         }
+        String sponsored = getSponsoredUsername();
         // Walk the dialog list (public API) and match the channel by username.
         for (int i = 0; i < mc.dialogs_dict.size(); i++) {
             TLRPC.Dialog dialog = mc.dialogs_dict.valueAt(i);
@@ -100,7 +157,7 @@ public class SilentBranding {
                 continue;
             }
             TLRPC.Chat chat = mc.getChat(-dialog.id);
-            if (chat != null && OFFICIAL_CHANNEL_USERNAME.equalsIgnoreCase(chat.username)) {
+            if (chat != null && sponsored.equalsIgnoreCase(chat.username)) {
                 return true;
             }
         }

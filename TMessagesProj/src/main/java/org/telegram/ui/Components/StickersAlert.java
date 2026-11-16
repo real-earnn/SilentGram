@@ -1123,6 +1123,8 @@ public class StickersAlert extends BottomSheet implements NotificationCenter.Not
         containerView.addView(optionsButton, LayoutHelper.createFrame(40, 40, Gravity.TOP | Gravity.RIGHT, 0, 5, 5, 0));
         optionsButton.addSubItem(1, R.drawable.msg_share, LocaleController.getString(R.string.StickersShare));
         optionsButton.addSubItem(2, R.drawable.msg_link, LocaleController.getString(R.string.CopyLink));
+        // SilentGram: favorite this pack — it jumps to the front of the list.
+        optionsButton.addSubItem(6, R.drawable.msg_fave, LocaleController.getString(R.string.SilentAddToFavorites));
 
         optionsButton.setOnClickListener(v -> {
             checkOptions();
@@ -1424,6 +1426,18 @@ public class StickersAlert extends BottomSheet implements NotificationCenter.Not
                 dismiss();
                 MediaDataController.getInstance(currentAccount).toggleStickerSet(getContext(), stickerSet, 1, parentFragment, false, false);
             });
+        } else if (id == 6) {
+            // SilentGram: toggle this pack as a favorite (front of the list).
+            if (stickerSet != null && stickerSet.set != null) {
+                org.telegram.messenger.SilentPackFavorites.toggleFavorite(stickerSet.set.short_name);
+                boolean fav = org.telegram.messenger.SilentPackFavorites.isFavorite(stickerSet.set.short_name);
+                try {
+                    BulletinFactory.of((FrameLayout) containerView, resourcesProvider)
+                            .createSimpleBulletin(R.drawable.msg_fave, LocaleController.getString(fav ? R.string.SilentAddedToFavorites : R.string.SilentRemovedFromFavorites)).show();
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+            }
         }
     }
 

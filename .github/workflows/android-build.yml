@@ -24,6 +24,19 @@ jobs:
           # Telegram needs its git submodules (ffmpeg, td, media, ...).
           submodules: recursive
 
+      # SilentGram versioning: version.properties holds the NEXT version to
+      # use. versionCode +1 and versionName patch +1 on every build, so each
+      # build gets a unique tag (no more "release already exists" failures)
+      # and Play Store always sees a higher versionCode.
+      - name: Read next version
+        id: version
+        run: |
+          CODE=$(grep '^VERSION_CODE=' version.properties | cut -d= -f2)
+          NAME=$(grep '^VERSION_NAME=' version.properties | cut -d= -f2)
+          echo "code=$CODE" >> $GITHUB_OUTPUT
+          echo "name=$NAME" >> $GITHUB_OUTPUT
+          echo "Building SilentGram v$NAME ($CODE)"
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -71,7 +84,8 @@ jobs:
       - name: Build release APK + AAB
         # TMessagesProj is a LIBRARY — the app lives in TMessagesProj_App
         # (Play Store build, applicationId comes from APP_PACKAGE).
-        run: ./gradlew :TMessagesProj_App:assembleRelease :TMessagesProj_App:bundleRelease --stacktrace
+        # -PAPP_VERSION_CODE/NAME override gradle.properties for this build.
+        run: ./gradlew :TMessagesProj_App:assembleRelease :TMessagesProj_App:bundleRelease -PAPP_VERSION_CODE=${{ steps.version.outputs.code }} -PAPP_VERSION_NAME=${{ steps.version.outputs.name }} --stacktrace
 
       - name: Show ccache stats (did the native cache hit?)
         run: ccache --show-stats || true
@@ -106,17 +120,30 @@ jobs:
           cp "$AAB" /tmp/SilentGram-release.aab
           ls -lh /tmp/SilentGram-release.apk /tmp/SilentGram-release.aab
 
+      # Safety net: even if the Release step below fails, the APK + AAB are
+      # always kept as workflow artifacts, so a good build is never lost.
+      - name: Upload APK + AAB as artifacts (fallback)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SilentGram-v${{ steps.version.outputs.name }}-${{ steps.version.outputs.code }}
+          path: |
+            /tmp/SilentGram-release.apk
+            /tmp/SilentGram-release.aab
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: Create Release (AAB + APK)
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v13.2.2-silentgram-1
-          name: SilentGram v13.2.2 (1)
+          tag_name: v${{ steps.version.outputs.name }}
+          name: SilentGram v${{ steps.version.outputs.name }} (${{ steps.version.outputs.code }})
           body: |
-            SilentGram — first build with the new features:
+            SilentGram v${{ steps.version.outputs.name }} (version code ${{ steps.version.outputs.code }})
             - Auto proxy in the background (parallel check, fastest wins)
             - First-login folders (Bots / Users / Groups / Channels)
             - Message menu: Forward Without Quoting, Schedule Download, Translate
-            - Official @silent_gram channel (Sponsored suggestion + blue tick)
+            - Official @silent_gram channel (Official row + blue tick)
             - Developer page in Settings
             - Owner badge on @only_possible0
             - Final logo (gold/blue 3D S + paper plane, crescent + stars)
@@ -129,5 +156,25 @@ jobs:
             /tmp/SilentGram-release.aab
           draft: false
           prerelease: false
+          overwrite_files: true
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Bump the version for the NEXT build and commit it back. Pushing with
+      # GITHUB_TOKEN does not trigger a new workflow run, so no build loop.
+      - name: Bump version for next build
+        if: success()
+        run: |
+          CODE=${{ steps.version.outputs.code }}
+          NAME=${{ steps.version.outputs.name }}
+          NEXT_CODE=$((CODE + 1))
+          NEXT_NAME=$(echo "$NAME" | awk -F. '{print $1"."$2"."$3+1}')
+          sed -i "s/^VERSION_CODE=.*/VERSION_CODE=$NEXT_CODE/" version.properties
+          sed -i "s/^VERSION_NAME=.*/VERSION_NAME=$NEXT_NAME/" version.properties
+          cat version.properties
+          git config user.name "SilentGram Builder"
+          git config user.email "builder@silentgram.local"
+          git add version.properties
+          git diff --cached --quiet || git commit -m "Bump version to v$NEXT_NAME ($NEXT_CODE) [skip ci]"
+          git push origin HEAD:master

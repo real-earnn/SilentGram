@@ -4013,6 +4013,9 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             };
             viewPage.listView.setVerticalScrollBarEnabled(true);
             viewPage.listView.setInstantClick(true);
+            // SilentGram E5: swipe down on the chat list (from the very top)
+            // opens the account switcher instead of Stories.
+            setupSilentAccountSwipe(viewPage);
             viewPage.layoutManager = new LinearLayoutManager(context) {
 
                 @Override
@@ -7815,7 +7818,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             int dialogsType = dialogsAdapter.getDialogsType();
             // SilentGram: sponsored @silent_gram row — open the official channel.
             if (adapter.getItemViewType(position) == DialogsAdapter.VIEW_TYPE_SILENT_SPONSORED) {
-                getMessagesController().openByUserName(org.telegram.messenger.SilentBranding.OFFICIAL_CHANNEL_USERNAME, this, 0);
+                getMessagesController().openByUserName(org.telegram.messenger.SilentBranding.getSponsoredUsername(), this, 0);
                 return;
             }
             if (dialogsType == DIALOGS_TYPE_FOLDER1 || dialogsType == DIALOGS_TYPE_FOLDER2) {
@@ -13409,6 +13412,13 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             args.putLong("user_id", UserConfig.getInstance(currentAccount).getClientUserId());
             presentFragment(new ChatActivity(args));
         });
+        // SilentGram E5: Status/Stories moved here (the swipe-down area now
+        // shows the account switcher instead). Opens the story recorder.
+        io.add(R.drawable.outline_fab_story_24, getString(R.string.SilentMyStatus), () -> {
+            if (dialogStoriesCell != null) {
+                dialogStoriesCell.openStoryRecorder();
+            }
+        });
         if (ApplicationLoader.applicationLoaderInstance != null) {
             ApplicationLoader.applicationLoaderInstance.addItemOptions(io);
         }
@@ -14027,6 +14037,44 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         btn.addView(textView, LayoutHelper.createLinear(0, LayoutHelper.WRAP_CONTENT, 1f, Gravity.CENTER_VERTICAL, 13, 0, 14, 0));
 
         return btn;
+    }
+
+    /**
+     * SilentGram E5: swipe down on the chat list (from the very top) opens
+     * the account switcher. The list keeps its normal touch handling — we
+     * only watch for a long downward pull while already at the top.
+     */
+    private void setupSilentAccountSwipe(ViewPage viewPage) {
+        viewPage.listView.setOnTouchListener(new View.OnTouchListener() {
+            private float downY;
+            private boolean pulled;
+
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getAction()) {
+                    case MotionEvent.ACTION_DOWN:
+                        downY = event.getY();
+                        pulled = false;
+                        break;
+                    case MotionEvent.ACTION_MOVE:
+                        if (!pulled && !viewPage.listView.canScrollVertically(-1)) {
+                            float dy = event.getY() - downY;
+                            if (dy > AndroidUtilities.dp(120)) {
+                                pulled = true;
+                            }
+                        }
+                        break;
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        if (pulled) {
+                            pulled = false;
+                            openAccountSelector(viewPage.listView);
+                        }
+                        break;
+                }
+                return false;
+            }
+        });
     }
 
     private boolean openAccountSelector(View view) {

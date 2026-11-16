@@ -87,13 +87,13 @@ public class SilentTeamActivity extends BaseFragment {
 
         // People.
         addSectionHeader(layout, context, LocaleController.getString(R.string.SilentTeamPeople));
-        addPlainRow(layout, context, LocaleController.getString(R.string.SilentOwnedBy), SilentBranding.OWNER_NAME);
-        addLinkRow(layout, context, LocaleController.getString(R.string.SilentTeamDeveloper), SilentBranding.DEVELOPER_ALIAS + "  •  " + SilentBranding.DEVELOPER_REAL_NAME, SilentBranding.DEVELOPER_USERNAME);
-        addPlainRow(layout, context, LocaleController.getString(R.string.SilentTeamRole), LocaleController.getString(R.string.SilentTeamRoleValue));
-        addPlainRow(layout, context, LocaleController.getString(R.string.SilentTeamDob), "15-05-2004");
-        addPlainRow(layout, context, LocaleController.getString(R.string.SilentTeamLocation), "Multan, Pakistan");
-        addLinkRow(layout, context, LocaleController.getString(R.string.SilentTeamChannel), "@" + SilentBranding.DEV_CHANNEL_USERNAME, SilentBranding.DEV_CHANNEL_USERNAME);
-        addLinkRow(layout, context, LocaleController.getString(R.string.SilentTeamContact), "@" + SilentBranding.DEVELOPER_USERNAME, SilentBranding.DEVELOPER_USERNAME);
+        addPlainRow(layout, context, LocaleController.getString(R.string.SilentOwnedBy), SilentBranding.OWNER_NAME, true);
+        addLinkRow(layout, context, LocaleController.getString(R.string.SilentTeamDeveloper), SilentBranding.DEVELOPER_ALIAS + "  •  " + SilentBranding.DEVELOPER_REAL_NAME, SilentBranding.DEVELOPER_USERNAME, true);
+        addPlainRow(layout, context, LocaleController.getString(R.string.SilentTeamRole), LocaleController.getString(R.string.SilentTeamRoleValue), false);
+        addPlainRow(layout, context, LocaleController.getString(R.string.SilentTeamDob), "15-05-2004", false);
+        addPlainRow(layout, context, LocaleController.getString(R.string.SilentTeamLocation), "Multan, Pakistan", false);
+        addLinkRow(layout, context, LocaleController.getString(R.string.SilentTeamChannel), SilentBranding.DEVELOPER_ALIAS, SilentBranding.DEV_CHANNEL_USERNAME, true);
+        addLinkRow(layout, context, LocaleController.getString(R.string.SilentTeamContact), SilentBranding.DEVELOPER_ALIAS, SilentBranding.DEVELOPER_USERNAME, true);
 
         // Projects.
         addSectionHeader(layout, context, LocaleController.getString(R.string.SilentTeamProjects));
@@ -133,7 +133,7 @@ public class SilentTeamActivity extends BaseFragment {
         // Free community utilities.
         addSectionHeader(layout, context, LocaleController.getString(R.string.SilentTeamFreeUtils));
         addBody(layout, context, LocaleController.getString(R.string.SilentTeamFreeUtilsDesc));
-        addLinkRow(layout, context, LocaleController.getString(R.string.SilentTeamChannel), "@" + SilentBranding.DEV_CHANNEL_USERNAME, SilentBranding.DEV_CHANNEL_USERNAME);
+        addLinkRow(layout, context, LocaleController.getString(R.string.SilentTeamChannel), SilentBranding.DEVELOPER_ALIAS, SilentBranding.DEV_CHANNEL_USERNAME, true);
 
         return fragmentView;
     }
@@ -157,8 +157,9 @@ public class SilentTeamActivity extends BaseFragment {
         layout.addView(body, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
     }
 
-    /** A tappable row: label on the left, value on the right. Tapping opens it in-app. */
-    private void addLinkRow(LinearLayout layout, Context context, String label, String value, String username) {
+    /** A tappable row: label on the left, display name (+ optional blue tick)
+     * on the right. Tapping opens the hidden username in-app. */
+    private void addLinkRow(LinearLayout layout, Context context, String label, String displayName, String username, boolean showVerifiedBadge) {
         LinearLayout row = new LinearLayout(context);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(0, AndroidUtilities.dp(10), 0, AndroidUtilities.dp(10));
@@ -177,17 +178,20 @@ public class SilentTeamActivity extends BaseFragment {
         row.addView(labelView, LayoutHelper.createLinear(0, LayoutHelper.WRAP_CONTENT, 1f, Gravity.CENTER_VERTICAL));
 
         TextView valueView = new TextView(context);
-        valueView.setText(value);
+        valueView.setText(displayName);
         valueView.setTextSize(15);
         valueView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText));
         row.addView(valueView, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT));
+        if (showVerifiedBadge) {
+            row.addView(makeVerifiedBadge(context), LayoutHelper.createLinear(20, 20, Gravity.CENTER_VERTICAL));
+        }
 
         layout.addView(row, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
         addDivider(layout, context);
     }
 
-    /** A plain row: label on the left, value on the right. NOT clickable. */
-    private void addPlainRow(LinearLayout layout, Context context, String label, String value) {
+    /** A plain row: label on the left, value on the right (+ optional blue tick). NOT clickable. */
+    private void addPlainRow(LinearLayout layout, Context context, String label, String value, boolean showVerifiedBadge) {
         LinearLayout row = new LinearLayout(context);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(0, AndroidUtilities.dp(10), 0, AndroidUtilities.dp(10));
@@ -203,9 +207,25 @@ public class SilentTeamActivity extends BaseFragment {
         valueView.setTextSize(15);
         valueView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
         row.addView(valueView, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT));
+        if (showVerifiedBadge) {
+            row.addView(makeVerifiedBadge(context), LayoutHelper.createLinear(20, 20, Gravity.CENTER_VERTICAL));
+        }
 
         layout.addView(row, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
         addDivider(layout, context);
+    }
+
+    /** The real blue verified badge (circle + check), as used in chat rows. */
+    private FrameLayout makeVerifiedBadge(Context context) {
+        FrameLayout badge = new FrameLayout(context);
+        badge.setPadding(AndroidUtilities.dp(4), 0, 0, 0);
+        android.widget.ImageView badgeBg = new android.widget.ImageView(context);
+        badgeBg.setImageDrawable(Theme.dialogs_verifiedDrawable);
+        badge.addView(badgeBg, LayoutHelper.createFrame(16, 16, Gravity.CENTER));
+        android.widget.ImageView badgeCheck = new android.widget.ImageView(context);
+        badgeCheck.setImageDrawable(Theme.dialogs_verifiedCheckDrawable);
+        badge.addView(badgeCheck, LayoutHelper.createFrame(16, 16, Gravity.CENTER));
+        return badge;
     }
 
     /** A project card: name + description + optional channel/bot links. */

@@ -187,7 +187,10 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
     }
 
     public int fixPosition(int position) {
-        if (hasSilentSponsored) {
+        // SilentGram: the Official row sits after Archived Chats (or at the
+        // very top when there is no archive row) — only subtract it when the
+        // requested position is below it.
+        if (hasSilentSponsored && silentSponsoredPosition >= 0 && position > silentSponsoredPosition) {
             position--;
         }
         if (hasChatlistHint) {
@@ -228,8 +231,11 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
 
     /** SilentGram: has the user joined the official @silent_gram channel? */
     public boolean isSilentSponsoredRow(int position) {
-        return hasSilentSponsored && position == 0;
+        return hasSilentSponsored && silentSponsoredPosition >= 0 && position == silentSponsoredPosition;
     }
+
+    /** SilentGram: adapter position of the Official row (-1 when hidden). */
+    private int silentSponsoredPosition = -1;
 
     public boolean isDataSetChanged() {
         return true;
@@ -1696,11 +1702,10 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
         itemInternals.clear();
         updateHasHints();
 
-        // SilentGram: sponsored @silent_gram suggestion at the very top.
+        // SilentGram: the Official row is inserted later, AFTER Archived
+        // Chats (so hiding the archive never leaves a gap above it).
         hasSilentSponsored = shouldShowSilentSponsored();
-        if (hasSilentSponsored) {
-            itemInternals.add(new ItemInternal(VIEW_TYPE_SILENT_SPONSORED));
-        }
+        silentSponsoredPosition = -1;
 
         MessagesController messagesController = MessagesController.getInstance(currentAccount);
 
@@ -1711,6 +1716,16 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
             array = parentFragment.getDialogsArray(currentAccount, dialogsType, folderId, dialogsListFrozen);
             if (array == null) {
                 array = new ArrayList<>();
+            }
+        }
+
+        // SilentGram: never show Telegram's proxy-sponsor channel — the user
+        // must not know a proxy is running in the background.
+        if (messagesController.promoDialogType == MessagesController.PROMO_TYPE_PROXY) {
+            for (int i = array.size() - 1; i >= 0; i--) {
+                if (messagesController.isPromoDialog(array.get(i).id, false)) {
+                    array.remove(i);
+                }
             }
         }
 
@@ -1897,6 +1912,27 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                     i--;
                 }
             }
+        }
+
+        // SilentGram: insert the Official row AFTER Archived Chats (so it is
+        // always 2nd), or at the very top when there is no archive row.
+        // Hiding the archive can then never strand it or leave a gap.
+        if (hasSilentSponsored) {
+            int insertAt = 0;
+            for (int i = 0; i < itemInternals.size(); i++) {
+                ItemInternal item = itemInternals.get(i);
+                if (item.viewType == VIEW_TYPE_DIALOG && item.dialog != null && item.dialog.folder_id != 0) {
+                    insertAt = i + 1;
+                    break;
+                }
+                // Only the leading rows (hints/sections) come before the
+                // dialogs — stop once real dialogs start.
+                if (item.viewType == VIEW_TYPE_DIALOG) {
+                    break;
+                }
+            }
+            itemInternals.add(insertAt, new ItemInternal(VIEW_TYPE_SILENT_SPONSORED));
+            silentSponsoredPosition = insertAt;
         }
     }
 

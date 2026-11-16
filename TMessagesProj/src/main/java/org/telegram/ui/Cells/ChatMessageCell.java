@@ -8055,6 +8055,13 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                                 } else {
                                     maxPhotoWidth = (int) (getParentWidth() * 0.5f);
                                 }
+                                // SilentGram: per-sticker resize (1-20 slider).
+                                if (documentAttachType == DOCUMENT_ATTACH_TYPE_STICKER && messageObject != null) {
+                                    float scale = org.telegram.messenger.SilentStickerResize.getScale(currentAccount, messageObject.getDialogId(), messageObject.getId());
+                                    if (scale != 1f) {
+                                        maxPhotoWidth = Math.min((int) (maxPhotoWidth * scale), getParentWidth());
+                                    }
+                                }
                             } else if (documentAttachType == DOCUMENT_ATTACH_TYPE_ROUND) {
                                 maxPhotoWidth = AndroidUtilities.roundMessageSize;
                                 photoImage.setAllowDecodeSingleFrame(true);
@@ -14460,6 +14467,48 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         return currentForwardChannel != null ? currentForwardChannel.verified : currentForwardUser != null && currentForwardUser.verified;
     }
 
+    // SilentGram: is the author of this message (user or channel) verified?
+    // Mirrors getAuthorName() — for signature_profiles channels the signer is
+    // the author, otherwise the channel/user itself.
+    private boolean isAuthorVerified() {
+        if (currentUser != null) {
+            return currentUser.verified;
+        } else if (currentChat != null) {
+            if (currentMessageObject != null && currentMessageObject.getDialogId() != UserObject.REPLY_BOT && currentChat.signature_profiles) {
+                long did = DialogObject.getPeerDialogId(currentMessageObject.messageOwner.from_id);
+                if (did >= 0) {
+                    TLRPC.User user = MessagesController.getInstance(currentAccount).getUser(did);
+                    if (user != null) return user.verified;
+                } else {
+                    TLRPC.Chat chat = MessagesController.getInstance(currentAccount).getChat(-did);
+                    if (chat != null) return chat.verified;
+                }
+            }
+            return currentChat.verified;
+        }
+        return false;
+    }
+
+    private ColoredImageSpan authorVerifiedSpan;
+
+    // SilentGram: blue verified badge next to the author's name (same
+    // drawable as the forwarded-name badge, sized to the name text).
+    private ColoredImageSpan getAuthorVerifiedSpan() {
+        if (authorVerifiedSpan == null) {
+            Drawable background = getContext().getResources().getDrawable(R.drawable.verified_area).mutate();
+            Drawable check = getContext().getResources().getDrawable(R.drawable.verified_check).mutate();
+            CombinedDrawable drawable = new CombinedDrawable(background, check);
+            drawable.setFullsize(true);
+            authorVerifiedSpan = new ColoredImageSpan(drawable);
+            authorVerifiedSpan.recolorDrawable = false;
+        }
+        CombinedDrawable drawable = (CombinedDrawable) authorVerifiedSpan.drawable;
+        drawable.getBackground().setColorFilter(new PorterDuffColorFilter(getThemedColor(Theme.key_chats_verifiedBackground), PorterDuff.Mode.MULTIPLY));
+        drawable.getIcon().setColorFilter(new PorterDuffColorFilter(getThemedColor(Theme.key_chats_verifiedCheck), PorterDuff.Mode.MULTIPLY));
+        authorVerifiedSpan.setSize((int) (Theme.chat_namePaint.getTextSize() * 0.95f));
+        return authorVerifiedSpan;
+    }
+
     private ColoredImageSpan getForwardVerifiedSpan() {
         if (forwardVerifiedSpan == null) {
             Drawable background = getContext().getResources().getDrawable(R.drawable.verified_area).mutate();
@@ -15928,6 +15977,30 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     }
 
     void setMessageObjectInternal(MessageObject messageObject) {
+        // SilentGram E7: cache the message text (for Deleted / Edited history).
+        // If the text changed since we last saw it, the old text is saved.
+        try {
+            if (messageObject != null && messageObject.messageText != null && messageObject.messageText.length() > 0) {
+                String sender = "";
+                if (messageObject.isOutOwner()) {
+                    sender = "You";
+                } else {
+                    long fromId = org.telegram.messenger.DialogObject.getPeerDialogId(messageObject.messageOwner.from_id);
+                    if (fromId > 0) {
+                        org.telegram.tgnet.TLRPC.User u = MessagesController.getInstance(currentAccount).getUser(fromId);
+                        if (u != null) {
+                            sender = org.telegram.messenger.UserObject.getUserName(u);
+                        }
+                    }
+                }
+                org.telegram.messenger.SilentMessageHistory.onMessageShown(
+                        messageObject.getDialogId(), messageObject.getId(),
+                        messageObject.messageText.toString(), sender,
+                        (long) messageObject.messageOwner.date * 1000);
+            }
+        } catch (Exception e) {
+            // Never break message rendering for history caching.
+        }
         if (((messageObject.messageOwner.flags & TLRPC.MESSAGE_FLAG_HAS_VIEWS) != 0 || messageObject.messageOwner.replies != null) && !currentMessageObject.scheduled && !currentMessageObject.isSponsored()) {
             if (!currentMessageObject.viewsReloaded) {
                 MessagesController.getInstance(currentAccount).addToViewsQueue(currentMessageObject);
@@ -16090,6 +16163,11 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             if (currentNameBotVerificationId != 0) {
                 nameWidth -= dp(4 + 12 + 4);
             }
+            // SilentGram: reserve room for the blue verified badge after the name.
+            boolean authorVerified = !viaBot && isAuthorVerified();
+            if (authorVerified) {
+                nameWidth -= dp(4 + 16 + 4);
+            }
             if (adminString != null) {
                 nameWidth -= dp(8);
             }
@@ -16149,6 +16227,15 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     nameStringFinal = stringBuilder;
                 }
                 nameStringFinal = TextUtils.ellipsize(nameStringFinal, Theme.chat_namePaint, nameWidth + additionalWidth, TextUtils.TruncateAt.END);
+            }
+            // SilentGram: blue verified badge after the author's name.
+            if (authorVerified && nameStringFinal != null && nameStringFinal.length() > 0) {
+                SpannableStringBuilder nameWithBadge = new SpannableStringBuilder();
+                nameWithBadge.append(nameStringFinal).append(" ");
+                int badgeStart = nameWithBadge.length();
+                nameWithBadge.append(" ");
+                nameWithBadge.setSpan(getAuthorVerifiedSpan(), badgeStart, badgeStart + 1, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                nameStringFinal = nameWithBadge;
             }
             try {
                 nameLayout = new StaticLayout(nameStringFinal, Theme.chat_namePaint, nameWidth + additionalWidth + dp(2), Layout.Alignment.ALIGN_NORMAL, 1.0f, 0.0f, false);

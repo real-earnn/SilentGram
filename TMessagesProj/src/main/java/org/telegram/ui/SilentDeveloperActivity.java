@@ -95,18 +95,19 @@ public class SilentDeveloperActivity extends BaseFragment {
         about.setPadding(0, 0, 0, AndroidUtilities.dp(12));
         layout.addView(about, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
 
-        // Links section.
+        // Links section — names only + blue tick; the username/link is hidden
+        // inside (tap opens it in-app).
         addSectionHeader(layout, context, LocaleController.getString(R.string.SilentDeveloperLinks));
-        addLinkRow(layout, context, LocaleController.getString(R.string.SilentOfficialChannel), "@" + SilentBranding.OFFICIAL_CHANNEL_USERNAME, SilentBranding.OFFICIAL_CHANNEL_USERNAME);
-        addLinkRow(layout, context, LocaleController.getString(R.string.SilentDevChannel), "@" + SilentBranding.DEV_CHANNEL_USERNAME, SilentBranding.DEV_CHANNEL_USERNAME);
-        addLinkRow(layout, context, LocaleController.getString(R.string.SilentOwner), "@" + SilentBranding.OWNER_USERNAME, SilentBranding.OWNER_USERNAME);
+        addLinkRow(layout, context, LocaleController.getString(R.string.SilentOfficialChannel), SilentBranding.getSponsoredTitle(), SilentBranding.getSponsoredUsername(), true);
+        addLinkRow(layout, context, LocaleController.getString(R.string.SilentDevChannel), SilentBranding.DEVELOPER_ALIAS, SilentBranding.DEV_CHANNEL_USERNAME, true);
+        addLinkRow(layout, context, LocaleController.getString(R.string.SilentOwner), SilentBranding.DEVELOPER_ALIAS, SilentBranding.OWNER_USERNAME, true);
 
         // Credits section.
         addSectionHeader(layout, context, LocaleController.getString(R.string.SilentCredits));
-        // Owned by Fatima Qazmi — plain text, NOT clickable.
-        addPlainRow(layout, context, LocaleController.getString(R.string.SilentOwnedBy), SilentBranding.OWNER_NAME);
-        // Developed by Nothing is impossible — clickable, opens @only_possible.
-        addLinkRow(layout, context, LocaleController.getString(R.string.SilentDevelopedBy), SilentBranding.DEVELOPER_ALIAS, SilentBranding.DEVELOPER_USERNAME);
+        // Owned by Fatima Qazmi — plain text, NOT clickable, with blue tick.
+        addPlainRow(layout, context, LocaleController.getString(R.string.SilentOwnedBy), SilentBranding.OWNER_NAME, true);
+        // Developed by Nothing is impossible — clickable, opens @only_possible0, with blue tick.
+        addLinkRow(layout, context, LocaleController.getString(R.string.SilentDevelopedBy), SilentBranding.DEVELOPER_ALIAS, SilentBranding.DEVELOPER_USERNAME, true);
 
         // Silent Hackers Team button.
         addSectionHeader(layout, context, LocaleController.getString(R.string.SilentTeamTitle));
@@ -134,8 +135,9 @@ public class SilentDeveloperActivity extends BaseFragment {
         layout.addView(header, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
     }
 
-    /** A tappable row: label on the left, value on the right. Tapping opens it in-app. */
-    private void addLinkRow(LinearLayout layout, Context context, String label, String value, String username) {
+    /** A tappable row: label on the left, display name (+ optional blue tick)
+     * on the right. Tapping opens the hidden username in-app. */
+    private void addLinkRow(LinearLayout layout, Context context, String label, String displayName, String username, boolean showVerifiedBadge) {
         LinearLayout row = new LinearLayout(context);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(0, AndroidUtilities.dp(10), 0, AndroidUtilities.dp(10));
@@ -154,17 +156,20 @@ public class SilentDeveloperActivity extends BaseFragment {
         row.addView(labelView, LayoutHelper.createLinear(0, LayoutHelper.WRAP_CONTENT, 1f, Gravity.CENTER_VERTICAL));
 
         TextView valueView = new TextView(context);
-        valueView.setText(value);
+        valueView.setText(displayName);
         valueView.setTextSize(15);
         valueView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlueText));
         row.addView(valueView, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT));
+        if (showVerifiedBadge) {
+            row.addView(makeVerifiedBadge(context), LayoutHelper.createLinear(20, 20, Gravity.CENTER_VERTICAL));
+        }
 
         layout.addView(row, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
         addDivider(layout, context);
     }
 
-    /** A plain row: label on the left, value on the right. NOT clickable. */
-    private void addPlainRow(LinearLayout layout, Context context, String label, String value) {
+    /** A plain row: label on the left, value on the right (+ optional blue tick). NOT clickable. */
+    private void addPlainRow(LinearLayout layout, Context context, String label, String value, boolean showVerifiedBadge) {
         LinearLayout row = new LinearLayout(context);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setPadding(0, AndroidUtilities.dp(10), 0, AndroidUtilities.dp(10));
@@ -180,9 +185,25 @@ public class SilentDeveloperActivity extends BaseFragment {
         valueView.setTextSize(15);
         valueView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
         row.addView(valueView, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT));
+        if (showVerifiedBadge) {
+            row.addView(makeVerifiedBadge(context), LayoutHelper.createLinear(20, 20, Gravity.CENTER_VERTICAL));
+        }
 
         layout.addView(row, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
         addDivider(layout, context);
+    }
+
+    /** The real blue verified badge (circle + check), as used in chat rows. */
+    private FrameLayout makeVerifiedBadge(Context context) {
+        FrameLayout badge = new FrameLayout(context);
+        badge.setPadding(AndroidUtilities.dp(4), 0, 0, 0);
+        android.widget.ImageView badgeBg = new android.widget.ImageView(context);
+        badgeBg.setImageDrawable(Theme.dialogs_verifiedDrawable);
+        badge.addView(badgeBg, LayoutHelper.createFrame(16, 16, Gravity.CENTER));
+        android.widget.ImageView badgeCheck = new android.widget.ImageView(context);
+        badgeCheck.setImageDrawable(Theme.dialogs_verifiedCheckDrawable);
+        badge.addView(badgeCheck, LayoutHelper.createFrame(16, 16, Gravity.CENTER));
+        return badge;
     }
 
     private void addDivider(LinearLayout layout, Context context) {

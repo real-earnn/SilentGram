@@ -15726,11 +15726,31 @@ public class MessagesController extends BaseController implements NotificationCe
             request = req;
         }
 
-        getConnectionsManager().sendRequest(request, (response, error) -> {
+        // SilentGram: a channel join rejected with CHANNELS_TOO_MUCH while a
+        // shared proxy is on is often a FALSE limit from the proxy — the same
+        // account joins fine from official Telegram. So retry the join ONCE
+        // with the proxy off; if it works, the proxy was the cause (and the
+        // proxy is restored right after). If it still fails, the real error
+        // is shown as usual.
+        final boolean[] joinRetriedWithoutProxy = new boolean[]{false};
+        org.telegram.tgnet.RequestDelegate joinRequestCallback = (response, error) -> {
             if (isChannel && inputUser instanceof TLRPC.TL_inputUserSelf) {
                 AndroidUtilities.runOnUIThread(() -> joiningToChannels.remove(chatId));
             }
             if (error != null) {
+                if ("CHANNELS_TOO_MUCH".equals(error.text) && request instanceof TLRPC.TL_channels_joinChannel && !joinRetriedWithoutProxy[0] && SharedConfig.isProxyEnabled() && SharedConfig.currentProxy != null) {
+                    joinRetriedWithoutProxy[0] = true;
+                    org.telegram.utils.proxy.ProxySettings savedProxy = SharedConfig.currentProxy.settings;
+                    FileLog.d("SilentGram: join CHANNELS_TOO_MUCH with proxy on — retrying once without proxy");
+                    ConnectionsManager.setProxySettings(false, null);
+                    getConnectionsManager().sendRequest(request, (response2, error2) -> {
+                        // Restore the proxy, then run the normal handler with
+                        // the retry's result.
+                        ConnectionsManager.setProxySettings(true, savedProxy);
+                        joinRequestCallback.run(response2, error2);
+                    });
+                    return;
+                }
                 if ("JOIN_GUARD_TIMEOUT".equals(error.text)) {
                     AndroidUtilities.runOnUIThread(() -> {
                         if (processInvitedUsers != null) {
@@ -15861,7 +15881,8 @@ public class MessagesController extends BaseController implements NotificationCe
                     getNotificationCenter().postNotificationName(NotificationCenter.joinedGroup, chatId);
                 });
             }
-        });
+        };
+        getConnectionsManager().sendRequest(request, joinRequestCallback);
     }
 
     public void deleteParticipantFromChat(long chatId, TLRPC.User user) {

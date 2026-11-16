@@ -9110,6 +9110,12 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
     private int currentConnectionState;
 
     private void updateProxyButton(boolean animated, boolean force) {
+        // SilentGram: the proxy is automatic and invisible — never show the
+        // proxy button on the login screen.
+        if (proxyButtonView != null) {
+            proxyButtonView.setVisibility(View.GONE);
+            proxyButtonView.setAlpha(0f);
+        }
         if (proxyDrawable == null) {
             return;
         }

@@ -1293,6 +1293,10 @@ public class ChatActivity extends BaseFragment implements
     public final static int OPTION_SILENT_SCHEDULE_DOWNLOAD = 200;
     public final static int OPTION_SILENT_FORWARD_NO_QUOTE = 201;
     public final static int OPTION_SILENT_TRANSLATE = 202;
+    public final static int OPTION_SILENT_SAVE_TO_SAVED = 203;
+    public final static int OPTION_SILENT_STICKER_RESIZE = 204;
+    public final static int OPTION_SILENT_BOOST_DOWNLOAD = 205;
+    public final static int OPTION_SILENT_FORWARD_ACCOUNT = 206;
 
     public final static int OPTION_SUGGESTION_EDIT_PRICE = 111;
     public final static int OPTION_SUGGESTION_EDIT_TIME = 112;
@@ -1733,6 +1737,9 @@ public class ChatActivity extends BaseFragment implements
 
     private final static int chat_menu_topic_create = 73;
     private final static int chat_menu_topics_panel = 75;
+
+    // SilentGram: quick actions (admin/share) in a user chat.
+    private final static int chat_menu_silent_quick = 76;
 
     private final static int id_chat_compose_panel = 1000;
 
@@ -4060,6 +4067,14 @@ public class ChatActivity extends BaseFragment implements
                     openTopicsPanel();
                 } else if (id == chat_menu_topic_create) {
                     presentFragment(TopicCreateFragment.create(-dialog_id, 0).setOpenInChatActivity(ChatActivity.this));
+                } else if (id == chat_menu_silent_quick) {
+                    // SilentGram: quick actions for this user (admin/share),
+                    // or Administration for MY channel/group.
+                    if (currentUser != null) {
+                        org.telegram.messenger.SilentQuickActions.showMenu(ChatActivity.this, currentAccount, dialog_id, currentUser.id);
+                    } else if (currentChat != null) {
+                        org.telegram.messenger.SilentQuickActions.showChannelAdminMenu(ChatActivity.this, currentAccount, dialog_id);
+                    }
                 } else if (id == 888) {
                     dumpCanvas();
                 } else if (id == 889) {
@@ -4228,6 +4243,21 @@ public class ChatActivity extends BaseFragment implements
 
         if (UserObject.isBotForumWithEditableTopics(currentUser) && chatMode == 0) {
             topicCreateItem = menu.addItem(chat_menu_topic_create, R.drawable.menu_topic_add_30);
+        }
+
+        // SilentGram: small arrow in the header of a user's chat — quick
+        // actions (make them admin of my channels/groups, share my channel/group).
+        // Same arrow in MY channel/group chats — Administration (admins,
+        // members, invite link).
+        if (chatMode == 0 && currentEncryptedChat == null) {
+            boolean showQuick = currentUser != null && !UserObject.isReplyUser(currentUser);
+            if (!showQuick && currentChat != null && (currentChat.creator || currentChat.admin_rights != null)) {
+                showQuick = true;
+            }
+            if (showQuick) {
+                ActionBarMenuItem quickItem = menu.addItem(chat_menu_silent_quick, R.drawable.ic_arrow_drop_down);
+                quickItem.setContentDescription(LocaleController.getString(R.string.SilentQuickActions));
+            }
         }
 
         if (currentEncryptedChat == null && (chatMode == 0 || chatMode == MODE_SAVED || chatMode == MODE_SUGGESTIONS) && !isReport()) {
@@ -8099,6 +8129,8 @@ public class ChatActivity extends BaseFragment implements
         updateSideButtonsForAttach();
         chatActivityEnterView.setInAppInsetsController(windowInsetsStateHolder);
         chatActivityEnterView.setDialogId(dialog_id, currentAccount);
+        // SilentGram E4: slash-trigger quick reply templates.
+        setupSilentTemplateTrigger();
         if (chatInfo != null) {
             chatActivityEnterView.setChatInfo(chatInfo);
         }
@@ -10047,6 +10079,86 @@ public class ChatActivity extends BaseFragment implements
     }
 
     private boolean lastSidebarAttach;
+    /**
+     * SilentGram E4: slash-trigger quick reply templates. Typing "/mywork"
+     * in the input pops a suggestion box above the input with the matching
+     * templates — tap one and its text is inserted.
+     */
+    private android.widget.PopupWindow silentTemplatePopup;
+
+    private void setupSilentTemplateTrigger() {
+        if (chatActivityEnterView == null || chatActivityEnterView.messageEditText == null) {
+            return;
+        }
+        chatActivityEnterView.messageEditText.addTextChangedListener(new android.text.TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+            }
+
+            @Override
+            public void afterTextChanged(android.text.Editable s) {
+                String text = s.toString();
+                if (!text.startsWith("/") || text.length() < 2 || text.contains(" ")) {
+                    dismissSilentTemplatePopup();
+                    return;
+                }
+                String prefix = text.substring(1);
+                java.util.List<org.telegram.messenger.SilentTemplates.Template> matches =
+                        org.telegram.messenger.SilentTemplates.findMatches(prefix);
+                if (matches.isEmpty()) {
+                    dismissSilentTemplatePopup();
+                    return;
+                }
+                showSilentTemplatePopup(matches);
+            }
+        });
+    }
+
+    private void dismissSilentTemplatePopup() {
+        if (silentTemplatePopup != null && silentTemplatePopup.isShowing()) {
+            silentTemplatePopup.dismiss();
+        }
+        silentTemplatePopup = null;
+    }
+
+    private void showSilentTemplatePopup(java.util.List<org.telegram.messenger.SilentTemplates.Template> matches) {
+        dismissSilentTemplatePopup();
+        Context context = getParentActivity();
+        if (context == null || chatActivityEnterView == null) {
+            return;
+        }
+        android.widget.LinearLayout layout = new android.widget.LinearLayout(context);
+        layout.setOrientation(android.widget.LinearLayout.VERTICAL);
+        layout.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
+        for (org.telegram.messenger.SilentTemplates.Template t : matches) {
+            TextView row = new TextView(context);
+            row.setText("/" + t.trigger);
+            row.setTextSize(15);
+            row.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
+            row.setPadding(AndroidUtilities.dp(16), AndroidUtilities.dp(12), AndroidUtilities.dp(16), AndroidUtilities.dp(12));
+            row.setOnClickListener(v -> {
+                dismissSilentTemplatePopup();
+                chatActivityEnterView.setFieldText(t.text);
+            });
+            layout.addView(row);
+        }
+        silentTemplatePopup = new android.widget.PopupWindow(layout,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        silentTemplatePopup.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Theme.getColor(Theme.key_windowBackgroundWhite)));
+        silentTemplatePopup.setElevation(AndroidUtilities.dp(8));
+        // Show above the input: measure first, then drop down with a
+        // negative offset (input height + popup height).
+        layout.measure(android.view.View.MeasureSpec.makeMeasureSpec(chatActivityEnterView.getWidth(), android.view.View.MeasureSpec.EXACTLY),
+                android.view.View.MeasureSpec.makeMeasureSpec(0, android.view.View.MeasureSpec.UNSPECIFIED));
+        int popupHeight = layout.getMeasuredHeight();
+        silentTemplatePopup.showAsDropDown(chatActivityEnterView, 0, -(chatActivityEnterView.getHeight() + popupHeight));
+    }
+
     private void updateSideButtonsForAttach() {
         if (chatActivityEnterView == null) return;
         chatActivityEnterView.setSideButtonsForAttach(isAttachInSideButtons() ? sideControlsButtonsLayout : null);
@@ -21336,6 +21448,27 @@ public class ChatActivity extends BaseFragment implements
 
     @Override
     public void didReceivedNotification(int id, int account, final Object... args) {
+        // SilentGram E7: a message was deleted — recover its cached text.
+        if (id == NotificationCenter.messagesDeleted && args != null && args.length >= 2 && args[0] instanceof java.util.ArrayList) {
+            try {
+                long channelId = 0;
+                if (args[1] instanceof Long) {
+                    channelId = (Long) args[1];
+                } else if (args[1] instanceof Integer) {
+                    channelId = (Integer) args[1];
+                }
+                // Only handle deletes for THIS chat: channels carry their id,
+                // user chats are matched by the cached message id.
+                boolean isMyChat = channelId != 0 ? (-channelId == dialog_id) : true;
+                if (isMyChat) {
+                    @SuppressWarnings("unchecked")
+                    java.util.ArrayList<Integer> ids = (java.util.ArrayList<Integer>) args[0];
+                    org.telegram.messenger.SilentMessageHistory.onMessagesDeleted(dialog_id, ids);
+                }
+            } catch (Exception e) {
+                // Never break notification handling for history.
+            }
+        }
         if (id == NotificationCenter.messagesDidLoad) {
             didReceivedNotification_messagesDidLoad(id, account, args);
         } else {
@@ -34414,6 +34547,56 @@ public class ChatActivity extends BaseFragment implements
                 }
                 break;
             }
+            case OPTION_SILENT_SAVE_TO_SAVED: {
+                // SilentGram: save this post/message to Saved Messages (as
+                // your own message, no "Forwarded from" header).
+                if (selectedObject == null) {
+                    break;
+                }
+                ArrayList<MessageObject> fmessages = new ArrayList<>();
+                if (selectedObjectGroup != null) {
+                    fmessages.addAll(selectedObjectGroup.messages);
+                } else {
+                    fmessages.add(selectedObject);
+                }
+                long selfId = getUserConfig().getClientUserId();
+                getSendMessagesHelper().sendMessage(fmessages, selfId, true, false, true, 0, 0, null, -1, 0, getSendMonoForumPeerId(), getSendMessageSuggestionParams());
+                BulletinFactory.of(this).createSimpleBulletin(R.drawable.msg_saved, LocaleController.getString(R.string.SilentSavedToSaved)).show();
+                break;
+            }
+            case OPTION_SILENT_STICKER_RESIZE: {
+                // SilentGram: resize this sticker (1 = tiny, 20 = full screen).
+                if (selectedObject != null && selectedObject.isSticker()) {
+                    org.telegram.messenger.SilentStickerResize.showPicker(getParentActivity(), currentAccount, selectedObject, () -> {
+                        if (chatListView != null) {
+                            chatListView.invalidateViews();
+                        }
+                        updateVisibleRows();
+                    });
+                }
+                break;
+            }
+            case OPTION_SILENT_BOOST_DOWNLOAD: {
+                // SilentGram E6: boost this download to the highest priority.
+                if (selectedObject != null) {
+                    org.telegram.ui.SilentDownloadManagerActivity.boostFile(currentAccount, selectedObject);
+                    BulletinFactory.of(this).createSimpleBulletin(R.drawable.msg_download, LocaleController.getString(R.string.SilentDownloadBoosted)).show();
+                }
+                break;
+            }
+            case OPTION_SILENT_FORWARD_ACCOUNT: {
+                // SilentGram E9: forward this message from another account.
+                ArrayList<MessageObject> toForward = new ArrayList<>();
+                if (selectedObjectGroup != null) {
+                    toForward.addAll(selectedObjectGroup.messages);
+                } else if (selectedObject != null) {
+                    toForward.add(selectedObject);
+                }
+                if (!toForward.isEmpty()) {
+                    org.telegram.messenger.SilentMultiAccountForward.startForward(ChatActivity.this, currentAccount, toForward);
+                }
+                break;
+            }
             case OPTION_COPY: {
                 final TL_iv.RichMessage copyRichMessage = selectedObject.messageOwner != null ? selectedObject.messageOwner.rich_message : null;
                 if (selectedObject.isDice()) {
@@ -47007,6 +47190,29 @@ public class ChatActivity extends BaseFragment implements
                         options.add(OPTION_SILENT_SCHEDULE_DOWNLOAD);
                         icons.add(R.drawable.msg_download);
                     }
+                    // SilentGram: save this post/message to Saved Messages.
+                    items.add(LocaleController.getString(R.string.SilentSaveToSaved));
+                    options.add(OPTION_SILENT_SAVE_TO_SAVED);
+                    icons.add(R.drawable.msg_saved);
+                    // SilentGram: resize a sticker (1 = tiny, 20 = full screen).
+                    if (selectedObject.isSticker()) {
+                        items.add(LocaleController.getString(R.string.SilentStickerResize));
+                        options.add(OPTION_SILENT_STICKER_RESIZE);
+                        icons.add(R.drawable.msg_expand);
+                    }
+                    // SilentGram E6: boost a downloading file to top priority.
+                    if (selectedObject.getDocument() != null || selectedObject.isPhoto() || selectedObject.isVideo()) {
+                        String fileName = selectedObject.getFileName();
+                        if (fileName != null && FileLoader.getInstance(currentAccount).isLoadingFile(fileName)) {
+                            items.add(LocaleController.getString(R.string.SilentBoostDownload));
+                            options.add(OPTION_SILENT_BOOST_DOWNLOAD);
+                            icons.add(R.drawable.msg_download);
+                        }
+                    }
+                    // SilentGram E9: forward this message from another account.
+                    items.add(LocaleController.getString(R.string.SilentForwardToAccount));
+                    options.add(OPTION_SILENT_FORWARD_ACCOUNT);
+                    icons.add(R.drawable.msg_forward);
                 }
                 if (allowUnpin) {
                     items.add(LocaleController.getString(R.string.UnpinMessage));

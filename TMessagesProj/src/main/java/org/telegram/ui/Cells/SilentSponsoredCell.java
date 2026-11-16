@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Typeface;
 import android.view.Gravity;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -52,23 +53,27 @@ public class SilentSponsoredCell extends FrameLayout {
         text.addView(nameRow, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT));
 
         TextView name = new TextView(context);
-        name.setText("SilentGram");
+        name.setText(SilentBranding.getSponsoredTitle());
         name.setTextSize(16);
         name.setTypeface(Typeface.DEFAULT_BOLD);
         name.setTextColor(Theme.getColor(Theme.key_chats_name));
         name.setSingleLine(true);
         nameRow.addView(name, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT));
 
-        TextView tick = new TextView(context);
-        tick.setText("  ✓");
-        tick.setTextSize(15);
-        tick.setTypeface(Typeface.DEFAULT_BOLD);
-        tick.setTextColor(0xFF3E9BFF);
-        nameRow.addView(tick, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT));
+        // Name + the REAL blue verified badge (circle + check), not a text tick.
+        FrameLayout badge = new FrameLayout(context);
+        ImageView badgeBg = new ImageView(context);
+        badgeBg.setImageDrawable(Theme.dialogs_verifiedDrawable);
+        badge.addView(badgeBg, LayoutHelper.createFrame(16, 16, Gravity.CENTER));
+        ImageView badgeCheck = new ImageView(context);
+        badgeCheck.setImageDrawable(Theme.dialogs_verifiedCheckDrawable);
+        badge.addView(badgeCheck, LayoutHelper.createFrame(16, 16, Gravity.CENTER));
+        badge.setPadding(AndroidUtilities.dp(4), 0, 0, 0);
+        nameRow.addView(badge, LayoutHelper.createLinear(20, 20, Gravity.CENTER_VERTICAL));
 
-        // Subtitle: Sponsored + username.
+        // Subtitle: Official + username.
         TextView sub = new TextView(context);
-        sub.setText(LocaleController.getString(R.string.SilentSponsored) + "  •  @" + SilentBranding.OFFICIAL_CHANNEL_USERNAME);
+        sub.setText(LocaleController.getString(R.string.SilentSponsored) + "  •  @" + SilentBranding.getSponsoredUsername());
         sub.setTextSize(14);
         sub.setTextColor(Theme.getColor(Theme.key_chats_message));
         sub.setSingleLine(true);

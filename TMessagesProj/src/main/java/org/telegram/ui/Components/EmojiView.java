@@ -5734,6 +5734,16 @@ public class EmojiView extends FrameLayout implements
             }
             stickerSets.add(pack);
         }
+        // SilentGram: favorited packs first (stable — keeps the user's order
+        // inside favorites and inside the rest).
+        java.util.HashSet<String> favPacks = org.telegram.messenger.SilentPackFavorites.getFavorites();
+        if (!favPacks.isEmpty()) {
+            java.util.Collections.sort(stickerSets, (o1, o2) -> {
+                boolean f1 = o1 != null && o1.set != null && favPacks.contains(o1.set.short_name);
+                boolean f2 = o2 != null && o2.set != null && favPacks.contains(o2.set.short_name);
+                return Boolean.compare(f2, f1);
+            });
+        }
 
 //        if (!premiumStickers.isEmpty()) {
 //            premiumTabNum = stickersTabOffset;
@@ -7690,6 +7700,15 @@ public class EmojiView extends FrameLayout implements
             MediaDataController mediaDataController = MediaDataController.getInstance(currentAccount);
             if (updateEmojipacks || frozenEmojiPacks == null) {
                 frozenEmojiPacks = new ArrayList<>(mediaDataController.getStickerSets(MediaDataController.TYPE_EMOJIPACKS));
+                // SilentGram: favorited emoji packs first.
+                java.util.HashSet<String> favPacks = org.telegram.messenger.SilentPackFavorites.getFavorites();
+                if (!favPacks.isEmpty()) {
+                    java.util.Collections.sort(frozenEmojiPacks, (o1, o2) -> {
+                        boolean f1 = o1 != null && o1.set != null && favPacks.contains(o1.set.short_name);
+                        boolean f2 = o2 != null && o2.set != null && favPacks.contains(o2.set.short_name);
+                        return Boolean.compare(f2, f1);
+                    });
+                }
             }
             ArrayList<TLRPC.TL_messages_stickerSet> installedEmojipacks = frozenEmojiPacks;
             boolean isPremium = UserConfig.getInstance(currentAccount).isPremium() || allowEmojisForNonPremium;

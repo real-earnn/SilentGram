@@ -47,6 +47,10 @@ import java.util.concurrent.atomic.AtomicReference;
 public class SilentProxyManager {
 
     // Our own API — the single source of proxies for the app.
+    // /api/live returns ONLY the live, fastest proxies (pre-checked by the
+    // API, sorted by latency) — the app never has to probe hundreds of
+    // dead ones. /api/proxies is the full list, used only as a fallback.
+    private static final String API_LIVE_URL = "https://silentgram-proxy.silenthost.site/api/live?limit=10";
     private static final String API_URL = "https://silentgram-proxy.silenthost.site/api/proxies";
     // Refresh the list every 1 hour (the API itself refreshes every 1 hour).
     private static final long REFRESH_INTERVAL_MS = 60 * 60 * 1000L;
@@ -54,8 +58,12 @@ public class SilentProxyManager {
     private static final int PROBE_TIMEOUT_MS = 1500;
     // Only switch to a faster proxy if it beats the current one by this much.
     private static final long SWITCH_FASTER_BY_MS = 100;
-    // How many proxies to probe in parallel.
-    private static final int PROBE_THREADS = 20;
+    // At most this many proxies are ever added/saved — the user asked for the
+    // 10 fastest only, so the list never floods and the network never chokes
+    // on hundreds of parallel checks.
+    private static final int MAX_PROXIES = 10;
+    // How many proxies to probe in parallel (only 10 candidates now).
+    private static final int PROBE_THREADS = 5;
 
     private static volatile boolean started;
     private static volatile boolean fetching;
@@ -71,6 +79,9 @@ public class SilentProxyManager {
             return;
         }
         started = true;
+        // App config (verified channels + sponsored row) from the same API.
+        SilentConfig.loadCached();
+        SilentConfig.refreshAsync();
         // If a proxy was already saved from a previous run, it is applied by
         // ConnectionsManager on startup — just refresh the list in background.
         refreshAsync();
@@ -84,8 +95,16 @@ public class SilentProxyManager {
         fetching = true;
         new Thread(() -> {
             try {
-                List<ProxySettings> proxies = fetchProxyList();
+                // /api/live first (only the fastest live proxies, pre-checked
+                // by the API). Fall back to the full list, capped at 10.
+                List<ProxySettings> proxies = fetchFromUrl(API_LIVE_URL);
+                if (proxies == null || proxies.isEmpty()) {
+                    proxies = fetchFromUrl(API_URL);
+                }
                 if (proxies != null && !proxies.isEmpty()) {
+                    if (proxies.size() > MAX_PROXIES) {
+                        proxies = new ArrayList<>(proxies.subList(0, MAX_PROXIES));
+                    }
                     applyProxies(proxies);
                 }
             } catch (Throwable e) {
@@ -97,9 +116,13 @@ public class SilentProxyManager {
     }
 
     private static List<ProxySettings> fetchProxyList() throws Exception {
+        return fetchFromUrl(API_LIVE_URL);
+    }
+
+    private static List<ProxySettings> fetchFromUrl(String apiUrl) throws Exception {
         HttpURLConnection conn = null;
         try {
-            URL url = new URL(API_URL);
+            URL url = new URL(apiUrl);
             conn = (HttpURLConnection) url.openConnection();
             conn.setConnectTimeout(15000);
             conn.setReadTimeout(15000);
@@ -153,13 +176,46 @@ public class SilentProxyManager {
     }
 
     /**
-     * Add every fetched proxy to the saved list (so Telegram's built-in rotation
-     * can fail over), then probe them all in parallel and connect to the
-     * fastest live one — the first one that answers wins immediately, and the
-     * rest are checked in the background so a faster one can take over.
+     * Keep at most MAX_PROXIES managed proxies saved (the fastest live ones
+     * from the API). Old managed proxies that are no longer in the top 10
+     * are removed, so the list never floods to hundreds and the network
+     * never chokes on parallel checks. Proxies the user added by hand are
+     * never touched. Then probe the (few) candidates and connect to the
+     * fastest live one.
      */
     private static void applyProxies(List<ProxySettings> proxies) {
         SharedConfig.loadProxyList();
+        // Keys of the proxies this manager added (so hand-added ones survive).
+        SharedPreferences prefs = ApplicationLoader.applicationContext
+                .getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
+        HashSet<String> managed = new HashSet<>();
+        String savedManaged = prefs.getString("managed_proxies", "");
+        if (savedManaged != null && !savedManaged.isEmpty()) {
+            for (String k : savedManaged.split(",")) {
+                if (!k.isEmpty()) managed.add(k);
+            }
+        }
+        HashSet<String> wanted = new HashSet<>();
+        for (ProxySettings s : proxies) {
+            wanted.add(s.getAddress() + ":" + s.getPort());
+        }
+        // Remove managed proxies that are no longer in the top 10 (but never
+        // the one currently active).
+        String activeKey = SharedConfig.currentProxy != null
+                ? SharedConfig.currentProxy.settings.getAddress() + ":" + SharedConfig.currentProxy.settings.getPort()
+                : null;
+        ArrayList<SharedConfig.ProxyInfo> toRemove = new ArrayList<>();
+        for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
+            String key = info.settings.getAddress() + ":" + info.settings.getPort();
+            if (managed.contains(key) && !wanted.contains(key) && !key.equals(activeKey)) {
+                toRemove.add(info);
+            }
+        }
+        for (SharedConfig.ProxyInfo info : toRemove) {
+            SharedConfig.deleteProxy(info);
+            managed.remove(info.settings.getAddress() + ":" + info.settings.getPort());
+        }
+        // Add the new top proxies (managed).
         HashSet<String> seen = new HashSet<>();
         for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
             seen.add(info.settings.getAddress() + ":" + info.settings.getPort());
@@ -168,7 +224,6 @@ public class SilentProxyManager {
         for (ProxySettings settings : proxies) {
             String key = settings.getAddress() + ":" + settings.getPort();
             if (seen.contains(key)) {
-                // Already saved — reuse the existing entry.
                 for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
                     if ((info.settings.getAddress() + ":" + info.settings.getPort()).equals(key)) {
                         all.add(info);
@@ -180,16 +235,24 @@ public class SilentProxyManager {
             seen.add(key);
             SharedConfig.ProxyInfo info = new SharedConfig.ProxyInfo(settings);
             SharedConfig.addProxy(info);
+            managed.add(key);
             all.add(info);
         }
+        // Remember which proxies are managed.
+        StringBuilder sb = new StringBuilder();
+        for (String k : managed) {
+            if (sb.length() > 0) sb.append(',');
+            sb.append(k);
+        }
+        prefs.edit().putString("managed_proxies", sb.toString()).apply();
         if (all.isEmpty()) {
             return;
         }
 
         // Let Telegram rotate to the next proxy automatically if the active one dies.
         SharedConfig.proxyRotationEnabled = true;
-        SharedPreferences prefs = MessagesController.getGlobalMainSettings();
-        prefs.edit().putBoolean("proxyRotationEnabled", true).apply();
+        SharedPreferences mainPrefs = MessagesController.getGlobalMainSettings();
+        mainPrefs.edit().putBoolean("proxyRotationEnabled", true).apply();
 
         probeAndConnect(all);
 
