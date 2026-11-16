@@ -186,4 +186,72 @@ public class SilentMessageHistory {
     public static void clearHistory(long dialogId) {
         prefs().edit().remove("msg_history_" + dialogId).apply();
     }
+
+    /** All dialogIds that have any deleted/edited history. */
+    public static List<Long> getDialogsWithHistory() {
+        ArrayList<Long> out = new ArrayList<>();
+        try {
+            java.util.Map<String, ?> all = prefs().getAll();
+            for (String key : all.keySet()) {
+                if (key.startsWith("msg_history_")) {
+                    try {
+                        long did = Long.parseLong(key.substring("msg_history_".length()));
+                        if (!getHistory(did).isEmpty()) {
+                            out.add(did);
+                        }
+                    } catch (Exception e) {
+                        // Skip malformed keys.
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // Return what we have.
+        }
+        // Newest first (by latest entry time).
+        out.sort((a, b) -> {
+            List<Entry> la = getHistory(a);
+            List<Entry> lb = getHistory(b);
+            long ta = la.isEmpty() ? 0 : la.get(0).time;
+            long tb = lb.isEmpty() ? 0 : lb.get(0).time;
+            return Long.compare(tb, ta);
+        });
+        return out;
+    }
+
+    /** Resolve a display name for a dialog (works even after the dialog is deleted, from cached data). */
+    public static String getDialogName(int account, long dialogId) {
+        try {
+            MessagesController mc = MessagesController.getInstance(account);
+            if (dialogId > 0) {
+                TLRPC.User u = mc.getUser(dialogId);
+                if (u != null) {
+                    return UserObject.getUserName(u);
+                }
+            } else {
+                TLRPC.Chat c = mc.getChat(-dialogId);
+                if (c != null && c.title != null) {
+                    return c.title;
+                }
+            }
+        } catch (Exception e) {
+            // Fall through to sender names.
+        }
+        // Fall back: the most frequent sender name in the history.
+        List<Entry> entries = getHistory(dialogId);
+        String best = "";
+        int bestCount = 0;
+        java.util.HashMap<String, Integer> counts = new java.util.HashMap<>();
+        for (Entry e : entries) {
+            if (e.sender == null || e.sender.isEmpty() || e.sender.equals("You")) {
+                continue;
+            }
+            int n = counts.getOrDefault(e.sender, 0) + 1;
+            counts.put(e.sender, n);
+            if (n > bestCount) {
+                bestCount = n;
+                best = e.sender;
+            }
+        }
+        return best.isEmpty() ? ("Chat " + Math.abs(dialogId)) : best;
+    }
 }

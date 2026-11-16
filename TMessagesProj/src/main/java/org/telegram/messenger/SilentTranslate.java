@@ -168,6 +168,16 @@ public class SilentTranslate {
         builder.show();
     }
 
+    /** Public wrapper for whole-chat translation (F1). `done` runs with the translated text (null on failure). */
+    public static void translateText(String text, String sourceLang, String targetLang, java.util.function.Consumer<String> done) {
+        translateInBackground(text, sourceLang, targetLang, done);
+    }
+
+    /** The language codes/names table (for pickers). */
+    public static String[][] getLanguages() {
+        return LANGUAGES;
+    }
+
     private static void translateInBackground(String text, String sl, String tl, java.util.function.Consumer<String> done) {
         new Thread(() -> {
             String result = null;

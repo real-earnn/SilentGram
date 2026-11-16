@@ -607,6 +607,16 @@ public class DownloadController extends BaseController implements NotificationCe
     }
 
     public boolean canDownloadMedia(MessageObject messageObject) {
+        // SilentGram F2: per-chat auto-download rules.
+        if (messageObject != null) {
+            int rule = org.telegram.messenger.SilentAutoDownload.getRule(messageObject.getDialogId());
+            if (rule == org.telegram.messenger.SilentAutoDownload.RULE_NEVER) {
+                return false;
+            }
+            if (rule == org.telegram.messenger.SilentAutoDownload.RULE_ALWAYS) {
+                return true;
+            }
+        }
         if (messageObject.type == MessageObject.TYPE_STORY) {
             if (!SharedConfig.isAutoplayVideo()) return false;
             TLRPC.TL_messageMediaStory mediaStory = (TLRPC.TL_messageMediaStory) MessageObject.getMedia(messageObject);

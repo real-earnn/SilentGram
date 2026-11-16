@@ -13419,6 +13419,10 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                 dialogStoriesCell.openStoryRecorder();
             }
         });
+        // SilentGram F4: Chat Lock — manage locked chats, PIN, fingerprint.
+        io.add(R.drawable.msg_secret, getString(R.string.SilentChatLockTitle), () -> {
+            presentFragment(new SilentChatLockActivity());
+        });
         if (ApplicationLoader.applicationLoaderInstance != null) {
             ApplicationLoader.applicationLoaderInstance.addItemOptions(io);
         }

@@ -415,6 +415,15 @@
             </intent-filter>
         </receiver>
 
+        <!-- SilentGram F3: message reminders. -->
+        <receiver
+            android:name=".SilentReminderReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.telegram.messenger.ACTION_SILENT_REMIND"/>
+            </intent-filter>
+        </receiver>
+
         <receiver
             android:name=".CopyCodeReceiver"
             android:exported="false">

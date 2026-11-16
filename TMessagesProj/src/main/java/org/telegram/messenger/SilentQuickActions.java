@@ -34,7 +34,8 @@ public class SilentQuickActions {
                 LocaleController.getString(R.string.SilentQuickShareGroup),
                 LocaleController.getString(R.string.SilentQuickMemberChats),
                 LocaleController.getString(R.string.SilentQuickAutoDelete),
-                LocaleController.getString(R.string.SilentQuickHistory)
+                LocaleController.getString(R.string.SilentQuickHistory),
+                LocaleController.getString(R.string.SilentQuickPrivateNote)
         };
         AlertDialog.Builder builder = new AlertDialog.Builder(context);
         builder.setTitle(LocaleController.getString(R.string.SilentQuickActions));
@@ -69,6 +70,13 @@ public class SilentQuickActions {
                     TLRPC.User user = MessagesController.getInstance(account).getUser(targetUserId);
                     String name = user != null ? UserObject.getUserName(user) : "";
                     fragment.presentFragment(new org.telegram.ui.SilentHistoryActivity(dialogId, name));
+                    break;
+                }
+                case 7: {
+                    // SilentGram F9: Private note for this person.
+                    TLRPC.User user = MessagesController.getInstance(account).getUser(targetUserId);
+                    String name = user != null ? UserObject.getUserName(user) : "";
+                    fragment.presentFragment(new org.telegram.ui.SilentNoteEditorActivity(targetUserId, name));
                     break;
                 }
             }

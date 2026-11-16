@@ -841,14 +841,11 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         items.add(SettingCell.Factory.of(18, IconBackgroundColors.BLUE_LIGHT.top, IconBackgroundColors.BLUE_LIGHT.bottom, R.drawable.settings_faq, getString(R.string.TelegramFAQ)));
         items.add(SettingCell.Factory.of(23, IconBackgroundColors.PURPLE.top, IconBackgroundColors.PURPLE.bottom, R.drawable.settings_features, getString(R.string.TelegramFeatures)));
         items.add(SettingCell.Factory.of(19, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_policy, getString(R.string.PrivacyPolicy)));
-        // SilentGram: Developer page (in-app, not a website).
-        items.add(SettingCell.Factory.of(30, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_gram_24, getString(R.string.SilentDeveloperTitle)));
-        // SilentGram E4: Quick reply templates.
-        items.add(SettingCell.Factory.of(31, IconBackgroundColors.VIOLET.top, IconBackgroundColors.VIOLET.bottom, R.drawable.msg_recent, getString(R.string.SilentTemplatesTitle)));
-        // SilentGram E6: Download Manager.
-        items.add(SettingCell.Factory.of(32, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.msg_download, getString(R.string.SilentDownloadManagerTitle)));
-        // SilentGram E8: Bot API Tester.
-        items.add(SettingCell.Factory.of(33, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.msg_bot, getString(R.string.SilentBotTesterTitle)));
+        // SilentGram F7: one SilentGram menu in Settings — every SilentGram
+        // feature (Developer, Templates, Downloads, Bot Tester, Deleted
+        // Chats, History, Scheduled, Chat Lock, Auto-download, Notes) lives
+        // inside it.
+        items.add(SettingCell.Factory.of(30, IconBackgroundColors.VIOLET.top, IconBackgroundColors.VIOLET.bottom, R.drawable.settings_gram_24, "SilentGram"));
 
         if (SharedSettings.experimentalSettingsAllowed.get()) {
             items.add(UItem.asShadow(null));
@@ -983,23 +980,8 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
                 break;
 
             case 30:
-                // SilentGram: Developer page (in-app).
-                presentFragment(new SilentDeveloperActivity());
-                break;
-
-            case 31:
-                // SilentGram E4: Quick reply templates.
-                presentFragment(new SilentTemplatesActivity());
-                break;
-
-            case 32:
-                // SilentGram E6: Download Manager.
-                presentFragment(new SilentDownloadManagerActivity());
-                break;
-
-            case 33:
-                // SilentGram E8: Bot API Tester.
-                presentFragment(new SilentBotTesterActivity());
+                // SilentGram F7: the SilentGram menu (all features inside).
+                presentFragment(new SilentGramMenuActivity());
                 break;
 
             case 20:

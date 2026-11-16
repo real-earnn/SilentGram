@@ -1297,6 +1297,8 @@ public class ChatActivity extends BaseFragment implements
     public final static int OPTION_SILENT_STICKER_RESIZE = 204;
     public final static int OPTION_SILENT_BOOST_DOWNLOAD = 205;
     public final static int OPTION_SILENT_FORWARD_ACCOUNT = 206;
+    public final static int OPTION_SILENT_REMIND_ME = 207;
+    public final static int OPTION_SILENT_TRANSCRIBE = 208;
 
     public final static int OPTION_SUGGESTION_EDIT_PRICE = 111;
     public final static int OPTION_SUGGESTION_EDIT_TIME = 112;
@@ -1740,6 +1742,9 @@ public class ChatActivity extends BaseFragment implements
 
     // SilentGram: quick actions (admin/share) in a user chat.
     private final static int chat_menu_silent_quick = 76;
+    private final static int chat_menu_silent_lock = 77;
+    private final static int chat_menu_silent_export = 78;
+    private final static int chat_menu_silent_translate_chat = 79;
 
     private final static int id_chat_compose_panel = 1000;
 
@@ -3866,6 +3871,46 @@ public class ChatActivity extends BaseFragment implements
                         return;
                     }
                     showDialog(AlertsCreator.createTTLAlert(getParentActivity(), currentEncryptedChat, themeDelegate).create());
+                } else if (id == chat_menu_silent_lock) {
+                    // SilentGram F4: toggle this chat's lock. If no PIN is set
+                    // yet, open the Chat Lock screen to set one first.
+                    if (dialog_id != 0) {
+                        if (org.telegram.messenger.SilentChatLock.isLocked(dialog_id)) {
+                            org.telegram.messenger.SilentChatLock.setLocked(dialog_id, false);
+                            AndroidUtilities.showToast(getParentActivity(), LocaleController.getString(R.string.SilentChatLockRemoved));
+                        } else {
+                            if (!org.telegram.messenger.SilentChatLock.hasPin()) {
+                                presentFragment(new SilentChatLockActivity());
+                                AndroidUtilities.showToast(getParentActivity(), LocaleController.getString(R.string.SilentChatLockSetPinFirst));
+                            } else {
+                                org.telegram.messenger.SilentChatLock.setLocked(dialog_id, true);
+                                AndroidUtilities.showToast(getParentActivity(), LocaleController.getString(R.string.SilentChatLockAdded));
+                            }
+                        }
+                    }
+                } else if (id == chat_menu_silent_export) {
+                    // SilentGram F6: Export this chat — pick TXT or HTML.
+                    if (dialog_id != 0) {
+                        String name = currentChat != null ? currentChat.title
+                                : (currentUser != null ? UserObject.getUserName(currentUser) : "chat");
+                        AlertDialog.Builder builder = new AlertDialog.Builder(getParentActivity());
+                        builder.setTitle(LocaleController.getString(R.string.SilentExportChat));
+                        CharSequence[] formats = new CharSequence[]{
+                                LocaleController.getString(R.string.SilentExportTxt),
+                                LocaleController.getString(R.string.SilentExportHtml)
+                        };
+                        builder.setItems(formats, (d, which) -> {
+                            org.telegram.messenger.SilentChatExport.exportChat(ChatActivity.this, currentAccount, dialog_id, name, which == 1);
+                        });
+                        builder.show();
+                    }
+                } else if (id == chat_menu_silent_translate_chat) {
+                    // SilentGram F1: Translate the whole chat.
+                    if (dialog_id != 0) {
+                        String name = currentChat != null ? currentChat.title
+                                : (currentUser != null ? UserObject.getUserName(currentUser) : "chat");
+                        presentFragment(new SilentChatTranslateActivity(dialog_id, name));
+                    }
                 } else if (id == clear_history || id == delete_chat || id == auto_delete_timer) {
                     if (getParentActivity() == null) {
                         return;
@@ -4465,6 +4510,22 @@ public class ChatActivity extends BaseFragment implements
             if (!isTopic && !ChatObject.isMonoForum(currentChat)) {
                 clearHistoryItem = headerItem.lazilyAddSubItem(clear_history, R.drawable.msg_clear,
                     LocaleController.getString(UserObject.isBotForum(currentUser) ? R.string.ClearAllHistory : R.string.ClearHistory));
+            }
+            // SilentGram F4: Add / Remove this chat from Chat Lock.
+            if (chatMode == 0 && dialog_id != 0) {
+                headerItem.lazilyAddSubItem(chat_menu_silent_lock, R.drawable.msg_secret,
+                        LocaleController.getString(org.telegram.messenger.SilentChatLock.isLocked(dialog_id)
+                                ? R.string.SilentChatLockRemove : R.string.SilentChatLockAdd));
+            }
+            // SilentGram F6: Export this chat (TXT / HTML).
+            if (chatMode == 0 && dialog_id != 0) {
+                headerItem.lazilyAddSubItem(chat_menu_silent_export, R.drawable.msg_download,
+                        LocaleController.getString(R.string.SilentExportChat));
+            }
+            // SilentGram F1: Translate the whole chat.
+            if (chatMode == 0 && dialog_id != 0) {
+                headerItem.lazilyAddSubItem(chat_menu_silent_translate_chat, R.drawable.msg_translate,
+                        LocaleController.getString(R.string.SilentTranslateChatTitle));
             }
             boolean addedSettings = false;
             if (!isTopic) {
@@ -9087,10 +9148,12 @@ public class ChatActivity extends BaseFragment implements
             });
         }
 
-        return fragmentView;
-    }
+        // SilentGram F4: Chat Lock — if this chat is locked, cover it until
+        // the PIN / fingerprint unlocks it.
+        checkSilentChatLock();
 
-    private void createSearchHashtagViewsIfNeeded() {
+        return fragmentView;
+    }    private void createSearchHashtagViewsIfNeeded() {
         if (hashtagSearchEmptyView != null || hashtagHistoryView != null) {
             return;
         }
@@ -10157,6 +10220,174 @@ public class ChatActivity extends BaseFragment implements
                 android.view.View.MeasureSpec.makeMeasureSpec(0, android.view.View.MeasureSpec.UNSPECIFIED));
         int popupHeight = layout.getMeasuredHeight();
         silentTemplatePopup.showAsDropDown(chatActivityEnterView, 0, -(chatActivityEnterView.getHeight() + popupHeight));
+    }
+
+    /**
+     * SilentGram F4: Chat Lock overlay. If this chat is locked and not yet
+     * unlocked this session, cover it with a PIN / fingerprint screen.
+     */
+    private android.view.View silentLockOverlay;
+
+    private void checkSilentChatLock() {
+        if (dialog_id == 0 || !org.telegram.messenger.SilentChatLock.isLocked(dialog_id)
+                || org.telegram.messenger.SilentChatLock.isUnlockedThisSession(dialog_id)) {
+            return;
+        }
+        if (fragmentView == null || !(fragmentView instanceof android.view.ViewGroup)) {
+            return;
+        }
+        Context context = getParentActivity();
+        if (context == null) {
+            return;
+        }
+        android.widget.LinearLayout overlay = new android.widget.LinearLayout(context);
+        overlay.setOrientation(android.widget.LinearLayout.VERTICAL);
+        overlay.setGravity(android.view.Gravity.CENTER);
+        overlay.setBackgroundColor(0xFF0B192F);
+        overlay.setPadding(AndroidUtilities.dp(32), 0, AndroidUtilities.dp(32), 0);
+
+        TextView lockIcon = new TextView(context);
+        lockIcon.setText("🔒");
+        lockIcon.setTextSize(48);
+        lockIcon.setGravity(android.view.Gravity.CENTER);
+        overlay.addView(lockIcon, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, android.view.Gravity.CENTER, 0, 0, 0, 16));
+
+        TextView title = new TextView(context);
+        title.setText(LocaleController.getString(R.string.SilentChatLockLocked));
+        title.setTextSize(18);
+        title.setTextColor(0xFFFFFFFF);
+        title.setGravity(android.view.Gravity.CENTER);
+        overlay.addView(title, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 0, 0, 24));
+
+        final android.widget.EditText pinField = new android.widget.EditText(context);
+        pinField.setHint(LocaleController.getString(R.string.SilentChatLockPinHint));
+        pinField.setInputType(android.text.InputType.TYPE_CLASS_NUMBER | android.text.InputType.TYPE_NUMBER_VARIATION_PASSWORD);
+        pinField.setSingleLine(true);
+        pinField.setTextColor(0xFFFFFFFF);
+        pinField.setHintTextColor(0x88FFFFFF);
+        pinField.setGravity(android.view.Gravity.CENTER);
+        overlay.addView(pinField, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 0, 0, 16));
+
+        TextView unlockBtn = new TextView(context);
+        unlockBtn.setText(LocaleController.getString(R.string.SilentChatLockUnlock));
+        unlockBtn.setTextSize(16);
+        unlockBtn.setGravity(android.view.Gravity.CENTER);
+        unlockBtn.setTextColor(0xFFFFFFFF);
+        unlockBtn.setBackground(Theme.createRoundRectDrawable(AndroidUtilities.dp(10), 0xFF6D28D9));
+        unlockBtn.setPadding(0, AndroidUtilities.dp(12), 0, AndroidUtilities.dp(12));
+        unlockBtn.setOnClickListener(v -> {
+            String pin = pinField.getText().toString().trim();
+            if (org.telegram.messenger.SilentChatLock.checkPin(pin)) {
+                unlockSilentChat();
+            } else {
+                AndroidUtilities.showToast(context, LocaleController.getString(R.string.SilentChatLockWrongPin));
+                pinField.setText("");
+            }
+        });
+        overlay.addView(unlockBtn, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 0, 0, 12));
+
+        if (org.telegram.messenger.SilentChatLock.isFingerprintEnabled()) {
+            TextView fpBtn = new TextView(context);
+            fpBtn.setText(LocaleController.getString(R.string.SilentChatLockUseFingerprint));
+            fpBtn.setTextSize(15);
+            fpBtn.setGravity(android.view.Gravity.CENTER);
+            fpBtn.setTextColor(0xFFB388FF);
+            fpBtn.setPadding(0, AndroidUtilities.dp(12), 0, AndroidUtilities.dp(12));
+            fpBtn.setOnClickListener(v -> trySilentFingerprint());
+            overlay.addView(fpBtn, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
+        }
+
+        silentLockOverlay = overlay;
+        ((android.view.ViewGroup) fragmentView).addView(overlay, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
+        // Try fingerprint right away if enabled.
+        if (org.telegram.messenger.SilentChatLock.isFingerprintEnabled()) {
+            AndroidUtilities.runOnUIThread(this::trySilentFingerprint, 500);
+        }
+    }
+
+    private void unlockSilentChat() {
+        org.telegram.messenger.SilentChatLock.markUnlocked(dialog_id);
+        if (silentLockOverlay != null && fragmentView instanceof android.view.ViewGroup) {
+            ((android.view.ViewGroup) fragmentView).removeView(silentLockOverlay);
+            silentLockOverlay = null;
+        }
+    }
+
+    private void trySilentFingerprint() {
+        try {
+            android.app.Activity activity = AndroidUtilities.findActivity(getParentActivity());
+            if (activity == null) {
+                return;
+            }
+            if (androidx.biometric.BiometricManager.from(activity).canAuthenticate(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                    != androidx.biometric.BiometricManager.BIOMETRIC_SUCCESS) {
+                return;
+            }
+            java.util.concurrent.Executor executor = androidx.core.content.ContextCompat.getMainExecutor(activity);
+            androidx.biometric.BiometricPrompt prompt = new androidx.biometric.BiometricPrompt((androidx.fragment.app.FragmentActivity) activity, executor,
+                    new androidx.biometric.BiometricPrompt.AuthenticationCallback() {
+                        @Override
+                        public void onAuthenticationSucceeded(@NonNull androidx.biometric.BiometricPrompt.AuthenticationResult result) {
+                            unlockSilentChat();
+                        }
+                    });
+            androidx.biometric.BiometricPrompt.PromptInfo info = new androidx.biometric.BiometricPrompt.PromptInfo.Builder()
+                    .setTitle(LocaleController.getString(R.string.SilentChatLockTitle))
+                    .setNegativeButtonText(LocaleController.getString(R.string.SilentChatLockUsePin))
+                    .setAllowedAuthenticators(androidx.biometric.BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                    .build();
+            prompt.authenticate(info);
+        } catch (Exception e) {
+            // Fingerprint unavailable — PIN still works.
+        }
+    }
+
+    /**
+     * SilentGram F3: pick when to be reminded about this message.
+     */
+    private void showSilentRemindPicker(MessageObject msg) {
+        Context context = getParentActivity();
+        if (context == null || msg == null) {
+            return;
+        }
+        String text = msg.messageText != null ? msg.messageText.toString() : "";
+        if (text.isEmpty() && msg.caption != null) {
+            text = msg.caption.toString();
+        }
+        final String body = text;
+        String name = currentChat != null ? currentChat.title
+                : (currentUser != null ? UserObject.getUserName(currentUser) : "chat");
+        CharSequence[] items = new CharSequence[]{
+                LocaleController.getString(R.string.SilentRemind1h),
+                LocaleController.getString(R.string.SilentRemind3h),
+                LocaleController.getString(R.string.SilentRemindTomorrow9),
+                LocaleController.getString(R.string.SilentRemindNextWeek)
+        };
+        long now = System.currentTimeMillis();
+        long[] times = new long[]{
+                now + 3600_000L,
+                now + 3 * 3600_000L,
+                nextTime(9, 0, 1),
+                nextTime(9, 0, 7)
+        };
+        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        builder.setTitle(LocaleController.getString(R.string.SilentRemindMe));
+        builder.setItems(items, (d, which) -> {
+            org.telegram.messenger.SilentReminders.addReminder(context, dialog_id, msg.getId(), body, name, times[which]);
+            AndroidUtilities.showToast(context, items[which]);
+        });
+        builder.show();
+    }
+
+    /** Next occurrence of hour:minute, `daysAhead` days from now at the earliest. */
+    private long nextTime(int hour, int minute, int daysAhead) {
+        java.util.Calendar cal = java.util.Calendar.getInstance();
+        cal.add(java.util.Calendar.DAY_OF_YEAR, daysAhead);
+        cal.set(java.util.Calendar.HOUR_OF_DAY, hour);
+        cal.set(java.util.Calendar.MINUTE, minute);
+        cal.set(java.util.Calendar.SECOND, 0);
+        cal.set(java.util.Calendar.MILLISECOND, 0);
+        return cal.getTimeInMillis();
     }
 
     private void updateSideButtonsForAttach() {
@@ -34597,6 +34828,20 @@ public class ChatActivity extends BaseFragment implements
                 }
                 break;
             }
+            case OPTION_SILENT_REMIND_ME: {
+                // SilentGram F3: remind me about this message later.
+                if (selectedObject != null) {
+                    showSilentRemindPicker(selectedObject);
+                }
+                break;
+            }
+            case OPTION_SILENT_TRANSCRIBE: {
+                // SilentGram F8: voice message to text.
+                if (selectedObject != null) {
+                    org.telegram.messenger.SilentVoiceTranscribe.transcribe(getParentActivity(), currentAccount, selectedObject);
+                }
+                break;
+            }
             case OPTION_COPY: {
                 final TL_iv.RichMessage copyRichMessage = selectedObject.messageOwner != null ? selectedObject.messageOwner.rich_message : null;
                 if (selectedObject.isDice()) {
@@ -47213,6 +47458,16 @@ public class ChatActivity extends BaseFragment implements
                     items.add(LocaleController.getString(R.string.SilentForwardToAccount));
                     options.add(OPTION_SILENT_FORWARD_ACCOUNT);
                     icons.add(R.drawable.msg_forward);
+                    // SilentGram F3: remind me about this message.
+                    items.add(LocaleController.getString(R.string.SilentRemindMe));
+                    options.add(OPTION_SILENT_REMIND_ME);
+                    icons.add(R.drawable.msg_recent);
+                    // SilentGram F8: voice message to text.
+                    if (selectedObject.isVoice()) {
+                        items.add(LocaleController.getString(R.string.SilentTranscribeTitle));
+                        options.add(OPTION_SILENT_TRANSCRIBE);
+                        icons.add(R.drawable.input_mic);
+                    }
                 }
                 if (allowUnpin) {
                     items.add(LocaleController.getString(R.string.UnpinMessage));
