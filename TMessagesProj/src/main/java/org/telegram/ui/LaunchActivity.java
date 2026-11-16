@@ -455,17 +455,9 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         flagSecureReason.attach();
 
         super.onCreate(savedInstanceState);
-        // SilentGram: keep the splash screen (S + plane + Silent/Gram branding)
-        // visible for ~3s so the user actually sees it, instead of flashing past.
-        if (Build.VERSION.SDK_INT >= 31) {
-            final long splashStartMs = SystemClock.elapsedRealtime();
-            getSplashScreen().setKeepOnScreenCondition(new android.window.SplashScreen.KeepOnScreenCondition() {
-                @Override
-                public boolean shouldKeepOnScreen() {
-                    return SystemClock.elapsedRealtime() - splashStartMs < 3000;
-                }
-            });
-        }
+        // SilentGram splash: the animation duration (integers.xml,
+        // splash_screen_duration = 3000) keeps the S + plane + Silent/Gram
+        // branding visible for ~3s instead of flashing past.
         if (Build.VERSION.SDK_INT >= 24) {
             AndroidUtilities.isInMultiwindow = isInMultiWindowMode();
         }

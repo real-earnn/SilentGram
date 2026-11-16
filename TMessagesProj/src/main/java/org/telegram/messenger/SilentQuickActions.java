@@ -199,7 +199,8 @@ public class SilentQuickActions {
                 continue;
             }
             boolean isChannel = ChatObject.isChannel(chat) && !chat.megagroup;
-            boolean isGroup = chat.megagroup || ChatObject.isChat(chat);
+            // Basic group = not a channel at all; megagroup = supergroup.
+            boolean isGroup = chat.megagroup || !ChatObject.isChannel(chat);
             if (channels && !isChannel) {
                 continue;
             }
@@ -260,8 +261,14 @@ public class SilentQuickActions {
         adminRights.post_stories = true;
         adminRights.edit_stories = true;
         adminRights.delete_stories = true;
-        TLRPC.TL_chatBannedRights defaultBanned = full.default_banned_rights != null
-                ? full.default_banned_rights : new TLRPC.TL_chatBannedRights();
+        // default_banned_rights lives on TL_channelFull, not on the base ChatFull.
+        TLRPC.TL_chatBannedRights defaultBanned = new TLRPC.TL_chatBannedRights();
+        if (full instanceof TLRPC.TL_channelFull) {
+            TLRPC.TL_chatBannedRights d = ((TLRPC.TL_channelFull) full).default_banned_rights;
+            if (d != null) {
+                defaultBanned = d;
+            }
+        }
         ChatRightsEditActivity rightsFragment = new ChatRightsEditActivity(
                 targetUserId, -chat.id, adminRights, defaultBanned, null, "",
                 ChatRightsEditActivity.TYPE_ADMIN, true, true, null);

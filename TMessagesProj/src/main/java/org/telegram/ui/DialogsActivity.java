@@ -2820,6 +2820,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             }
             observersGroup
                 .add(NotificationCenter.dialogsNeedReload)
+                .add(NotificationCenter.joinedGroup)
                 .add(NotificationCenter.dialogFiltersUpdated)
                 .add(NotificationCenter.updateInterfaces)
                 .add(NotificationCenter.encryptedChatUpdated)
@@ -10465,6 +10466,18 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
     @SuppressWarnings("unchecked")
     @Override
     public void didReceivedNotification(int id, int account, Object... args) {
+        if (id == NotificationCenter.joinedGroup) {
+            // SilentGram: the user just joined a channel/group — reload the
+            // list right away so the Official / sponsored row disappears
+            // immediately instead of waiting for an app restart.
+            if (viewPages == null || dialogsListFrozen) {
+                return;
+            }
+            for (int a = 0; a < viewPages.length; a++) {
+                reloadViewPageDialogs(viewPages[a], true);
+            }
+            return;
+        }
         if (id == NotificationCenter.dialogsNeedReload) {
             if (viewPages == null || dialogsListFrozen) {
                 return;

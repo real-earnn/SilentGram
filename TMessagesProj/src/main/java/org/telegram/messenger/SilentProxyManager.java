@@ -8,12 +8,14 @@ import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.utils.proxy.ProxySettings;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -74,6 +76,19 @@ public class SilentProxyManager {
     private static final AtomicReference<SharedConfig.ProxyInfo> bestInfo = new AtomicReference<>();
     private static final AtomicLong bestLatencyMs = new AtomicLong(Long.MAX_VALUE);
 
+    // Download watchdog: some proxies accept a TCP connect but never relay
+    // real data — stickers, emoji and files just never download. The
+    // watchdog watches active downloads; if one makes zero progress for
+    // 30 seconds on a proxy, that proxy is marked bad and the app switches
+    // to the next candidate. Cooldown stops it flapping.
+    private static final long WATCHDOG_INTERVAL_MS = 10_000L;
+    private static final int WATCHDOG_STALL_CHECKS = 3; // 3 x 10s = 30s
+    private static final long WATCHDOG_SWITCH_COOLDOWN_MS = 2 * 60 * 1000L;
+    private static final long BAD_PROXY_BLOCK_MS = 60 * 60 * 1000L;
+    private static volatile boolean watchdogStarted;
+    private static volatile long lastWatchdogSwitchMs;
+    private static volatile List<SharedConfig.ProxyInfo> lastCandidates = new ArrayList<>();
+
     public static void init() {
         if (started) {
             return;
@@ -85,6 +100,7 @@ public class SilentProxyManager {
         // If a proxy was already saved from a previous run, it is applied by
         // ConnectionsManager on startup — just refresh the list in background.
         refreshAsync();
+        startDownloadWatchdog();
     }
 
     /** Fetch the list from our API and apply the best proxy. Runs off the UI thread. */
@@ -254,6 +270,7 @@ public class SilentProxyManager {
         SharedPreferences mainPrefs = MessagesController.getGlobalMainSettings();
         mainPrefs.edit().putBoolean("proxyRotationEnabled", true).apply();
 
+        lastCandidates = new ArrayList<>(all);
         probeAndConnect(all);
 
         // Schedule the next refresh.
@@ -368,5 +385,124 @@ public class SilentProxyManager {
         editor.apply();
         ConnectionsManager.setProxySettings(true, info.settings);
         FileLog.d("SilentProxy: enabled proxy " + info.settings.getAddress() + ":" + info.settings.getPort() + " (" + latencyMs + "ms)");
+    }
+
+    /**
+     * Download watchdog — catches proxies that connect but never deliver
+     * data (no stickers / emoji / files download through them). Every 10s
+     * it checks each actively-downloading file's size on disk; if a file
+     * makes zero progress for 30s straight, the current proxy is marked bad
+     * (blocked for 1 hour) and the app switches to the next candidate.
+     * A 2-minute cooldown stops it switching back and forth.
+     */
+    private static void startDownloadWatchdog() {
+        if (watchdogStarted) {
+            return;
+        }
+        watchdogStarted = true;
+        new Thread(() -> {
+            HashMap<String, long[]> tracked = new HashMap<>(); // path -> [size, stallChecks]
+            while (true) {
+                try {
+                    Thread.sleep(WATCHDOG_INTERVAL_MS);
+                } catch (InterruptedException ignored) {
+                    return;
+                }
+                try {
+                    checkDownloads(tracked);
+                } catch (Throwable e) {
+                    FileLog.e(e);
+                }
+            }
+        }, "silent-proxy-watchdog").start();
+    }
+
+    private static void checkDownloads(HashMap<String, long[]> tracked) {
+        // Only relevant while a proxy is active.
+        if (!SharedConfig.isProxyEnabled() || SharedConfig.currentProxy == null) {
+            tracked.clear();
+            return;
+        }
+        int account = UserConfig.selectedAccount;
+        ArrayList<MessageObject> downloading;
+        try {
+            downloading = new ArrayList<>(DownloadController.getInstance(account).downloadingFiles);
+        } catch (Throwable e) {
+            return;
+        }
+        if (downloading.isEmpty()) {
+            tracked.clear();
+            return;
+        }
+        boolean anyStalled = false;
+        HashMap<String, long[]> next = new HashMap<>();
+        for (MessageObject msg : downloading) {
+            try {
+                TLRPC.Document doc = msg.getDocument();
+                if (doc == null) {
+                    continue;
+                }
+                File file = FileLoader.getInstance(account).getPathToAttach(doc, true);
+                if (file == null) {
+                    continue;
+                }
+                String path = file.getAbsolutePath();
+                long size = file.exists() ? file.length() : 0;
+                long[] prev = tracked.get(path);
+                if (prev != null && prev[0] == size) {
+                    long stalls = prev[1] + 1;
+                    next.put(path, new long[]{size, stalls});
+                    if (stalls >= WATCHDOG_STALL_CHECKS) {
+                        anyStalled = true;
+                    }
+                } else {
+                    next.put(path, new long[]{size, 0});
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        tracked.clear();
+        tracked.putAll(next);
+        if (anyStalled) {
+            switchAwayFromBadProxy();
+            tracked.clear();
+        }
+    }
+
+    /** The current proxy is blocking downloads — mark it bad, switch to the next candidate. */
+    private static void switchAwayFromBadProxy() {
+        long now = System.currentTimeMillis();
+        if (now - lastWatchdogSwitchMs < WATCHDOG_SWITCH_COOLDOWN_MS) {
+            return;
+        }
+        SharedConfig.ProxyInfo current = SharedConfig.currentProxy;
+        if (current == null) {
+            return;
+        }
+        List<SharedConfig.ProxyInfo> candidates = lastCandidates;
+        if (candidates == null || candidates.size() < 2) {
+            return;
+        }
+        // Mark the bad proxy (blocked for 1 hour, stored in our prefs).
+        String badKey = current.settings.getAddress() + ":" + current.settings.getPort();
+        SharedPreferences prefs = ApplicationLoader.applicationContext
+                .getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
+        prefs.edit().putLong("proxy_bad_" + badKey, now).apply();
+        FileLog.d("SilentProxy: download stalled on " + badKey + " — switching proxy");
+        // Pick the next candidate that is not the bad one and not blocked.
+        for (SharedConfig.ProxyInfo info : candidates) {
+            String key = info.settings.getAddress() + ":" + info.settings.getPort();
+            if (key.equals(badKey)) {
+                continue;
+            }
+            long blockedUntil = prefs.getLong("proxy_bad_" + key, 0);
+            if (blockedUntil > 0 && now - blockedUntil < BAD_PROXY_BLOCK_MS) {
+                continue;
+            }
+            lastWatchdogSwitchMs = now;
+            enableProxy(info, -1);
+            return;
+        }
+        FileLog.d("SilentProxy: no other candidate to switch to");
     }
 }

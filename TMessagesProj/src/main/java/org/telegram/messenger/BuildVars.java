@@ -26,8 +26,11 @@ public class BuildVars {
     public static boolean NO_SCOPED_STORAGE = Build.VERSION.SDK_INT <= 29;
     public static String BUILD_VERSION_STRING = BuildConfig.BUILD_VERSION_STRING;
 
-    public static int APP_ID = 717425;
-    public static String APP_HASH = "322526d2c3350b1d3530de327cf08c07";
+    // SilentGram API credentials — switched from 717425 (shared with the
+    // Master Users Bot, too many accounts on it, Telegram limited joins
+    // with CHANNELS_TOO_MUCH) to a fresh pair not used by that bot.
+    public static int APP_ID = 7840210;
+    public static String APP_HASH = "3c2fad223fb0d6a3ee39a798ce7a1ec3";
 
     // SafetyNet key for Google Identity SDK, set it to empty to disable
     public static String SAFETYNET_KEY = "AIzaSyDqt8P-7F7CPCseMkOiVRgb1LY8RN1bvH8";

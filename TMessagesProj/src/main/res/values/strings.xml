@@ -73,6 +73,7 @@
     <string name="SilentForwardToAccount">Forward to another account</string>
     <string name="SilentForwardNoOtherAccount">No other account is logged in.</string>
     <string name="SilentMenuHeader">Your SilentGram features — everything in one place.</string>
+    <string name="SilentSettingsHeader">Silent Features</string>
     <string name="SilentMenuDeveloperSub">About, links &amp; credits</string>
     <string name="SilentMenuTemplatesSub">Slash-trigger quick replies</string>
     <string name="SilentMenuDownloadsSub">Active downloads &amp; Boost</string>
@@ -164,6 +165,9 @@
     <string name="SilentOwnedBy">Owned by</string>
     <string name="SilentSponsored">Official</string>
     <string name="SilentJoin">Join</string>
+    <string name="SilentSponsoredPromo">Sponsored</string>
+    <string name="SilentJoinFailed">Could not join. Try again.</string>
+    <string name="SilentJoined">Joined</string>
     <string name="SilentTagline">Fast, secure and private — with the proxy handled automatically, so it just works.</string>
     <string name="SilentAboutTitle">About</string>
     <string name="SilentTeamTitle">Silent Hackers Team</string>

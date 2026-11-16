@@ -795,6 +795,13 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
             items.add(UItem.asShadow(null));
         }
 
+        // SilentGram: our own card at the very TOP of Settings — above
+        // Account, Chat, etc. Every SilentGram feature (and the Developer
+        // button) lives inside this one menu.
+        items.add(UItem.asHeader(LocaleController.getString(R.string.SilentSettingsHeader)));
+        items.add(SettingCell.Factory.of(30, IconBackgroundColors.PURPLE.top, IconBackgroundColors.PURPLE.bottom, R.drawable.settings_gram_24, "SilentGram", LocaleController.getString(R.string.SilentMenuHeader)));
+        items.add(UItem.asShadow(null));
+
         items.add(SettingCell.Factory.of(1, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_account, getString(R.string.SettingsAccount), getString(R.string.SettingsAccountInfo)));
         items.add(SettingCell.Factory.of(2, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.settings_chat, getString(R.string.SettingsChat), getString(R.string.SettingsChatInfo)));
         items.add(SettingCell.Factory.of(3, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_privacy, getString(R.string.SettingsPrivacySecurity), getString(R.string.SettingsPrivacySecurityInfo)));
@@ -841,11 +848,6 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         items.add(SettingCell.Factory.of(18, IconBackgroundColors.BLUE_LIGHT.top, IconBackgroundColors.BLUE_LIGHT.bottom, R.drawable.settings_faq, getString(R.string.TelegramFAQ)));
         items.add(SettingCell.Factory.of(23, IconBackgroundColors.PURPLE.top, IconBackgroundColors.PURPLE.bottom, R.drawable.settings_features, getString(R.string.TelegramFeatures)));
         items.add(SettingCell.Factory.of(19, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.settings_policy, getString(R.string.PrivacyPolicy)));
-        // SilentGram F7: one SilentGram menu in Settings — every SilentGram
-        // feature (Developer, Templates, Downloads, Bot Tester, Deleted
-        // Chats, History, Scheduled, Chat Lock, Auto-download, Notes) lives
-        // inside it.
-        items.add(SettingCell.Factory.of(30, IconBackgroundColors.PURPLE.top, IconBackgroundColors.PURPLE.bottom, R.drawable.settings_gram_24, "SilentGram"));
 
         if (SharedSettings.experimentalSettingsAllowed.get()) {
             items.add(UItem.asShadow(null));

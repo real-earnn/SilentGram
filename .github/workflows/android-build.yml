@@ -2,9 +2,9 @@ name: Build SilentGram (AAB + APK)
 
 # Builds the release AAB and APK and attaches both to a GitHub Release.
 # Runs on every push to master and on manual dispatch.
-# NOTE: this build is signed with a debug keystore generated in the run,
-# so the APK installs for testing. For Google Play, replace the signing
-# step with a real release keystore (see the "release keystore" step).
+# NOTE: the build signs with the production keystore (silent_production)
+# from GitHub Secrets — see the "Sign APK + AAB" step. If the secrets are
+# not set yet, it falls back to a debug keystore (test build only).
 
 on:
   push:
@@ -90,13 +90,39 @@ jobs:
       - name: Show ccache stats (did the native cache hit?)
         run: ccache --show-stats || true
 
-      - name: Sign APK + AAB (debug keystore, for testing)
+      # NOTE: the release keystore is the SAME production keystore used by
+      # our other apps (silent_production.keystore). It lives ONLY in GitHub
+      # Secrets (this repo is public — the keystore + passwords must NEVER be
+      # committed). Required secrets:
+      #   SIGNING_KEYSTORE_BASE64 — base64 of silent_production.keystore
+      #   SIGNING_STORE_PASSWORD, SIGNING_KEY_PASSWORD, SIGNING_KEY_ALIAS
+      # If the secrets are not set yet, the build falls back to a throwaway
+      # debug keystore so it still produces an installable APK for testing.
+      - name: Sign APK + AAB (production keystore from Secrets)
+        env:
+          SIGNING_KEYSTORE_BASE64: ${{ secrets.SIGNING_KEYSTORE_BASE64 }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
         run: |
-          # Generate a throwaway debug keystore so the APK is installable.
-          keytool -genkeypair -v -keystore /tmp/debug.keystore \
-            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android \
-            -dname "CN=Android Debug,O=Android,C=US"
+          if [ -n "$SIGNING_KEYSTORE_BASE64" ]; then
+            echo "$SIGNING_KEYSTORE_BASE64" | base64 -d > /tmp/release.keystore
+            KS=/tmp/release.keystore
+            KS_ALIAS="$SIGNING_KEY_ALIAS"
+            KS_STORE_PASS="$SIGNING_STORE_PASSWORD"
+            KS_KEY_PASS="$SIGNING_KEY_PASSWORD"
+            echo "Signing with the production keystore."
+          else
+            echo "::warning::SIGNING_KEYSTORE_BASE64 is not set — falling back to a debug keystore (test build only)."
+            keytool -genkeypair -v -keystore /tmp/debug.keystore \
+              -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android -keypass android \
+              -dname "CN=Android Debug,O=Android,C=US"
+            KS=/tmp/debug.keystore
+            KS_ALIAS=androiddebugkey
+            KS_STORE_PASS=android
+            KS_KEY_PASS=android
+          fi
           # Telegram builds the "afat" flavor, so outputs live under
           # apk/afat/release and bundle/afatRelease (not apk/release).
           APK=$(find TMessagesProj_App/build/outputs/apk/afat/release -name "*.apk" | head -1)
@@ -108,15 +134,15 @@ jobs:
           # Sign the APK (zipalign + apksigner).
           BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
           "$BUILD_TOOLS/zipalign" -f 4 "$APK" /tmp/SilentGram-aligned.apk
-          "$BUILD_TOOLS/apksigner" sign --ks /tmp/debug.keystore \
-            --ks-key-alias androiddebugkey \
-            --ks-pass pass:android --key-pass pass:android \
+          "$BUILD_TOOLS/apksigner" sign --ks "$KS" \
+            --ks-key-alias "$KS_ALIAS" \
+            --ks-pass "pass:$KS_STORE_PASS" --key-pass "pass:$KS_KEY_PASS" \
             --out /tmp/SilentGram-release.apk /tmp/SilentGram-aligned.apk
           "$BUILD_TOOLS/apksigner" verify /tmp/SilentGram-release.apk
           # Sign the AAB.
           jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 \
-            -keystore /tmp/debug.keystore -storepass android -keypass android \
-            "$AAB" androiddebugkey
+            -keystore "$KS" -storepass "$KS_STORE_PASS" -keypass "$KS_KEY_PASS" \
+            "$AAB" "$KS_ALIAS"
           cp "$AAB" /tmp/SilentGram-release.aab
           ls -lh /tmp/SilentGram-release.apk /tmp/SilentGram-release.aab
 
