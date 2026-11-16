@@ -44,7 +44,9 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build release APK + AAB
-        run: ./gradlew :TMessagesProj:assembleRelease :TMessagesProj:bundleRelease --stacktrace
+        # TMessagesProj is a LIBRARY — the app lives in TMessagesProj_App
+        # (Play Store build, applicationId comes from APP_PACKAGE).
+        run: ./gradlew :TMessagesProj_App:assembleRelease :TMessagesProj_App:bundleRelease --stacktrace
 
       - name: Sign APK + AAB (debug keystore, for testing)
         run: |
@@ -53,8 +55,8 @@ jobs:
             -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass android -keypass android \
             -dname "CN=Android Debug,O=Android,C=US"
-          APK=$(find TMessagesProj/build/outputs/apk/release -name "*.apk" | head -1)
-          AAB=$(find TMessagesProj/build/outputs/bundle/release -name "*.aab" | head -1)
+          APK=$(find TMessagesProj_App/build/outputs/apk/release -name "*.apk" | head -1)
+          AAB=$(find TMessagesProj_App/build/outputs/bundle/release -name "*.aab" | head -1)
           echo "APK=$APK" >> $GITHUB_ENV
           echo "AAB=$AAB" >> $GITHUB_ENV
           echo "Found APK: $APK"

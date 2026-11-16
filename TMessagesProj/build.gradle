@@ -147,7 +147,6 @@ android {
     defaultConfig {
         minSdkVersion 23
         targetSdkVersion 36
-        applicationId 'com.silentgram.org'
 
         vectorDrawables.generatedDensities = ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi']
 
