@@ -55,8 +55,10 @@ jobs:
             -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
             -storepass android -keypass android \
             -dname "CN=Android Debug,O=Android,C=US"
-          APK=$(find TMessagesProj_App/build/outputs/apk/release -name "*.apk" | head -1)
-          AAB=$(find TMessagesProj_App/build/outputs/bundle/release -name "*.aab" | head -1)
+          # Telegram builds the "afat" flavor, so outputs live under
+          # apk/afat/release and bundle/afatRelease (not apk/release).
+          APK=$(find TMessagesProj_App/build/outputs/apk/afat/release -name "*.apk" | head -1)
+          AAB=$(find TMessagesProj_App/build/outputs/bundle/afatRelease -name "*.aab" | head -1)
           echo "APK=$APK" >> $GITHUB_ENV
           echo "AAB=$AAB" >> $GITHUB_ENV
           echo "Found APK: $APK"
@@ -89,7 +91,8 @@ jobs:
             - Official @silent_gram channel (Sponsored suggestion + blue tick)
             - Developer page in Settings
             - Owner badge on @only_possible0
-            - New SilentGram logo + violet accent
+            - Final logo (gold/blue 3D S + paper plane, crescent + stars)
+              and splash loader (plane flies in from the left into the S)
 
             Signed with a debug key (for testing). For Google Play, a release
             keystore is needed.
