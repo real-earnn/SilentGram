@@ -1727,7 +1727,7 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
         writeButtonContainer.setAlpha(0.0f);
         containerView.addView(writeButtonContainer, LayoutHelper.createFrame(110, 50, Gravity.RIGHT | Gravity.BOTTOM));
 
-        writeButton = new ChatActivityEnterView.SendButton(context, R.drawable.send_plane_24, resourcesProvider) {
+        writeButton = new ChatActivityEnterView.SendButton(context, R.drawable.icon_plane_24, resourcesProvider) {
             @Override
             public boolean isOpen() {
                 return true;
@@ -2359,7 +2359,7 @@ public class ShareAlert extends BottomSheet implements NotificationCenter.Notifi
             sendMessage.setTextColor(getThemedColor(Theme.key_voipgroup_nameText));
             sendMessage.setIconColor(getThemedColor(Theme.key_windowBackgroundWhiteHintText));
         }
-        sendMessage.setTextAndIcon(LocaleController.getString(R.string.SendMessage), R.drawable.msg_send);
+        sendMessage.setTextAndIcon(LocaleController.getString(R.string.SendMessage), R.drawable.icon_plane_24);
         sendMessage.setMinimumWidth(dp(196));
         sendPopupLayout2.addView(sendMessage, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48));
         sendMessage.setOnClickListener(v -> {

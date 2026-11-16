@@ -154,10 +154,15 @@ public class IntroActivity extends BaseFragment implements NotificationCenter.No
 
     @Override
     public View createView(Context context) {
-        logoDrawable = context.getResources().getDrawable(R.drawable.telegram_logo).mutate();
-        logoDrawable.setBounds(0, dp(8.666f), dp(115), dp(35));
-        SpannableStringBuilder ssb = new SpannableStringBuilder(LocaleController.getString(R.string.Page1Title));
-        ssb.setSpan(new ImageSpan(logoDrawable), 0, ssb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        // SilentGram: first page shows our white "S" monogram + "SilentGram"
+        // text (was: the "Telegram" wordmark vector R.drawable.telegram_logo).
+        // The S is white, so the existing MULTIPLY tint in updateColors() /
+        // onThemeColorsChanged() colours it with the title colour, exactly
+        // as it did for the old wordmark.
+        logoDrawable = context.getResources().getDrawable(R.drawable.icon_plane).mutate();
+        logoDrawable.setBounds(0, 0, dp(28), dp(28));
+        SpannableStringBuilder ssb = new SpannableStringBuilder(" " + LocaleController.getString(R.string.Page1Title));
+        ssb.setSpan(new ImageSpan(logoDrawable), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         titles[0] = ssb;
 
 
@@ -792,7 +797,29 @@ public class IntroActivity extends BaseFragment implements NotificationCenter.No
             loadTexture(R.drawable.intro_powerful_star, 18);
             loadTexture(R.drawable.intro_private_door, 19);
             loadTexture(R.drawable.intro_private_screw, 20);
-            loadTexture(R.drawable.intro_tg_plane, 21);
+            // SilentGram: the big intro mark is our white "S" monogram (was
+            // Telegram's paper plane, R.drawable.intro_tg_plane). Rendered
+            // white-on-transparent like the old plane texture — the native
+            // code draws it additively (GL_ONE, GL_ONE_MINUS_SRC_ALPHA) over
+            // the navy circle, so it must stay white with a transparent
+            // background. The native plane rect is 82x74, so the square S is
+            // centred in a 246x222 bitmap to avoid squashing it.
+            loadTexture(v -> {
+                int w = 246, h = 222, s = 222;
+                Bitmap bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                try {
+                    Context ctx = getParentActivity() != null ? getParentActivity() : ApplicationLoader.applicationContext;
+                    Drawable d = ctx.getResources().getDrawable(R.drawable.icon_plane);
+                    if (d != null) {
+                        Canvas c = new Canvas(bm);
+                        d.setBounds((w - s) / 2, 0, (w - s) / 2 + s, s);
+                        d.draw(c);
+                    }
+                } catch (Exception ignore) {
+                    // Transparent bitmap: the navy circle still shows, no mark.
+                }
+                return bm;
+            }, 21);
             loadTexture(v -> {
                 Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
                 // SilentGram navy (was Telegram blue) — the intro logo circle.

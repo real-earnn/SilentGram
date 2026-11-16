@@ -3551,7 +3551,7 @@ public class ChatAttachAlert extends BottomSheet implements NotificationCenter.N
         writeButtonContainer.setClipToPadding(false);
         containerView.addView(writeButtonContainer, LayoutHelper.createFrame(110, 50, Gravity.RIGHT | Gravity.BOTTOM));
 
-        writeButton = new ChatActivityEnterView.SendButton(context, R.drawable.send_plane_24, resourcesProvider) {
+        writeButton = new ChatActivityEnterView.SendButton(context, R.drawable.icon_plane_24, resourcesProvider) {
             @Override
             public boolean isOpen() {
                 return true;

@@ -6,8 +6,10 @@ import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.BaseFragment;
+import org.telegram.ui.ActionBar.BottomSheet;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.ChatRightsEditActivity;
+import org.telegram.ui.Components.AlertsCreator;
 
 import java.util.ArrayList;
 
@@ -20,10 +22,19 @@ import java.util.ArrayList;
  * Making someone an admin normally means hunting through the channel,
  * finding the person and opening the rights screen — this skips all of it.
  * Only channels/groups where you are creator or admin are listed.
+ *
+ * The menu is Telegram's own bottom-sheet menu (BottomSheet.Builder with
+ * icon rows), opened from the floating button on the right edge of a
+ * 1-1 chat, or from the header arrow in MY channel/group chats.
  */
 public class SilentQuickActions {
 
-    public static void showMenu(BaseFragment fragment, int account, long dialogId, long targetUserId) {
+    /**
+     * VIP panel for a 1-1 chat: Telegram's own bottom-sheet menu, icon on
+     * the left + label per row. Each row calls the same handler the old
+     * plain list used (refactored into the methods below).
+     */
+    public static void showVipPanel(BaseFragment fragment, int account, long dialogId, long targetUserId) {
         if (fragment == null || fragment.getParentActivity() == null || targetUserId == 0) {
             return;
         }
@@ -35,49 +46,48 @@ public class SilentQuickActions {
                 LocaleController.getString(R.string.SilentQuickShareGroup),
                 LocaleController.getString(R.string.SilentQuickMemberChats),
                 LocaleController.getString(R.string.SilentQuickAutoDelete),
-                LocaleController.getString(R.string.SilentQuickHistory),
-                LocaleController.getString(R.string.SilentQuickPrivateNote)
+                LocaleController.getString(R.string.SilentQuickPrivateNote),
+                LocaleController.getString(R.string.SilentRemindMe)
         };
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        int[] icons = new int[]{
+                R.drawable.msg_bot,
+                R.drawable.msg_bots,
+                R.drawable.msg_forward,
+                R.drawable.msg_forward,
+                R.drawable.msg_expand,
+                R.drawable.msg_delete_auto,
+                R.drawable.msg_saved,
+                R.drawable.msg_recent
+        };
+        BottomSheet.Builder builder = new BottomSheet.Builder(context);
         builder.setTitle(LocaleController.getString(R.string.SilentQuickActions));
-        builder.setItems(items, (dialog, which) -> {
+        builder.setItems(items, icons, (dialog, which) -> {
             switch (which) {
                 case 0:
-                    pickChat(fragment, account, true, false, targetUserId, dialogId);
+                    addAdminToChannels(fragment, account, targetUserId, dialogId);
                     break;
                 case 1:
-                    pickChat(fragment, account, false, false, targetUserId, dialogId);
+                    addAdminToGroups(fragment, account, targetUserId, dialogId);
                     break;
                 case 2:
-                    pickChat(fragment, account, true, true, targetUserId, dialogId);
+                    shareChannel(fragment, account, targetUserId, dialogId);
                     break;
                 case 3:
-                    pickChat(fragment, account, false, true, targetUserId, dialogId);
+                    shareGroup(fragment, account, targetUserId, dialogId);
                     break;
-                case 4: {
-                    // SilentGram: which of MY channels/groups is this person in?
-                    TLRPC.User user = MessagesController.getInstance(account).getUser(targetUserId);
-                    String name = user != null ? UserObject.getUserName(user) : "";
-                    fragment.presentFragment(new org.telegram.ui.SilentMemberChatsActivity(targetUserId, name));
+                case 4:
+                    showMemberChats(fragment, targetUserId);
                     break;
-                }
-                case 5: {
-                    // SilentGram: auto-delete timer for this chat (1m / 1h / 24h / Off).
+                case 5:
                     showAutoDeletePicker(fragment, account, dialogId);
                     break;
-                }
-                case 6: {
-                    // SilentGram E7: Deleted & Edited History for this chat.
-                    TLRPC.User user = MessagesController.getInstance(account).getUser(targetUserId);
-                    String name = user != null ? UserObject.getUserName(user) : "";
-                    fragment.presentFragment(new org.telegram.ui.SilentHistoryActivity(dialogId, name));
+                case 6:
+                    showPrivateNote(fragment, targetUserId);
                     break;
-                }
                 case 7: {
-                    // SilentGram F9: Private note for this person.
                     TLRPC.User user = MessagesController.getInstance(account).getUser(targetUserId);
                     String name = user != null ? UserObject.getUserName(user) : "";
-                    fragment.presentFragment(new org.telegram.ui.SilentNoteEditorActivity(targetUserId, name));
+                    remindMeChat(fragment, account, dialogId, name);
                     break;
                 }
             }
@@ -85,8 +95,74 @@ public class SilentQuickActions {
         builder.show();
     }
 
+    /** Old entry point — now opens the VIP panel (same actions). */
+    public static void showMenu(BaseFragment fragment, int account, long dialogId, long targetUserId) {
+        showVipPanel(fragment, account, dialogId, targetUserId);
+    }
+
+    /** "Add Admin to Your Channels" — pick one of MY channels, open its admin page. */
+    public static void addAdminToChannels(BaseFragment fragment, int account, long targetUserId, long dialogId) {
+        pickChat(fragment, account, true, false, targetUserId, dialogId);
+    }
+
+    /** "Add Admin to Your Groups" — pick one of MY groups, open its admin page. */
+    public static void addAdminToGroups(BaseFragment fragment, int account, long targetUserId, long dialogId) {
+        pickChat(fragment, account, false, false, targetUserId, dialogId);
+    }
+
+    /** "Share Your Channel" — pick one of MY channels and send its link here. */
+    public static void shareChannel(BaseFragment fragment, int account, long targetUserId, long dialogId) {
+        pickChat(fragment, account, true, true, targetUserId, dialogId);
+    }
+
+    /** "Share Your Group" — pick one of MY groups and send its link here. */
+    public static void shareGroup(BaseFragment fragment, int account, long targetUserId, long dialogId) {
+        pickChat(fragment, account, false, true, targetUserId, dialogId);
+    }
+
+    /** "Show Member in My Channels & Groups" — which of MY chats is this person in? */
+    public static void showMemberChats(BaseFragment fragment, long targetUserId) {
+        if (fragment == null) {
+            return;
+        }
+        TLRPC.User user = MessagesController.getInstance(fragment.getCurrentAccount()).getUser(targetUserId);
+        String name = user != null ? UserObject.getUserName(user) : "";
+        fragment.presentFragment(new org.telegram.ui.SilentMemberChatsActivity(targetUserId, name));
+    }
+
+    /** "Private Notes" — private note for this person. */
+    public static void showPrivateNote(BaseFragment fragment, long targetUserId) {
+        if (fragment == null) {
+            return;
+        }
+        TLRPC.User user = MessagesController.getInstance(fragment.getCurrentAccount()).getUser(targetUserId);
+        String name = user != null ? UserObject.getUserName(user) : "";
+        fragment.presentFragment(new org.telegram.ui.SilentNoteEditorActivity(targetUserId, name));
+    }
+
+    /**
+     * "Remind Me" for this chat (no message involved): pick ANY date and
+     * time in Telegram's own date/time picker, then a reminder fires for
+     * this chat at that time (same AlarmManager + SilentReminderReceiver
+     * mechanism as message reminders).
+     */
+    public static void remindMeChat(BaseFragment fragment, int account, long dialogId, String chatName) {
+        Context context = fragment == null ? null : fragment.getParentActivity();
+        if (context == null || dialogId == 0) {
+            return;
+        }
+        AlertsCreator.createScheduleDatePickerDialog(context,
+                LocaleController.getString(R.string.SilentRemindMe), dialogId, -1, true,
+                (notify, scheduleDate, scheduleRepeatPeriod) -> {
+                    long when = (long) scheduleDate * 1000L;
+                    SilentReminders.addReminder(context, dialogId, 0, chatName, chatName, when);
+                    String whenText = android.text.format.DateFormat.format("d MMM, HH:mm", when).toString();
+                    android.widget.Toast.makeText(context, whenText, android.widget.Toast.LENGTH_SHORT).show();
+                }, null);
+    }
+
     /** Auto-delete timer quick switch for a chat. */
-    private static void showAutoDeletePicker(BaseFragment fragment, int account, long dialogId) {
+    public static void showAutoDeletePicker(BaseFragment fragment, int account, long dialogId) {
         Context context = fragment.getParentActivity();
         CharSequence[] items = new CharSequence[]{
                 LocaleController.getString(R.string.SilentAutoDelete1m),
@@ -108,6 +184,10 @@ public class SilentQuickActions {
      * SilentGram E3: Administration menu for MY channel/group chats.
      * Admin list, Member list, Invite link (copy public link, or copy /
      * create a new private link).
+     *
+     * NOTE: chatId is the POSITIVE chat id (MessagesController.getChat and
+     * ChatUsersActivity both key chats by the positive id). Callers must
+     * pass chat.id, not the (negative) dialog id.
      */
     public static void showChannelAdminMenu(BaseFragment fragment, int account, long chatId) {
         MessagesController mc = MessagesController.getInstance(account);
@@ -122,8 +202,7 @@ public class SilentQuickActions {
                 LocaleController.getString(R.string.SilentMemberList),
                 isPublic ? LocaleController.getString(R.string.SilentCopyPublicLink)
                         : LocaleController.getString(R.string.SilentCopyPrivateLink),
-                LocaleController.getString(R.string.SilentCreateNewLink),
-                LocaleController.getString(R.string.SilentQuickHistory)
+                LocaleController.getString(R.string.SilentCreateNewLink)
         };
         AlertDialog.Builder builder = new AlertDialog.Builder(context);
         builder.setTitle(LocaleController.getString(R.string.SilentAdministration));
@@ -149,12 +228,6 @@ public class SilentQuickActions {
                 case 3:
                     exportInviteLink(fragment, account, chatId, true);
                     break;
-                case 4: {
-                    // SilentGram E7: Deleted & Edited History for this chat.
-                    String name = chat.title == null ? "" : chat.title;
-                    fragment.presentFragment(new org.telegram.ui.SilentHistoryActivity(chatId, name));
-                    break;
-                }
             }
         });
         builder.show();
@@ -170,7 +243,8 @@ public class SilentQuickActions {
     private static void exportInviteLink(BaseFragment fragment, int account, long chatId, boolean revoke) {
         MessagesController mc = MessagesController.getInstance(account);
         TLRPC.TL_messages_exportChatInvite req = new TLRPC.TL_messages_exportChatInvite();
-        req.peer = mc.getInputPeer(chatId);
+        // getInputPeer takes a DIALOG id (negative for chats).
+        req.peer = mc.getInputPeer(-chatId);
         req.legacy_revoke_permanent = revoke;
         ConnectionsManager.getInstance(account).sendRequest(req, (res, err) -> {
             AndroidUtilities.runOnUIThread(() -> {
@@ -217,31 +291,23 @@ public class SilentQuickActions {
             android.widget.Toast.makeText(fragment.getParentActivity(), LocaleController.getString(channels ? R.string.SilentQuickNoChannels : R.string.SilentQuickNoGroups), android.widget.Toast.LENGTH_SHORT).show();
             return;
         }
-        CharSequence[] names = new CharSequence[mine.size()];
-        for (int i = 0; i < mine.size(); i++) {
-            names[i] = mine.get(i).title;
-        }
-        Context context = fragment.getParentActivity();
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
-        builder.setTitle(LocaleController.getString(channels ? R.string.SilentQuickPickChannel : R.string.SilentQuickPickGroup));
-        builder.setItems(names, (dialog, which) -> {
-            TLRPC.Chat chat = mine.get(which);
-            if (share) {
-                shareChat(fragment, account, chat, dialogId);
-            } else {
-                openAdminScreen(fragment, account, chat, targetUserId);
-            }
-        });
-        builder.show();
+        // Telegram-style picker: avatar + name rows, Telegram theme.
+        String title = LocaleController.getString(channels ? R.string.SilentQuickPickChannel : R.string.SilentQuickPickGroup);
+        fragment.presentFragment(new org.telegram.ui.SilentChatPickerActivity(fragment, mine, title, share, targetUserId, dialogId));
     }
 
     /** Open the permissions screen to make targetUserId an admin of chat. */
-    private static void openAdminScreen(BaseFragment fragment, int account, TLRPC.Chat chat, long targetUserId) {
+    public static void openAdminScreen(BaseFragment fragment, int account, TLRPC.Chat chat, long targetUserId) {
         MessagesController mc = MessagesController.getInstance(account);
-        TLRPC.ChatFull full = mc.getChatFull(-chat.id);
+        // NOTE: getChatFull / loadFullChat / ChatRightsEditActivity all take
+        // the POSITIVE chat id (fullChats is keyed by it; every upstream
+        // caller passes chat.id or -dialogId). Passing -chat.id here used
+        // to make getChatFull always return null, so the rights screen
+        // never opened.
+        TLRPC.ChatFull full = mc.getChatFull(chat.id);
         if (full == null) {
             // Full info not cached yet — load it, then the user taps again.
-            mc.loadFullChat(-chat.id, 0, true);
+            mc.loadFullChat(chat.id, 0, true);
             android.widget.Toast.makeText(fragment.getParentActivity(), LocaleController.getString(R.string.SilentQuickLoading), android.widget.Toast.LENGTH_SHORT).show();
             return;
         }
@@ -268,13 +334,13 @@ public class SilentQuickActions {
             defaultBanned = chat.default_banned_rights;
         }
         ChatRightsEditActivity rightsFragment = new ChatRightsEditActivity(
-                targetUserId, -chat.id, adminRights, defaultBanned, null, "",
+                targetUserId, chat.id, adminRights, defaultBanned, null, "",
                 ChatRightsEditActivity.TYPE_ADMIN, true, true, null);
         fragment.presentFragment(rightsFragment);
     }
 
     /** Send this channel/group's link to the current chat. */
-    private static void shareChat(BaseFragment fragment, int account, TLRPC.Chat chat, long dialogId) {
+    public static void shareChat(BaseFragment fragment, int account, TLRPC.Chat chat, long dialogId) {
         String username = ChatObject.getPublicUsername(chat);
         if (username != null && !username.isEmpty()) {
             String link = "https://t.me/" + username;

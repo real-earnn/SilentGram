@@ -793,6 +793,10 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         proxyButtonView.setOnClickListener(v -> presentFragment(new ProxyListActivity()));
         proxyButtonView.setAlpha(0f);
         proxyButtonView.setVisibility(View.GONE);
+        // SilentGram (G28): the proxy icon must NEVER appear on the login
+        // screen — not clickable either, so it can never open ProxyListActivity.
+        proxyButtonView.setClickable(false);
+        proxyButtonView.setFocusable(false);
         sizeNotifierFrameLayout.addView(proxyButtonView, LayoutHelper.createFrame(32, 32, Gravity.RIGHT | Gravity.TOP, 16, 16, 16, 16));
         updateProxyButton(false, true);
 
@@ -9107,75 +9111,63 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         return ColorUtils.calculateLuminance(color) > 0.7f;
     }
 
-    private int currentConnectionState;
-
     private void updateProxyButton(boolean animated, boolean force) {
-        // SilentGram: the proxy is automatic and invisible — never show the
-        // proxy button on the login screen.
+        // SilentGram (G28): the proxy is automatic and invisible — the proxy
+        // icon must NEVER appear on the login screen, in any state
+        // (connected, connecting, or disconnected). Batch 3 forced GONE at
+        // the top of this method but then FELL THROUGH to the show logic
+        // below: showProxyButton(true, ...) when a proxy was enabled, or
+        // showProxyButtonDelayed() (re-show after 5s) while connecting or in
+        // a blocked country — which immediately made the view VISIBLE again.
+        // That is why the icon still showed. Hide unconditionally and return:
+        // no code path in this file may ever show the proxy button again.
+        // The proxy connection itself is untouched and keeps working in the
+        // background; only its login-screen UI is hidden.
+        if (showProxyButtonDelayed != null) {
+            AndroidUtilities.cancelRunOnUIThread(showProxyButtonDelayed);
+            showProxyButtonDelayed = null;
+        }
+        proxyButtonVisible = false;
         if (proxyButtonView != null) {
+            proxyButtonView.clearAnimation();
             proxyButtonView.setVisibility(View.GONE);
             proxyButtonView.setAlpha(0f);
-        }
-        if (proxyDrawable == null) {
-            return;
-        }
-        int state = getConnectionsManager().getConnectionState();
-        if (currentConnectionState == state && !force) {
-            return;
-        }
-        currentConnectionState = state;
-        SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
-        String proxyAddress = preferences.getString("proxy_ip", "");
-        final boolean proxyEnabled = preferences.getBoolean("proxy_enabled", false) && !TextUtils.isEmpty(proxyAddress);
-        final boolean connected = currentConnectionState == ConnectionsManager.ConnectionStateConnected || currentConnectionState == ConnectionsManager.ConnectionStateUpdating;
-        final boolean connecting = currentConnectionState == ConnectionsManager.ConnectionStateConnecting || currentConnectionState == ConnectionsManager.ConnectionStateWaitingForNetwork || currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy;
-        if (proxyEnabled) {
-            proxyDrawable.setConnected(true, connected, animated);
-            showProxyButton(true, animated);
-        } else if (getMessagesController().blockedCountry && !SharedConfig.proxyList.isEmpty() || connecting) {
-            proxyDrawable.setConnected(true, connected, animated);
-            showProxyButtonDelayed();
-        } else {
-            showProxyButton(false, animated);
         }
     }
     
     private boolean proxyButtonVisible;
     private Runnable showProxyButtonDelayed;
     private void showProxyButtonDelayed() {
-        if (proxyButtonVisible) {
-            return;
-        }
-        if (showProxyButtonDelayed != null) {
-            AndroidUtilities.cancelRunOnUIThread(showProxyButtonDelayed);
-        }
-        proxyButtonVisible = true;
-        AndroidUtilities.runOnUIThread(showProxyButtonDelayed = () -> {
-            proxyButtonVisible = false;
-            showProxyButton(true, true);
-        }, 5000);
-    }
-
-    private void showProxyButton(boolean show, boolean animated) {
-        if (show == proxyButtonVisible) {
-            return;
-        }
+        // SilentGram (G28): never show the proxy button on the login screen.
+        // Previously this scheduled showProxyButton(true) after 5s whenever
+        // the connection was in a connecting state, which re-showed the icon
+        // even after updateProxyButton() had hidden it.
         if (showProxyButtonDelayed != null) {
             AndroidUtilities.cancelRunOnUIThread(showProxyButtonDelayed);
             showProxyButtonDelayed = null;
         }
-        proxyButtonVisible = show;
-        proxyButtonView.clearAnimation();
-        if (animated) {
-            proxyButtonView.setVisibility(View.VISIBLE);
-            proxyButtonView.animate().alpha(show ? 1 : 0).withEndAction(() -> {
-                if (!show) {
-                    proxyButtonView.setVisibility(View.GONE);
-                }
-            }).start();
-        } else {
-            proxyButtonView.setVisibility(show ? View.VISIBLE : View.GONE);
-            proxyButtonView.setAlpha(show ? 1f : 0f);
+        proxyButtonVisible = false;
+        if (proxyButtonView != null) {
+            proxyButtonView.clearAnimation();
+            proxyButtonView.setVisibility(View.GONE);
+            proxyButtonView.setAlpha(0f);
+        }
+    }
+
+    private void showProxyButton(boolean show, boolean animated) {
+        // SilentGram (G28): never show the proxy button on the login screen.
+        // `show` / `animated` are intentionally ignored: every caller that
+        // used to make the icon VISIBLE (proxy enabled, connecting, blocked
+        // country) now ends up here and the view stays GONE with alpha 0.
+        if (showProxyButtonDelayed != null) {
+            AndroidUtilities.cancelRunOnUIThread(showProxyButtonDelayed);
+            showProxyButtonDelayed = null;
+        }
+        proxyButtonVisible = false;
+        if (proxyButtonView != null) {
+            proxyButtonView.clearAnimation();
+            proxyButtonView.setVisibility(View.GONE);
+            proxyButtonView.setAlpha(0f);
         }
     }
 

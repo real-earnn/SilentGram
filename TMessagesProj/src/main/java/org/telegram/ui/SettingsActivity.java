@@ -796,10 +796,20 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         }
 
         // SilentGram: our own card at the very TOP of Settings — above
-        // Account, Chat, etc. Every SilentGram feature (and the Developer
-        // button) lives inside this one menu.
+        // Account, Chat, etc. Every SilentGram feature is a row DIRECTLY
+        // in this card (no submenu); Developer is the very last row.
+        // Row ids 30-38 are ours; upstream uses 1-3, 5-13, 15-27.
+        // NOTE: no "Deleted & Edited History" row (feature removed).
         items.add(UItem.asHeader(LocaleController.getString(R.string.SilentSettingsHeader)));
-        items.add(SettingCell.Factory.of(30, IconBackgroundColors.PURPLE.top, IconBackgroundColors.PURPLE.bottom, R.drawable.settings_gram_24, "SilentGram", LocaleController.getString(R.string.SilentMenuHeader)));
+        items.add(SettingCell.Factory.of(30, IconBackgroundColors.RED.top, IconBackgroundColors.RED.bottom, R.drawable.msg_delete, LocaleController.getString(R.string.SilentDeletedChatsTitle), LocaleController.getString(R.string.SilentMenuDeletedChatsSub)));
+        items.add(SettingCell.Factory.of(31, IconBackgroundColors.BLUE_DEEP.top, IconBackgroundColors.BLUE_DEEP.bottom, R.drawable.msg_bot, LocaleController.getString(R.string.SilentBotTesterTitle), LocaleController.getString(R.string.SilentMenuBotTesterSub)));
+        items.add(SettingCell.Factory.of(32, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.msg_download, LocaleController.getString(R.string.SilentDownloadManagerTitle), LocaleController.getString(R.string.SilentMenuDownloadsSub)));
+        items.add(SettingCell.Factory.of(33, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.msg_saved, LocaleController.getString(R.string.SilentTemplatesTitle), LocaleController.getString(R.string.SilentMenuTemplatesSub)));
+        items.add(SettingCell.Factory.of(34, IconBackgroundColors.BLUE_ALT.top, IconBackgroundColors.BLUE_ALT.bottom, R.drawable.msg_media, LocaleController.getString(R.string.SilentAutoDownloadTitle), LocaleController.getString(R.string.SilentMenuAutoDownloadSub)));
+        items.add(SettingCell.Factory.of(35, IconBackgroundColors.CYAN.top, IconBackgroundColors.CYAN.bottom, R.drawable.msg_calendar, LocaleController.getString(R.string.SilentScheduledTitle), LocaleController.getString(R.string.SilentMenuScheduledSub)));
+        items.add(SettingCell.Factory.of(36, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.msg_secret, LocaleController.getString(R.string.SilentChatLockTitle), LocaleController.getString(R.string.SilentMenuChatLockSub)));
+        items.add(SettingCell.Factory.of(37, IconBackgroundColors.ORANGE_DEEP.top, IconBackgroundColors.ORANGE_DEEP.bottom, R.drawable.msg_edit, LocaleController.getString(R.string.SilentNotesTitle), LocaleController.getString(R.string.SilentMenuNotesSub)));
+        items.add(SettingCell.Factory.of(38, IconBackgroundColors.PURPLE.top, IconBackgroundColors.PURPLE.bottom, R.drawable.settings_gram_24, LocaleController.getString(R.string.SilentDeveloperTitle), LocaleController.getString(R.string.SilentMenuDeveloperSub)));
         items.add(UItem.asShadow(null));
 
         items.add(SettingCell.Factory.of(1, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_account, getString(R.string.SettingsAccount), getString(R.string.SettingsAccountInfo)));
@@ -981,9 +991,34 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
                 Browser.openUrl(getParentActivity(), LocaleController.getString(R.string.PrivacyPolicyUrl));
                 break;
 
+            // SilentGram: flattened feature rows (ids 30-38) — each opens
+            // its activity directly, same targets as SilentGramMenuActivity.
             case 30:
-                // SilentGram F7: the SilentGram menu (all features inside).
-                presentFragment(new SilentGramMenuActivity());
+                presentFragment(new SilentDeletedChatsActivity());
+                break;
+            case 31:
+                presentFragment(new SilentBotTesterActivity());
+                break;
+            case 32:
+                presentFragment(new SilentDownloadManagerActivity());
+                break;
+            case 33:
+                presentFragment(new SilentTemplatesActivity());
+                break;
+            case 34:
+                presentFragment(new SilentAutoDownloadActivity());
+                break;
+            case 35:
+                presentFragment(new SilentScheduledActivity());
+                break;
+            case 36:
+                presentFragment(new SilentChatLockActivity());
+                break;
+            case 37:
+                presentFragment(new SilentNotesActivity());
+                break;
+            case 38:
+                presentFragment(new SilentDeveloperActivity());
                 break;
 
             case 20:
@@ -1068,7 +1103,13 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
                     }
                     break;
             }
-            return formatString(R.string.TelegramVersion, String.format(Locale.US, "v%s (%d)\n%s", pInfo.versionName, code, abi));
+            // SilentGram: hardcode our brand name here. R.string.TelegramVersion
+            // is overridden by downloaded Telegram language packs (cloud
+            // strings win over local resources in LocaleController) and by
+            // the locale values-* dirs, which still say "Telegram for
+            // Android" — so the footer showed "Telegram" even though the
+            // default strings.xml already says "SilentGram".
+            return String.format(Locale.US, "SilentGram for Android v%s (%d)\n%s", pInfo.versionName, code, abi);
         } catch (Exception e) {
             FileLog.e(e);
         }

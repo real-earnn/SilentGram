@@ -596,6 +596,8 @@ public class ChatActivityEnterView extends FrameLayout implements
     private Runnable updateSlowModeRunnable;
     private SendButtonBlockedByTypingView sendButtonBlockedByTypingView;
     private SendButton sendButton;
+    // SilentGram G23: small translate icon next to the send button.
+    private ImageView silentTranslateButton;
     private int sendButtonBackgroundColor;
     public MessageSendPreview messageSendPreview;
     private long sentFromPreview;
@@ -2084,7 +2086,7 @@ public class ChatActivityEnterView extends FrameLayout implements
             cameraDrawable = getResources().getDrawable(R.drawable.input_video_pressed).mutate();
             ThemeBind.drawableColorFilter(this, cameraDrawable, Theme.key_chat_messagePanelVoicePressed, ChatActivityEnterView.this.resourcesProvider, PorterDuff.Mode.MULTIPLY);
 
-            sendDrawable = getResources().getDrawable(R.drawable.attach_send).mutate();
+            sendDrawable = getResources().getDrawable(R.drawable.icon_plane_54).mutate();
             ThemeBind.drawableColorFilter(this, sendDrawable, Theme.key_chat_messagePanelVoicePressed, ChatActivityEnterView.this.resourcesProvider, PorterDuff.Mode.MULTIPLY);
 
             micOutline = getResources().getDrawable(R.drawable.input_mic).mutate();
@@ -3536,7 +3538,10 @@ public class ChatActivityEnterView extends FrameLayout implements
             }
         });
 
-        sendButton = new SendButton(context, isInScheduleMode() ? R.drawable.input_schedule : R.drawable.send_plane_24, resourcesProvider, true) {
+        // SilentGram G22: the send button shows OUR logo — the white
+        // SilentGram "S" monogram (icon_plane_24, 24dp, same intrinsic size
+        // as the plane it replaces; SendButton draws at intrinsic size).
+        sendButton = new SendButton(context, isInScheduleMode() ? R.drawable.input_schedule : R.drawable.icon_plane_24, resourcesProvider, true) {
             @Override
             public boolean isInScheduleMode() {
                 return ChatActivityEnterView.this.isInScheduleMode();
@@ -3580,6 +3585,20 @@ public class ChatActivityEnterView extends FrameLayout implements
         if (AndroidUtilities.isAccessibilityScreenReaderEnabled()) {
             sendButtonContainer.setOnLongClickListener(this::onSendLongClick);
         }
+
+        // SilentGram G23: small translate icon just left of the send button.
+        // Shows only while the input has text; taps translate the whole
+        // input text in place (same language list as SilentTranslate).
+        // It sits inside the send-button zone (right margin 48dp clears the
+        // 44dp send circle), so no extra text-field padding is needed.
+        silentTranslateButton = new ImageView(context);
+        silentTranslateButton.setImageResource(R.drawable.msg_translate);
+        silentTranslateButton.setScaleType(ImageView.ScaleType.CENTER);
+        silentTranslateButton.setContentDescription(getString(R.string.TranslateMessage));
+        silentTranslateButton.setVisibility(View.GONE);
+        ThemeBind.colorFilter(silentTranslateButton, Theme.key_glass_defaultIcon, resourcesProvider, PorterDuff.Mode.SRC_IN);
+        silentTranslateButton.setOnClickListener(v -> translateInputText());
+        sendButtonContainer.addView(silentTranslateButton, LayoutHelper.createFrame(32, 32, Gravity.RIGHT | Gravity.CENTER_VERTICAL, 0, 0, 48, 0));
 
         sendButtonBlockedByTypingView = new SendButtonBlockedByTypingView(context, resourcesProvider);
         sendButtonBlockedByTypingView.setVisibility(View.INVISIBLE);
@@ -5975,6 +5994,8 @@ public class ChatActivityEnterView extends FrameLayout implements
                 if (ignorePrevTextChange) {
                     return;
                 }
+                // SilentGram G23: show the input-translate icon while typing.
+                updateSilentTranslateButton();
 
                 boolean allowChangeToSmile = true;
                 int currentPage;
@@ -10609,6 +10630,41 @@ public class ChatActivityEnterView extends FrameLayout implements
             recordDeleteImageView.setLayerColor("Line 2 Dup", background);
             recordDeleteImageView.setLayerColor("Line 3 Dup", background);
         }
+    }
+
+    // SilentGram G23: the input-translate icon shows only while the input
+    // has text (called from the text watcher, so it tracks typing, pastes
+    // and programmatic sets alike).
+    private void updateSilentTranslateButton() {
+        if (silentTranslateButton == null) {
+            return;
+        }
+        boolean hasText = messageEditText != null && messageEditText.getText() != null
+                && messageEditText.getText().toString().trim().length() > 0;
+        silentTranslateButton.setVisibility(hasText ? View.VISIBLE : View.GONE);
+    }
+
+    // SilentGram G23: translate the whole input text in place — pick the
+    // target language (same list as SilentTranslate), then the text inside
+    // the input box itself becomes the translation. No separate screen.
+    private void translateInputText() {
+        if (messageEditText == null || messageEditText.getText() == null) {
+            return;
+        }
+        String text = messageEditText.getText().toString();
+        if (text.trim().isEmpty()) {
+            return;
+        }
+        Context context = getContext();
+        org.telegram.messenger.SilentChatTranslator.pickTargetLanguage(context, lang -> {
+            org.telegram.messenger.SilentTranslate.translateText(text, "auto", lang, translated -> AndroidUtilities.runOnUIThread(() -> {
+                if (translated != null) {
+                    setFieldText(translated);
+                } else {
+                    android.widget.Toast.makeText(context, LocaleController.getString(R.string.SilentTranslateFailed), android.widget.Toast.LENGTH_SHORT).show();
+                }
+            }));
+        });
     }
 
     public void setFieldText(CharSequence text) {

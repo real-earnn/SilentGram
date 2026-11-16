@@ -1061,6 +1061,18 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     private CornerPathEffect bottomActionTextPathEffect;
     public int bottomActionPadding;
 
+    // SilentGram G10b: "View edit history" line under edited messages.
+    // A service-style pill below the bubble (same pattern as
+    // bottomActionText), with its height in silentEditHistoryPadding.
+    Text silentEditHistoryText;
+    private LinkPath silentEditHistoryTextPath;
+    private CornerPathEffect silentEditHistoryTextPathEffect;
+    private int silentEditHistoryPadding;
+    private boolean silentEditHistoryExpanded;
+    private long silentEditHistoryDialogId;
+    private int silentEditHistoryMsgId;
+    private boolean silentEditHistoryPressed;
+
     public TopicSeparator topicSeparator;
     public int topicSeparatorTopPadding;
 
@@ -3225,6 +3237,44 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         }
     }
 
+    // SilentGram G10b: tap the "View edit history" pill to expand the old
+    // versions inline (oldest -> newest); tap again to collapse.
+    private boolean checkSilentEditHistoryMotionEvent(MotionEvent event) {
+        if (silentEditHistoryText == null) {
+            return false;
+        }
+        float x = getEventX(event);
+        float y = getEventY(event);
+        // Same y as the pill is drawn at (drawOutboundsContent, content frame).
+        float top = getHeight() - getPaddingTop() - transitionParams.deltaTop + transitionParams.deltaBottom - getBottomActionPadding() - silentEditHistoryPadding - dp(9);
+        float left = (getParentWidth() - silentEditHistoryText.getWidth()) / 2.0f - dp(9);
+        float right = (getParentWidth() + silentEditHistoryText.getWidth()) / 2.0f + dp(9);
+        boolean result = false;
+        if (event.getAction() == MotionEvent.ACTION_DOWN) {
+            if (x >= left && x <= right && y >= top && y <= top + silentEditHistoryPadding) {
+                silentEditHistoryPressed = true;
+                result = true;
+                invalidate();
+            }
+        } else if (event.getAction() == MotionEvent.ACTION_UP) {
+            if (silentEditHistoryPressed) {
+                silentEditHistoryPressed = false;
+                if (x >= left && x <= right && y >= top && y <= top + silentEditHistoryPadding) {
+                    playSoundEffect(SoundEffectConstants.CLICK);
+                    silentEditHistoryExpanded = !silentEditHistoryExpanded;
+                    silentEditHistoryText = null; // force rebuild with the new state
+                    updateSilentEditHistory(currentMessageObject);
+                    requestLayout();
+                    invalidate();
+                }
+                result = true;
+            }
+        } else if (event.getAction() == MotionEvent.ACTION_CANCEL) {
+            silentEditHistoryPressed = false;
+        }
+        return result;
+    }
+
     private boolean checkDateMotionEvent(MotionEvent event) {
         if (!currentMessageObject.isImportedForward()) {
             return false;
@@ -4434,6 +4484,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         }
         if (!result) {
             result = checkDateMotionEvent(event);
+        }
+        if (!result) {
+            result = checkSilentEditHistoryMotionEvent(event);
         }
         if (!result) {
             result = checkTextSelection(event);
@@ -6245,6 +6298,18 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     public MultiLayoutTypingAnimator botDraftTypingAnimator;
 
     private void setMessageContent(MessageObject messageObject, MessageObject.GroupedMessages groupedMessages, boolean bottomNear, boolean topNear, boolean firstInChat, boolean lastInChatList) {
+        // SilentGram G24: in-place whole-chat translation. Runs BEFORE
+        // checkLayout() so the text layout is built from the translated
+        // text — the translation renders in the same bubble, Telegram
+        // style. If no translation is stored yet, one is started in the
+        // background and this cell rebinds itself when it lands.
+        if (messageObject != null) {
+            org.telegram.messenger.SilentChatTranslator.applyToMessage(messageObject, () -> {
+                if (currentMessageObject == messageObject) {
+                    forceResetMessageObject();
+                }
+            });
+        }
         if (messageObject.checkLayout() || currentPosition != null && lastHeight != AndroidUtilities.displaySize.y) {
             currentMessageObject = null;
         }
@@ -12179,7 +12244,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         }
         updateSelectionTextPosition();
 
-        final int normHeight = starsPriceTopPadding + topicSeparatorTopPadding + suggestionOfferTopPadding + totalHeight + keyboardHeight + askBotForumBottomPadding + bottomActionPadding;
+        final int normHeight = starsPriceTopPadding + topicSeparatorTopPadding + suggestionOfferTopPadding + totalHeight + keyboardHeight + askBotForumBottomPadding + bottomActionPadding + silentEditHistoryPadding;
         int resultHeight = normHeight;
         ChatActivityDraftMessageMeasureController botDraftHeightController = getDraftMessageMeasureController();
         if (botDraftHeightController != null) {
@@ -15976,6 +16041,83 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         }
     }
 
+    // SilentGram G10b: build (or clear) the "View edit history" pill for
+    // this message. Runs on every bind; rebuilds only when the message or
+    // the expanded state changed. When there is no edit history the pill
+    // is null and the padding is 0, so normal rendering is untouched.
+    private void updateSilentEditHistory(MessageObject messageObject) {
+        if (messageObject == null || !messageObject.isEdited()) {
+            silentEditHistoryText = null;
+            silentEditHistoryPadding = 0;
+            silentEditHistoryExpanded = false;
+            silentEditHistoryDialogId = 0;
+            silentEditHistoryMsgId = 0;
+            return;
+        }
+        long dialogId = messageObject.getDialogId();
+        int msgId = messageObject.getId();
+        if (silentEditHistoryText != null && dialogId == silentEditHistoryDialogId && msgId == silentEditHistoryMsgId) {
+            return; // already built for this message + state
+        }
+        java.util.List<org.telegram.messenger.SilentMessageHistory.Entry> entries =
+                org.telegram.messenger.SilentMessageHistory.getHistoryForMessage(dialogId, msgId);
+        if (entries.isEmpty()) {
+            silentEditHistoryText = null;
+            silentEditHistoryPadding = 0;
+            silentEditHistoryExpanded = false;
+            silentEditHistoryDialogId = dialogId;
+            silentEditHistoryMsgId = msgId;
+            return;
+        }
+        boolean expanded = silentEditHistoryExpanded && dialogId == silentEditHistoryDialogId && msgId == silentEditHistoryMsgId;
+        silentEditHistoryDialogId = dialogId;
+        silentEditHistoryMsgId = msgId;
+        silentEditHistoryExpanded = expanded;
+        String text;
+        if (!expanded) {
+            text = getString(R.string.SilentEditHistoryView) + " (" + entries.size() + ")";
+        } else {
+            // Oldest -> newest, Telegram-quote style: one quoted line each.
+            StringBuilder sb = new StringBuilder();
+            int shown = 0;
+            for (org.telegram.messenger.SilentMessageHistory.Entry e : entries) {
+                if (shown >= 5) {
+                    break;
+                }
+                if (shown > 0) {
+                    sb.append("\n");
+                }
+                String when = android.text.format.DateFormat.format("d MMM HH:mm", e.time).toString();
+                String old = e.text == null ? "" : e.text;
+                if (old.length() > 200) {
+                    old = old.substring(0, 200) + "…";
+                }
+                sb.append("“").append(old).append("” — ").append(when);
+                shown++;
+            }
+            sb.append("\n").append(getString(R.string.SilentEditHistoryHide));
+            text = sb.toString();
+        }
+        int maxWidth = messageObject.getMaxMessageTextWidth();
+        silentEditHistoryText = new Text(text, 13, AndroidUtilities.bold())
+                .multiline(expanded ? 12 : 1)
+                .setMaxWidth(maxWidth)
+                .align(Layout.Alignment.ALIGN_CENTER)
+                .lineSpacing(dp(2));
+        if (silentEditHistoryTextPath == null) {
+            silentEditHistoryTextPath = new LinkPath();
+            silentEditHistoryTextPath.setUseCornerPathImplementation(true);
+            silentEditHistoryTextPathEffect = new CornerPathEffect(dp(16));
+        } else {
+            silentEditHistoryTextPath.rewind();
+        }
+        silentEditHistoryTextPath.setPadding(dp(9), dp(2.66f));
+        silentEditHistoryPadding = (int) (silentEditHistoryText.getHeight() + dp(6.66f));
+        silentEditHistoryTextPath.setCurrentLayout(silentEditHistoryText.getLayout(), 0, 0);
+        silentEditHistoryText.getLayout().getSelectionPath(0, text.length(), silentEditHistoryTextPath);
+        silentEditHistoryTextPath.closeRects();
+    }
+
     void setMessageObjectInternal(MessageObject messageObject) {
         // SilentGram E7: cache the message text (for Deleted / Edited history).
         // If the text changed since we last saw it, the old text is saved.
@@ -16001,6 +16143,8 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         } catch (Exception e) {
             // Never break message rendering for history caching.
         }
+        // SilentGram G10b: "View edit history" pill under edited messages.
+        updateSilentEditHistory(messageObject);
         if (((messageObject.messageOwner.flags & TLRPC.MESSAGE_FLAG_HAS_VIEWS) != 0 || messageObject.messageOwner.replies != null) && !currentMessageObject.scheduled && !currentMessageObject.isSponsored()) {
             if (!currentMessageObject.viewsReloaded) {
                 MessagesController.getInstance(currentAccount).addToViewsQueue(currentMessageObject);
@@ -18314,6 +18458,10 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         if (bottomActionText != null && (currentPosition == null || (currentPosition.flags & MessageObject.POSITION_FLAG_BOTTOM) != 0 && (currentPosition.flags & MessageObject.POSITION_FLAG_LEFT) != 0)) {
             return true;
         }
+        // SilentGram G10b: "View edit history" pill below the bubble.
+        if (silentEditHistoryText != null && (currentPosition == null || (currentPosition.flags & MessageObject.POSITION_FLAG_BOTTOM) != 0 && (currentPosition.flags & MessageObject.POSITION_FLAG_LEFT) != 0)) {
+            return true;
+        }
         if (topicSeparator != null && (currentPosition == null || (currentPosition.flags & MessageObject.POSITION_FLAG_TOP) != 0 && (currentPosition.flags & MessageObject.POSITION_FLAG_LEFT) != 0)) {
             return true;
         }
@@ -18448,6 +18596,36 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             canvas.save();
             canvas.scale(scale, scale, getParentWidth() / 2.0f, y + dp(6.83f));
             bottomActionText.draw(canvas, (getParentWidth() - bottomActionText.getWidth()) / 2.0f, y + dp(6.83f), getThemedColor(isCompactMode() ? Theme.key_chat_compact_actionText : Theme.key_chat_serviceText), alpha);
+            canvas.restore();
+        }
+
+        // SilentGram G10b: "View edit history" pill, stacked directly above
+        // the bottom-action pill (or at the bottom when there is none).
+        if (silentEditHistoryText != null && (currentPosition == null || (currentPosition.flags & MessageObject.POSITION_FLAG_BOTTOM) != 0 && (currentPosition.flags & MessageObject.POSITION_FLAG_LEFT) != 0)) {
+            final float y = getHeight() - getPaddingTop() - transitionParams.deltaTop + transitionParams.deltaBottom - getBottomActionPadding() - silentEditHistoryPadding - dp(9);
+            final float alpha = transitionParams.ignoreAlpha ? timeAlpha : getAlpha();
+            canvas.save();
+            canvas.translate((getParentWidth() - silentEditHistoryText.getWidth()) / 2.0f, y + dp(4.5f) + dp(3.33f));
+            applyServiceShaderMatrix(getMeasuredWidth(), backgroundHeight, getX(), viewTop + y + dp(4.5f) + dp(3.33f));
+            final Paint backgroundPaint = getThemedPaint(Theme.key_paint_chatActionBackground);
+            int oldAlpha = backgroundPaint.getAlpha();
+            backgroundPaint.setPathEffect(silentEditHistoryTextPathEffect);
+            backgroundPaint.setAlpha((int) (oldAlpha * alpha));
+            canvas.drawPath(silentEditHistoryTextPath, backgroundPaint);
+            backgroundPaint.setPathEffect(null);
+            backgroundPaint.setAlpha(oldAlpha);
+            if (hasGradientService()) {
+                final Paint darkenPaint = getThemedPaint(Theme.key_paint_chatActionBackgroundDarken);
+                oldAlpha = darkenPaint.getAlpha();
+                darkenPaint.setPathEffect(silentEditHistoryTextPathEffect);
+                darkenPaint.setAlpha((int) (oldAlpha * alpha));
+                canvas.drawPath(silentEditHistoryTextPath, darkenPaint);
+                darkenPaint.setPathEffect(null);
+                darkenPaint.setAlpha(oldAlpha);
+            }
+            canvas.restore();
+            canvas.save();
+            silentEditHistoryText.draw(canvas, (getParentWidth() - silentEditHistoryText.getWidth()) / 2.0f, y + dp(6.83f), getThemedColor(isCompactMode() ? Theme.key_chat_compact_actionText : Theme.key_chat_serviceText), alpha);
             canvas.restore();
         }
 

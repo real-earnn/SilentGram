@@ -3905,11 +3905,37 @@ public class ChatActivity extends BaseFragment implements
                         builder.show();
                     }
                 } else if (id == chat_menu_silent_translate_chat) {
-                    // SilentGram F1: Translate the whole chat.
+                    // SilentGram G24: translate this chat IN PLACE (no
+                    // separate screen). The translated text replaces the
+                    // original inside the same bubbles — Telegram-native
+                    // look, as if the messages had been sent in that
+                    // language. Tapping again offers another language or
+                    // Show Original.
                     if (dialog_id != 0) {
-                        String name = currentChat != null ? currentChat.title
-                                : (currentUser != null ? UserObject.getUserName(currentUser) : "chat");
-                        presentFragment(new SilentChatTranslateActivity(dialog_id, name));
+                        if (org.telegram.messenger.SilentChatTranslator.isTranslating(dialog_id)) {
+                            CharSequence[] options = new CharSequence[]{
+                                    LocaleController.getString(R.string.SilentChooseLanguage),
+                                    LocaleController.getString(R.string.ShowOriginalButton)
+                            };
+                            AlertDialog.Builder builder = new AlertDialog.Builder(getParentActivity());
+                            builder.setTitle(LocaleController.getString(R.string.SilentTranslateChatTitle));
+                            builder.setItems(options, (d, which) -> {
+                                if (which == 0) {
+                                    org.telegram.messenger.SilentChatTranslator.pickTargetLanguage(getParentActivity(), lang -> {
+                                        org.telegram.messenger.SilentChatTranslator.setTargetLang(dialog_id, lang);
+                                        silentTranslateVisibleMessages();
+                                    });
+                                } else {
+                                    silentShowOriginalChat();
+                                }
+                            });
+                            builder.show();
+                        } else {
+                            org.telegram.messenger.SilentChatTranslator.pickTargetLanguage(getParentActivity(), lang -> {
+                                org.telegram.messenger.SilentChatTranslator.setTargetLang(dialog_id, lang);
+                                silentTranslateVisibleMessages();
+                            });
+                        }
                     }
                 } else if (id == clear_history || id == delete_chat || id == auto_delete_timer) {
                     if (getParentActivity() == null) {
@@ -4113,12 +4139,12 @@ public class ChatActivity extends BaseFragment implements
                 } else if (id == chat_menu_topic_create) {
                     presentFragment(TopicCreateFragment.create(-dialog_id, 0).setOpenInChatActivity(ChatActivity.this));
                 } else if (id == chat_menu_silent_quick) {
-                    // SilentGram: quick actions for this user (admin/share),
-                    // or Administration for MY channel/group.
-                    if (currentUser != null) {
-                        org.telegram.messenger.SilentQuickActions.showMenu(ChatActivity.this, currentAccount, dialog_id, currentUser.id);
-                    } else if (currentChat != null) {
-                        org.telegram.messenger.SilentQuickActions.showChannelAdminMenu(ChatActivity.this, currentAccount, dialog_id);
+                    // SilentGram: Administration for MY channel/group chats.
+                    // (1-1 user chats use the floating button instead — the
+                    // header arrow is only added for channels/groups now.)
+                    // NOTE: showChannelAdminMenu takes the POSITIVE chat id.
+                    if (currentChat != null) {
+                        org.telegram.messenger.SilentQuickActions.showChannelAdminMenu(ChatActivity.this, currentAccount, currentChat.id);
                     }
                 } else if (id == 888) {
                     dumpCanvas();
@@ -4290,19 +4316,14 @@ public class ChatActivity extends BaseFragment implements
             topicCreateItem = menu.addItem(chat_menu_topic_create, R.drawable.menu_topic_add_30);
         }
 
-        // SilentGram: small arrow in the header of a user's chat — quick
-        // actions (make them admin of my channels/groups, share my channel/group).
-        // Same arrow in MY channel/group chats — Administration (admins,
-        // members, invite link).
-        if (chatMode == 0 && currentEncryptedChat == null) {
-            boolean showQuick = currentUser != null && !UserObject.isReplyUser(currentUser);
-            if (!showQuick && currentChat != null && (currentChat.creator || currentChat.admin_rights != null)) {
-                showQuick = true;
-            }
-            if (showQuick) {
-                ActionBarMenuItem quickItem = menu.addItem(chat_menu_silent_quick, R.drawable.ic_arrow_drop_down);
-                quickItem.setContentDescription(LocaleController.getString(R.string.SilentQuickActions));
-            }
+        // SilentGram: small arrow in the header of MY channel/group chats —
+        // Administration (admins, members, invite link). 1-1 user chats use
+        // the floating button on the right edge instead (added below), so
+        // the header arrow is NOT added for users anymore.
+        if (chatMode == 0 && currentEncryptedChat == null && currentChat != null
+                && (currentChat.creator || currentChat.admin_rights != null)) {
+            ActionBarMenuItem quickItem = menu.addItem(chat_menu_silent_quick, R.drawable.ic_arrow_drop_down);
+            quickItem.setContentDescription(LocaleController.getString(R.string.SilentQuickActions));
         }
 
         if (currentEncryptedChat == null && (chatMode == 0 || chatMode == MODE_SAVED || chatMode == MODE_SUGGESTIONS) && !isReport()) {
@@ -7307,6 +7328,30 @@ public class ChatActivity extends BaseFragment implements
         {
             final int indexToAdd = chatActivityFadeView != null ? contentView.indexOfChild(chatActivityFadeView) : -1;
             contentView.addView(sideControlsButtonsLayout, indexToAdd, LayoutHelper.createFrame(57, 300, Gravity.RIGHT | Gravity.BOTTOM));
+        }
+
+        // SilentGram G6: small floating button on the RIGHT edge, vertically
+        // centred, for 1-1 user chats (replaces the header arrow). Rounded
+        // on the front (left) edge, flat against the screen edge at the back
+        // (right). Tapping it opens the VIP quick-actions panel. The icon
+        // alone rotates (the pill background must not rotate with it).
+        if (chatMode == 0 && currentUser != null && !UserObject.isReplyUser(currentUser) && currentEncryptedChat == null) {
+            FrameLayout silentQuickFab = new FrameLayout(context);
+            android.graphics.drawable.GradientDrawable fabBg = new android.graphics.drawable.GradientDrawable();
+            fabBg.setColor(0xFF6D28D9);
+            fabBg.setCornerRadii(new float[]{AndroidUtilities.dp(22), AndroidUtilities.dp(22), 0, 0, 0, 0, AndroidUtilities.dp(22), AndroidUtilities.dp(22)});
+            silentQuickFab.setBackground(fabBg);
+            silentQuickFab.setElevation(AndroidUtilities.dp(4));
+            silentQuickFab.setContentDescription(LocaleController.getString(R.string.SilentQuickActions));
+            ImageView fabIcon = new ImageView(context);
+            fabIcon.setImageResource(R.drawable.ic_arrow_drop_down);
+            fabIcon.setRotation(90); // down chevron -> points left, toward the chat
+            fabIcon.setScaleType(ImageView.ScaleType.CENTER);
+            fabIcon.setColorFilter(0xFFFFFFFF, android.graphics.PorterDuff.Mode.SRC_IN);
+            silentQuickFab.addView(fabIcon, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
+            silentQuickFab.setOnClickListener(v -> org.telegram.messenger.SilentQuickActions.showVipPanel(ChatActivity.this, currentAccount, dialog_id, currentUser.id));
+            // Mid-screen right edge, shifted up so it clears the input field.
+            contentView.addView(silentQuickFab, LayoutHelper.createFrame(30, 46, Gravity.RIGHT | Gravity.CENTER_VERTICAL, 0, 0, 0, 120));
         }
 
         updateMessageListAccessibilityVisibility();
@@ -10343,7 +10388,11 @@ public class ChatActivity extends BaseFragment implements
     }
 
     /**
-     * SilentGram F3: pick when to be reminded about this message.
+     * SilentGram F3 / G13: pick when to be reminded about this message —
+     * ANY date and time, in Telegram's own date/time picker
+     * (AlertsCreator.createScheduleDatePickerDialog: calendar + time).
+     * The picked time feeds SilentReminders.addReminder (same AlarmManager
+     * + SilentReminderReceiver mechanism as before).
      */
     private void showSilentRemindPicker(MessageObject msg) {
         Context context = getParentActivity();
@@ -10357,37 +10406,66 @@ public class ChatActivity extends BaseFragment implements
         final String body = text;
         String name = currentChat != null ? currentChat.title
                 : (currentUser != null ? UserObject.getUserName(currentUser) : "chat");
-        CharSequence[] items = new CharSequence[]{
-                LocaleController.getString(R.string.SilentRemind1h),
-                LocaleController.getString(R.string.SilentRemind3h),
-                LocaleController.getString(R.string.SilentRemindTomorrow9),
-                LocaleController.getString(R.string.SilentRemindNextWeek)
-        };
-        long now = System.currentTimeMillis();
-        long[] times = new long[]{
-                now + 3600_000L,
-                now + 3 * 3600_000L,
-                nextTime(9, 0, 1),
-                nextTime(9, 0, 7)
-        };
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
-        builder.setTitle(LocaleController.getString(R.string.SilentRemindMe));
-        builder.setItems(items, (d, which) -> {
-            org.telegram.messenger.SilentReminders.addReminder(context, dialog_id, msg.getId(), body, name, times[which]);
-            android.widget.Toast.makeText(context, items[which], android.widget.Toast.LENGTH_SHORT).show();
-        });
-        builder.show();
+        AlertsCreator.createScheduleDatePickerDialog(context,
+                LocaleController.getString(R.string.SilentRemindMe), dialog_id, -1, true,
+                (notify, scheduleDate, scheduleRepeatPeriod) -> {
+                    long when = (long) scheduleDate * 1000L;
+                    org.telegram.messenger.SilentReminders.addReminder(context, dialog_id, msg.getId(), body, name, when);
+                    String whenText = android.text.format.DateFormat.format("d MMM, HH:mm", when).toString();
+                    android.widget.Toast.makeText(context, whenText, android.widget.Toast.LENGTH_SHORT).show();
+                }, null);
     }
 
-    /** Next occurrence of hour:minute, `daysAhead` days from now at the earliest. */
-    private long nextTime(int hour, int minute, int daysAhead) {
-        java.util.Calendar cal = java.util.Calendar.getInstance();
-        cal.add(java.util.Calendar.DAY_OF_YEAR, daysAhead);
-        cal.set(java.util.Calendar.HOUR_OF_DAY, hour);
-        cal.set(java.util.Calendar.MINUTE, minute);
-        cal.set(java.util.Calendar.SECOND, 0);
-        cal.set(java.util.Calendar.MILLISECOND, 0);
-        return cal.getTimeInMillis();
+    /** SilentGram G24: translate the currently visible messages in place. */
+    private void silentTranslateVisibleMessages() {
+        if (chatListView == null) {
+            return;
+        }
+        ArrayList<MessageObject> visible = new ArrayList<>();
+        for (int i = 0; i < chatListView.getChildCount(); ++i) {
+            View child = chatListView.getChildAt(i);
+            if (child instanceof ChatMessageCell) {
+                MessageObject mo = ((ChatMessageCell) child).getMessageObject();
+                if (mo != null) {
+                    visible.add(mo);
+                }
+            }
+        }
+        android.widget.Toast.makeText(getParentActivity(), LocaleController.getString(R.string.SilentTranslating), android.widget.Toast.LENGTH_SHORT).show();
+        org.telegram.messenger.SilentChatTranslator.translateMessages(dialog_id, visible, this::silentRefreshTranslatedCells);
+        // Rebind right away for messages that already have a stored translation.
+        silentRefreshTranslatedCells();
+    }
+
+    /** SilentGram G24: rebind the visible cells so substituted/restored text shows. */
+    private void silentRefreshTranslatedCells() {
+        if (chatListView == null || chatAdapter == null) {
+            return;
+        }
+        for (int i = 0; i < chatListView.getChildCount(); ++i) {
+            View child = chatListView.getChildAt(i);
+            if (child instanceof ChatMessageCell) {
+                ChatMessageCell cell = (ChatMessageCell) child;
+                MessageObject mo = cell.getMessageObject();
+                if (mo != null) {
+                    mo.forceUpdate = true;
+                    cell.setMessageObject(mo, cell.getCurrentMessagesGroup(), cell.isPinnedBottom(), cell.isPinnedTop(), cell.isFirstInChat(), cell.isLastInChatList());
+                }
+            }
+        }
+    }
+
+    /** SilentGram G24: turn translation off and restore the original texts. */
+    private void silentShowOriginalChat() {
+        java.util.Set<Integer> translatedIds = org.telegram.messenger.SilentChatTranslator.getStoredIds(dialog_id);
+        org.telegram.messenger.SilentChatTranslator.disable(dialog_id);
+        for (MessageObject mo : messages) {
+            if (mo != null && translatedIds.contains(mo.getId())) {
+                // Restores messageText from messageOwner.message.
+                mo.applyNewText();
+            }
+        }
+        silentRefreshTranslatedCells();
     }
 
     private void updateSideButtonsForAttach() {
@@ -47153,7 +47231,7 @@ public class ChatActivity extends BaseFragment implements
                 if (!selectedObject.isPaidSuggestedPostProtected() && chatMode == MODE_SCHEDULED) {
                     items.add(LocaleController.getString(R.string.MessageScheduleSend));
                     options.add(OPTION_SEND_NOW);
-                    icons.add(R.drawable.msg_send);
+                    icons.add(R.drawable.icon_plane_24);
                 }
                 if (selectedObject.messageOwner.action instanceof TLRPC.TL_messageActionPhoneCall) {
                     TLRPC.TL_messageActionPhoneCall call = (TLRPC.TL_messageActionPhoneCall) message.messageOwner.action;

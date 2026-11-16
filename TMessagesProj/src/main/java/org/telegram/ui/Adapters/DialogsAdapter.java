@@ -42,6 +42,7 @@ import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SharedConfig;
+import org.telegram.messenger.SilentChatLock;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.UserObject;
 import org.telegram.messenger.Utilities;
@@ -86,6 +87,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Objects;
+import java.util.Set;
 
 public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements DialogCell.DialogCellDelegate {
     public final static int VIEW_TYPE_DIALOG = 0,
@@ -131,7 +133,8 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
     private ArrayList<Long> selectedDialogs;
     private boolean hasHints;
     private boolean hasChatlistHint;
-    // SilentGram: sponsored @silent_gram suggestion row at the top.
+    // SilentGram: sponsored @silent_gram suggestion row, shown right
+    // after Archived Chats (or at the very top when there is no archive row).
     private boolean hasSilentSponsored;
     private int currentAccount;
     private boolean dialogsListFrozen;
@@ -210,7 +213,7 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
         return position;
     }
 
-    /** SilentGram: show the @silent_gram sponsored suggestion at the top. */
+    /** SilentGram: show the @silent_gram sponsored suggestion after Archived Chats. */
     private boolean shouldShowSilentSponsored() {
         // Only in the main list (All) and the Channels folder — not in select/forward/archive.
         if (isOnlySelect || folderId != 0) {
@@ -1681,6 +1684,15 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                 itemInternals.add(new ItemInternal(VIEW_TYPE_HEADER_3, name));
                 for (int k = 0; k < array.size(); k++) {
                     MessagesController.CommunityPeerDialog peer = array.get(k);
+                    // SilentGram (chat lock): a locked chat must not appear
+                    // in the community peer list either.
+                    if (peer.dialog != null && isSilentLockedDialog(peer.dialog.id)) {
+                        continue;
+                    } else if (peer.chat != null && isSilentLockedDialog(-peer.chat.id)) {
+                        continue;
+                    } else if (peer.user != null && isSilentLockedDialog(peer.user.id)) {
+                        continue;
+                    }
                     if (peer.dialog != null) {
                         itemInternals.add(new ItemInternal(VIEW_TYPE_DIALOG, peer.dialog));
                     } else if (peer.chat != null) {
@@ -1691,6 +1703,12 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                 }
             }
         }
+    }
+
+    /** SilentGram (chat lock): true when the dialog id is locked. The
+     * folder pseudo-dialog (Archived) is never a locked chat. */
+    private boolean isSilentLockedDialog(long dialogId) {
+        return dialogId != 0 && !DialogObject.isFolderDialogId(dialogId) && SilentChatLock.isLocked(dialogId);
     }
 
     private void updateItemList() {
@@ -1716,6 +1734,27 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
             array = parentFragment.getDialogsArray(currentAccount, dialogsType, folderId, dialogsListFrozen);
             if (array == null) {
                 array = new ArrayList<>();
+            }
+        }
+
+        // SilentGram: work on a copy — getDialogsArray() returns
+        // MessagesController's live list, which must never be mutated here
+        // (the promo removal below used to delete from that live list).
+        array = new ArrayList<>(array);
+
+        // SilentGram (chat lock): a locked chat must not appear in any
+        // folder or in All Chats — it disappears completely until removed
+        // from the lock. Filter here, BEFORE the sponsored-row index is
+        // computed below, so dialogsCount, folder counts and the sponsored
+        // position math all see the already-filtered list. The Archived
+        // folder pseudo-dialog (TL_dialogFolder) is never filtered out.
+        Set<Long> lockedChats = SilentChatLock.getLockedChats();
+        if (!lockedChats.isEmpty()) {
+            for (int i = array.size() - 1; i >= 0; i--) {
+                TLRPC.Dialog dialog = array.get(i);
+                if (dialog != null && !(dialog instanceof TLRPC.TL_dialogFolder) && !DialogObject.isFolderDialogId(dialog.id) && lockedChats.contains(dialog.id)) {
+                    array.remove(i);
+                }
             }
         }
 
@@ -1917,11 +1956,18 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
         // SilentGram: insert the Official row AFTER Archived Chats (so it is
         // always 2nd), or at the very top when there is no archive row.
         // Hiding the archive can then never strand it or leave a gap.
+        // NOTE: the Archived row is a TL_dialogFolder pseudo-dialog whose
+        // own folder_id field is 0 — the folder lives in
+        // ((TL_dialogFolder) dialog).folder.id, and its id is a folder
+        // dialog id (DialogObject.isFolderDialogId). The old check
+        // (dialog.folder_id != 0) therefore never matched Archived, the
+        // loop broke at the first real dialog, and the row landed at
+        // position 0 — ABOVE Archived. Detect the archive row properly.
         if (hasSilentSponsored) {
             int insertAt = 0;
             for (int i = 0; i < itemInternals.size(); i++) {
                 ItemInternal item = itemInternals.get(i);
-                if (item.viewType == VIEW_TYPE_DIALOG && item.dialog != null && item.dialog.folder_id != 0) {
+                if (item.viewType == VIEW_TYPE_DIALOG && item.dialog != null && (item.dialog instanceof TLRPC.TL_dialogFolder || DialogObject.isFolderDialogId(item.dialog.id))) {
                     insertAt = i + 1;
                     break;
                 }

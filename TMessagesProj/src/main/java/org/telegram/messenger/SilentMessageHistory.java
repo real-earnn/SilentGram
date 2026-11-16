@@ -166,8 +166,24 @@ public class SilentMessageHistory {
         return out;
     }
 
-    private static void saveHistory(long dialogId, List<Entry> list) {
-        try {
+    /**
+     * Edit history of ONE message (kind "edited"), oldest first — the
+     * versions a message had before its current text. Used by the inline
+     * "View edit history" line under edited messages in the chat.
+     */
+    public static List<Entry> getHistoryForMessage(long dialogId, int msgId) {
+        ArrayList<Entry> out = new ArrayList<>();
+        for (Entry e : getHistory(dialogId)) {
+            if (e.msgId == msgId && "edited".equals(e.kind)) {
+                out.add(e);
+            }
+        }
+        // getHistory() is newest-first; the inline expansion reads oldest→newest.
+        java.util.Collections.reverse(out);
+        return out;
+    }
+
+    private static void saveHistory(long dialogId, List<Entry> list) {        try {
             JSONArray arr = new JSONArray();
             for (Entry e : list) {
                 JSONObject o = new JSONObject();

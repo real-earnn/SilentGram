@@ -74,7 +74,7 @@ public class SilentDeveloperActivity extends BaseFragment {
         header.addView(title, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
 
         TextView version = new TextView(context);
-        version.setText(LocaleController.formatString(R.string.TelegramVersion, BuildVars.BUILD_VERSION_STRING));
+        version.setText("SilentGram for Android " + BuildVars.BUILD_VERSION_STRING);
         version.setTextSize(14);
         version.setTextColor(0xCCFFFFFF);
         version.setPadding(0, AndroidUtilities.dp(4), 0, AndroidUtilities.dp(8));
@@ -99,7 +99,7 @@ public class SilentDeveloperActivity extends BaseFragment {
         // inside (tap opens it in-app).
         addSectionHeader(layout, context, LocaleController.getString(R.string.SilentDeveloperLinks));
         addLinkRow(layout, context, LocaleController.getString(R.string.SilentOfficialChannel), SilentBranding.getSponsoredTitle(), SilentBranding.getSponsoredUsername(), true);
-        addLinkRow(layout, context, LocaleController.getString(R.string.SilentDevChannel), SilentBranding.DEVELOPER_ALIAS, SilentBranding.DEV_CHANNEL_USERNAME, true);
+        addLinkRow(layout, context, LocaleController.getString(R.string.SilentDevChannel), SilentBranding.DEV_CHANNEL_DISPLAY_NAME, SilentBranding.DEV_CHANNEL_USERNAME, true);
         addLinkRow(layout, context, LocaleController.getString(R.string.SilentOwner), SilentBranding.DEVELOPER_ALIAS, SilentBranding.OWNER_USERNAME, true);
 
         // Credits section.

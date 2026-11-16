@@ -408,7 +408,7 @@ public class RichEditorToolbar extends FrameLayout implements Theme.Colorable {
         aiStyleButton.setOnClickListener(v -> delegate.onAiStyle());
         formattingLayout1.addView(aiStyleButton, LayoutHelper.createLinear(38, 38, Gravity.CENTER_VERTICAL));
 
-        sendButton = new ChatActivityEnterView.SendButton(context, R.drawable.send_plane_24, resourcesProvider, true) {
+        sendButton = new ChatActivityEnterView.SendButton(context, R.drawable.icon_plane_24, resourcesProvider, true) {
             @Override
             public boolean isOpen() {
                 return sendLoading || super.isOpen();
@@ -665,7 +665,7 @@ public class RichEditorToolbar extends FrameLayout implements Theme.Colorable {
     }
 
     public void setSendEditing(boolean editing) {
-        sendButton.setResourceId(editing ? R.drawable.input_done : R.drawable.send_plane_24);
+        sendButton.setResourceId(editing ? R.drawable.input_done : R.drawable.icon_plane_24);
     }
 
     public void setSendLoading(boolean loading) {

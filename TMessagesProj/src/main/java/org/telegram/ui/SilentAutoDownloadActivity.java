@@ -29,7 +29,7 @@ import java.util.ArrayList;
 
 /**
  * SilentGram F2: Auto-download rules.
- * Lists your recent chats. Tap one to cycle its rule:
+ * Lists your recent chats. Tap one for a popup to pick its rule:
  * Normal (Telegram's own settings) -> Always (media always auto-downloads)
  * -> Never (media never auto-downloads, saves data & storage).
  */
@@ -145,10 +145,23 @@ public class SilentAutoDownloadActivity extends BaseFragment {
             TextCell cell = (TextCell) holder.itemView;
             cell.setTextAndValue(name, ruleLabel(rule), true);
             cell.setOnClickListener(v -> {
-                int next = (rule + 1) % 3;
-                SilentAutoDownload.setRule(did, next);
-                android.widget.Toast.makeText(getParentActivity(), name + ": " + ruleLabel(next), android.widget.Toast.LENGTH_SHORT).show();
-                notifyDataSetChanged();
+                // Popup with the three rules; the current one is marked
+                // with a check icon. Tapping one applies it.
+                CharSequence[] items = new CharSequence[]{
+                        LocaleController.getString(R.string.SilentAutoDownloadNormal),
+                        LocaleController.getString(R.string.SilentAutoDownloadAlways),
+                        LocaleController.getString(R.string.SilentAutoDownloadNever)
+                };
+                int[] icons = new int[3];
+                icons[rule] = R.drawable.msg_check_s;
+                AlertDialog.Builder builder = new AlertDialog.Builder(getParentActivity());
+                builder.setTitle(name);
+                builder.setItems(items, icons, (d, which) -> {
+                    SilentAutoDownload.setRule(did, which);
+                    android.widget.Toast.makeText(getParentActivity(), name + ": " + ruleLabel(which), android.widget.Toast.LENGTH_SHORT).show();
+                    notifyDataSetChanged();
+                });
+                builder.show();
             });
         }
     }

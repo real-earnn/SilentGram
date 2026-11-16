@@ -194,6 +194,7 @@ public class EmojiView extends FrameLayout implements
     private final static int TAB_EMOJI = 0;
     private final static int TAB_GIFS = 1;
     private final static int TAB_STICKERS = 2;
+    private final static int TAB_FAVORITES = 3;
 
     public int emojiCacheType = AnimatedEmojiDrawable.CACHE_TYPE_KEYBOARD;
 
@@ -260,6 +261,19 @@ public class EmojiView extends FrameLayout implements
     private StickersGridAdapter stickersGridAdapter;
     private StickersSearchGridAdapter stickersSearchGridAdapter;
     private RecyclerListView.OnItemClickListener stickersOnItemClickListener;
+    // SilentGram: Favorites tab — favorited packs, loaded by short_name.
+    private FrameLayout favoritesContainer;
+    private RecyclerListView favoritesGridView;
+    private GridLayoutManager favoritesLayoutManager;
+    private FavoritePacksAdapter favoritePacksAdapter;
+    private RecyclerListView.OnItemClickListener favoritesOnItemClickListener;
+    private ArrayList<TLRPC.TL_messages_stickerSet> favoritePacks = new ArrayList<>();
+    private boolean packLongPressConsumed;
+    private View packLongPressView;
+    private String packLongPressShortName;
+    private float packLongPressDownX;
+    private float packLongPressDownY;
+    private Runnable packLongPressRunnable;
     private ScrollSlidingTabStrip stickersTab;
     private FrameLayout stickersTabContainer;
     private RecyclerListView stickersGridView;
@@ -297,8 +311,11 @@ public class EmojiView extends FrameLayout implements
                 currentTabs.add(allTabs.get(i));
             }  if (allTabs.get(i).type == TAB_STICKERS && allowStickers) {
                 currentTabs.add(allTabs.get(i));
+            } if (allTabs.get(i).type == TAB_FAVORITES && allowStickers) {
+                currentTabs.add(allTabs.get(i));
             }
         }
+        reloadFavoritePacks();
         if (typeTabs != null) {
             AndroidUtilities.updateViewVisibilityAnimated(typeTabs, currentTabs.size() > 1, 1, animated);
         }
@@ -2576,6 +2593,63 @@ public class EmojiView extends FrameLayout implements
             stickerAddPackButtonContainer.setVisibility(GONE);
             stickerAddPackButtonContainer.addView(stickerAddPackButton, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 48, Gravity.BOTTOM, 10, 5, 10, 10));
             stickersContainer.addView(stickerAddPackButtonContainer, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.BOTTOM));
+
+            // SilentGram: Favorites tab — the packs favorited via SilentPackFavorites
+            // (pack icon long-press, or StickersAlert menu), shown as one grid.
+            favoritesContainer = new FrameLayout(context);
+            favoritesGridView = new RecyclerListView(context);
+            favoritesGridView.setLayoutManager(favoritesLayoutManager = new GridLayoutManager(context, 5));
+            favoritesLayoutManager.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
+                @Override
+                public int getSpanSize(int position) {
+                    if (favoritePacksAdapter == null) {
+                        return 1;
+                    }
+                    return favoritePacksAdapter.getItemViewType(position) == 0 ? 1 : 5;
+                }
+            });
+            glassEngine.addScrolledView(favoritesGridView);
+            favoritesGridView.setPadding(0, 0, 0, AndroidUtilities.dp(44));
+            favoritesGridView.setClipToPadding(false);
+            favoritesGridView.setOnScrollListener(new TypedScrollListener(Type.STICKERS));
+            ThemeBind.listGlowColor(favoritesGridView, Theme.key_chat_emojiPanelBackground, resourcesProvider);
+            favoritesOnItemClickListener = (view, position) -> {
+                if (!(view instanceof StickerEmojiCell)) {
+                    return;
+                }
+                FavItem item = favoritePacksAdapter != null ? favoritePacksAdapter.getFavItem(position) : null;
+                if (item == null || item.document == null) {
+                    return;
+                }
+                if (item.isEmojiPack) {
+                    // Custom emoji: same premium gate as the Emoji tab.
+                    if (!MessageObject.isFreeEmoji(item.document) && !UserConfig.getInstance(currentAccount).isPremium() && !(delegate != null && delegate.isUserSelf()) && !allowEmojisForNonPremium) {
+                        showBottomTab(false, true);
+                        BulletinFactory factory = fragment != null ? BulletinFactory.of(fragment) : BulletinFactory.of(bulletinContainer, resourcesProvider);
+                        factory.createEmojiBulletin(item.document, AndroidUtilities.replaceTags(getString(R.string.UnlockPremiumEmojiHint)), getString(R.string.PremiumMore), EmojiView.this::openPremiumAnimatedEmojiFeature).show();
+                        return;
+                    }
+                    showBottomTab(true, true);
+                    addEmojiToRecent("animated_" + item.document.id);
+                    if (delegate != null) {
+                        delegate.onCustomEmojiSelected(item.document.id, item.document, item.emoticon, false);
+                    }
+                    return;
+                }
+                // Sticker pack item: exactly the Stickers tab path.
+                if (stickersOnItemClickListener != null) {
+                    stickersOnItemClickListener.onItemClick(view, position);
+                }
+            };
+            favoritesGridView.setOnItemClickListener(favoritesOnItemClickListener);
+            favoritesGridView.setOnTouchListener((v, event) -> ContentPreviewViewer.getInstance().onTouch(event, favoritesGridView, EmojiView.this.getMeasuredHeight(), favoritesOnItemClickListener, contentPreviewViewerDelegate, resourcesProvider));
+            favoritesGridView.setAdapter(favoritePacksAdapter = new FavoritePacksAdapter(context));
+            favoritesContainer.addView(favoritesGridView);
+            Tab favoritesTab = new Tab();
+            favoritesTab.type = TAB_FAVORITES;
+            favoritesTab.view = favoritesContainer;
+            allTabs.add(favoritesTab);
+            reloadFavoritePacks();
         }
 
         currentTabs.clear();
@@ -2613,8 +2687,10 @@ public class EmojiView extends FrameLayout implements
                         }
                     } else if (item == 1) {
                         gifGridView.smoothScrollToPosition(0);
-                    } else {
+                    } else if (item == 2) {
                         stickersGridView.smoothScrollToPosition(1);
+                    } else if (item == 3 && favoritesGridView != null) {
+                        favoritesGridView.smoothScrollToPosition(0);
                     }
                     return;
                 }
@@ -2741,6 +2817,9 @@ public class EmojiView extends FrameLayout implements
                 @Override
                 public void onPageSelected(int position) {
                     saveNewPage();
+                    if (position >= 0 && position < currentTabs.size() && currentTabs.get(position).type == TAB_FAVORITES) {
+                        reloadFavoritePacks();
+                    }
                     showBackspaceButton(position == 0, true);
                     showStickerSettingsButton(position == 2 && (shouldDrawBackground || shouldDrawStickerSettings), true);
                     if (delegate.isSearchOpened()) {
@@ -2941,6 +3020,9 @@ public class EmojiView extends FrameLayout implements
             applyBottomInsetAsPadding(emojiGridView, AndroidUtilities.dp(44) + bottomInset);
             applyBottomInsetAsPadding(stickersGridView, AndroidUtilities.dp(44) + bottomInset);
             applyBottomInsetAsPadding(gifGridView, AndroidUtilities.dp(44) + bottomInset);
+            if (favoritesGridView != null) {
+                applyBottomInsetAsPadding(favoritesGridView, AndroidUtilities.dp(44) + bottomInset);
+            }
             if (bulletinContainer2 != null) {
                 bulletinContainer2.setTranslationY(-bottomInset);
             }
@@ -3845,6 +3927,17 @@ public class EmojiView extends FrameLayout implements
             stickersGridView.setVisibility(View.VISIBLE);
             if (stickersTabContainer != null) {
                 stickersTabContainer.setVisibility(View.VISIBLE);
+            }
+        } else if (position == 3) {
+            emojiGridView.setVisibility(View.GONE);
+            gifGridView.setVisibility(View.GONE);
+            gifTabs.setVisibility(View.GONE);
+            stickersGridView.setVisibility(View.GONE);
+            if (stickersTabContainer != null) {
+                stickersTabContainer.setVisibility(View.GONE);
+            }
+            if (favoritesGridView != null) {
+                favoritesGridView.setVisibility(View.VISIBLE);
             }
         }
     }
@@ -5580,6 +5673,8 @@ public class EmojiView extends FrameLayout implements
             newPage = 1;
         } else if (currentItem == 1) {
             newPage = 2;
+        } else if (currentItem == 3) {
+            newPage = 3;
         } else {
             newPage = 0;
         }
@@ -5817,7 +5912,9 @@ public class EmojiView extends FrameLayout implements
                 if (thumb == null || stickerSet.set.gifs) {
                     thumb = document;
                 }
-                stickersTab.addStickerTab(thumb, document, stickerSet).setContentDescription(stickerSet.set.title + ", " + getString(R.string.AccDescrStickerSet));
+                View packTabView = stickersTab.addStickerTab(thumb, document, stickerSet);
+                packTabView.setContentDescription(stickerSet.set.title + ", " + getString(R.string.AccDescrStickerSet));
+                attachPackFavoriteLongPress(packTabView, stickerSet);
             }
         }
         stickersTab.commitUpdate();
@@ -5826,6 +5923,257 @@ public class EmojiView extends FrameLayout implements
             stickersTab.onPageScrolled(lastPosition, lastPosition);
         }
         checkPanels();
+    }
+
+    // SilentGram: Favorites tab data — every pack short_name stored in
+    // SilentPackFavorites, loaded back through MediaDataController.
+    private void reloadFavoritePacks() {
+        favoritePacks.clear();
+        MediaDataController mediaDataController = MediaDataController.getInstance(currentAccount);
+        java.util.HashSet<String> favs = org.telegram.messenger.SilentPackFavorites.getFavorites();
+        for (String shortName : favs) {
+            TLRPC.TL_messages_stickerSet set = mediaDataController.getStickerSetByName(shortName);
+            if (set == null) {
+                set = findInstalledPackByShortName(mediaDataController, shortName);
+            }
+            if (set != null && set.set != null && !set.set.archived && set.documents != null && !set.documents.isEmpty()) {
+                favoritePacks.add(set);
+            }
+        }
+        Collections.sort(favoritePacks, (o1, o2) -> {
+            String t1 = o1.set != null && o1.set.title != null ? o1.set.title : "";
+            String t2 = o2.set != null && o2.set.title != null ? o2.set.title : "";
+            return t1.compareToIgnoreCase(t2);
+        });
+        if (favoritePacksAdapter != null) {
+            favoritePacksAdapter.reload();
+        }
+    }
+
+    private TLRPC.TL_messages_stickerSet findInstalledPackByShortName(MediaDataController mediaDataController, String shortName) {
+        for (int type : new int[]{MediaDataController.TYPE_IMAGE, MediaDataController.TYPE_EMOJIPACKS}) {
+            ArrayList<TLRPC.TL_messages_stickerSet> sets = mediaDataController.getStickerSets(type);
+            if (sets == null) {
+                continue;
+            }
+            for (TLRPC.TL_messages_stickerSet set : sets) {
+                if (set != null && set.set != null && shortName.equalsIgnoreCase(set.set.short_name)) {
+                    return set;
+                }
+            }
+        }
+        return null;
+    }
+
+    // SilentGram: long-press a pack icon to (un)favorite the pack.
+    // The pack strip uses long-press for drag-to-reorder (its own 500 ms
+    // runnable), so this pre-empts it with a shorter 350 ms timer and cancels
+    // the strip's pending drag before it can start. Taps are untouched:
+    // the listener returns false until the long-press has fired.
+    private void attachPackFavoriteLongPress(View tabView, TLRPC.TL_messages_stickerSet stickerSet) {
+        String shortName = stickerSet != null && stickerSet.set != null ? stickerSet.set.short_name : null;
+        if (shortName == null || shortName.isEmpty()) {
+            return;
+        }
+        tabView.setOnTouchListener((v, event) -> {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                packLongPressConsumed = false;
+                packLongPressView = v;
+                packLongPressShortName = shortName;
+                packLongPressDownX = event.getX();
+                packLongPressDownY = event.getY();
+                if (packLongPressRunnable == null) {
+                    packLongPressRunnable = () -> {
+                        if (packLongPressView == null || packLongPressShortName == null) {
+                            return;
+                        }
+                        if (stickersTab != null) {
+                            AndroidUtilities.cancelRunOnUIThread(stickersTab.longClickRunnable);
+                            stickersTab.longClickRunning = false;
+                        }
+                        packLongPressConsumed = true;
+                        try {
+                            packLongPressView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+                        } catch (Exception ignored) {
+                        }
+                        showPackFavoriteMenu(packLongPressShortName);
+                    };
+                }
+                AndroidUtilities.cancelRunOnUIThread(packLongPressRunnable);
+                AndroidUtilities.runOnUIThread(packLongPressRunnable, 350);
+                return false;
+            }
+            if (action == MotionEvent.ACTION_MOVE) {
+                if (packLongPressConsumed) {
+                    return true;
+                }
+                float slop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
+                if (Math.abs(event.getX() - packLongPressDownX) > slop || Math.abs(event.getY() - packLongPressDownY) > slop) {
+                    AndroidUtilities.cancelRunOnUIThread(packLongPressRunnable);
+                }
+                return false;
+            }
+            AndroidUtilities.cancelRunOnUIThread(packLongPressRunnable);
+            if (packLongPressConsumed) {
+                packLongPressConsumed = false;
+                packLongPressView = null;
+                packLongPressShortName = null;
+                return true;
+            }
+            return false;
+        });
+    }
+
+    private void showPackFavoriteMenu(String shortName) {
+        boolean fav = org.telegram.messenger.SilentPackFavorites.isFavorite(shortName);
+        AlertDialog.Builder builder = new AlertDialog.Builder(getContext());
+        builder.setItems(new CharSequence[]{getString(fav ? R.string.SilentRemoveFromFavorites : R.string.SilentAddToFavorites)}, (dialog, which) -> {
+            org.telegram.messenger.SilentPackFavorites.toggleFavorite(shortName);
+            boolean nowFav = org.telegram.messenger.SilentPackFavorites.isFavorite(shortName);
+            BulletinFactory factory = fragment != null ? BulletinFactory.of(fragment) : BulletinFactory.of(bulletinContainer, resourcesProvider);
+            factory.createSimpleBulletin(R.drawable.msg_fave, getString(nowFav ? R.string.SilentAddedToFavorites : R.string.SilentRemovedFromFavorites)).show();
+            reloadFavoritePacks();
+            updateStickerTabs(true);
+        });
+        builder.create().show();
+    }
+
+    private static class FavItem {
+        final TLRPC.TL_messages_stickerSet pack;
+        final TLRPC.Document document; // null => pack header row
+        final boolean isEmojiPack;
+        final String emoticon;
+
+        FavItem(TLRPC.TL_messages_stickerSet pack, TLRPC.Document document, boolean isEmojiPack, String emoticon) {
+            this.pack = pack;
+            this.document = document;
+            this.isEmojiPack = isEmojiPack;
+            this.emoticon = emoticon;
+        }
+    }
+
+    // SilentGram: Favorites tab content — favorited packs as header + grid rows.
+    // Sticker-pack items reuse the Stickers tab click path (stickersOnItemClickListener);
+    // emoji-pack items insert as custom emoji (delegate.onCustomEmojiSelected).
+    private class FavoritePacksAdapter extends RecyclerListView.SelectionAdapter {
+
+        private final Context context;
+        private final ArrayList<FavItem> items = new ArrayList<>();
+
+        FavoritePacksAdapter(Context context) {
+            this.context = context;
+            reload();
+        }
+
+        void reload() {
+            items.clear();
+            for (TLRPC.TL_messages_stickerSet pack : favoritePacks) {
+                if (pack == null || pack.set == null || pack.documents == null || pack.documents.isEmpty()) {
+                    continue;
+                }
+                boolean isEmojiPack = pack.set.emojis;
+                items.add(new FavItem(pack, null, isEmojiPack, null));
+                java.util.HashMap<Long, String> emoticons = null;
+                if (isEmojiPack && pack.packs != null) {
+                    emoticons = new java.util.HashMap<>();
+                    for (TLRPC.TL_stickerPack stickerPack : pack.packs) {
+                        if (stickerPack == null || stickerPack.documents == null) {
+                            continue;
+                        }
+                        for (Long documentId : stickerPack.documents) {
+                            emoticons.put(documentId, stickerPack.emoticon);
+                        }
+                    }
+                }
+                for (TLRPC.Document document : pack.documents) {
+                    if (document == null) {
+                        continue;
+                    }
+                    String emoticon = null;
+                    if (emoticons != null) {
+                        emoticon = emoticons.get(document.id);
+                    }
+                    if (emoticon == null && isEmojiPack) {
+                        emoticon = MessageObject.findAnimatedEmojiEmoticon(document);
+                    }
+                    items.add(new FavItem(pack, document, isEmojiPack, emoticon));
+                }
+            }
+            notifyDataSetChanged();
+        }
+
+        FavItem getFavItem(int position) {
+            if (position < 0 || position >= items.size()) {
+                return null;
+            }
+            return items.get(position);
+        }
+
+        @Override
+        public boolean isEnabled(RecyclerView.ViewHolder holder) {
+            return holder.getItemViewType() == 0;
+        }
+
+        @Override
+        public int getItemCount() {
+            return items.isEmpty() ? 1 : items.size();
+        }
+
+        @Override
+        public int getItemViewType(int position) {
+            if (items.isEmpty()) {
+                return 2;
+            }
+            FavItem item = items.get(position);
+            return item.document == null ? 1 : 0;
+        }
+
+        @Override
+        public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+            View view;
+            if (viewType == 0) {
+                view = new StickerEmojiCell(context, true, resourcesProvider) {
+                    public void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+                        super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(AndroidUtilities.dp(82), MeasureSpec.EXACTLY));
+                    }
+                };
+            } else if (viewType == 1) {
+                view = new StickerSetNameCell(context, false, resourcesProvider, glassDesign);
+            } else {
+                TextView emptyView = new TextView(context);
+                emptyView.setGravity(Gravity.CENTER);
+                emptyView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 15);
+                emptyView.setTextColor(getThemedColor(Theme.key_chat_emojiPanelIcon));
+                emptyView.setText(getString(R.string.SilentNoFavoritePacks));
+                emptyView.setPadding(0, AndroidUtilities.dp(120), 0, 0);
+                view = emptyView;
+                view.setLayoutParams(new RecyclerView.LayoutParams(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
+            }
+            return new RecyclerListView.Holder(view);
+        }
+
+        @Override
+        public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
+            if (items.isEmpty()) {
+                return;
+            }
+            FavItem item = items.get(position);
+            if (holder.getItemViewType() == 0) {
+                StickerEmojiCell cell = (StickerEmojiCell) holder.itemView;
+                cell.setSticker(item.document, item.pack, false);
+            } else if (holder.getItemViewType() == 1) {
+                StickerSetNameCell cell = (StickerSetNameCell) holder.itemView;
+                if (item.pack != null && item.pack.set != null) {
+                    cell.setText(item.pack.set.title, 0);
+                    cell.setHeaderOnClick(v -> {
+                        if (delegate != null) {
+                            delegate.onShowStickerSet(item.pack.set, null, false);
+                        }
+                    });
+                }
+            }
+        }
     }
 
     private void checkPanels() {
@@ -6258,6 +6606,13 @@ public class EmojiView extends FrameLayout implements
             if (gifSearchField != null && gifSearchField.categoriesListView != null) {
                 gifSearchField.categoriesListView.selectCategory(gifSearchField.recent);
             }
+        } else if (currentPage == 3) {
+            showBackspaceButton(false, false);
+            showStickerSettingsButton(false, false);
+            if (pager.getCurrentItem() != 3) {
+                pager.setCurrentItem(3, false);
+            }
+            reloadFavoritePacks();
         }
         showBottomTab(true, true);
     }
@@ -6292,6 +6647,7 @@ public class EmojiView extends FrameLayout implements
             AndroidUtilities.runOnUIThread(() -> {
                 updateStickerTabs(false);
                 reloadStickersAdapter();
+                reloadFavoritePacks();
             });
         }
     }
@@ -6580,9 +6936,11 @@ public class EmojiView extends FrameLayout implements
                     updateStickerTabs((Boolean) args[1]);
                     updateVisibleTrendingSets();
                     reloadStickersAdapter();
+                    reloadFavoritePacks();
                     checkPanels();
                 }
             } else if ((Integer) args[0] == MediaDataController.TYPE_EMOJIPACKS) {
+                reloadFavoritePacks();
                 if ((Boolean) args[1]) {
                     AndroidUtilities.cancelRunOnUIThread(updateStickersLoadedDelayed);
                     AndroidUtilities.runOnUIThread(updateStickersLoadedDelayed, 100);
@@ -8709,11 +9067,15 @@ public class EmojiView extends FrameLayout implements
 
         @Override
         public boolean canScrollToTab(int position) {
-            if ((position == 1 || position == 2) && stickersBanned) {
-                showStickerBanHint(true, false, position == 1);
+            if (position < 0 || position >= currentTabs.size()) {
                 return false;
             }
-            if (position == 0 && emojiBanned) {
+            int type = currentTabs.get(position).type;
+            if ((type == TAB_GIFS || type == TAB_STICKERS || type == TAB_FAVORITES) && stickersBanned) {
+                showStickerBanHint(true, false, type == TAB_GIFS);
+                return false;
+            }
+            if (type == TAB_EMOJI && emojiBanned) {
                 showStickerBanHint(true, true, false);
                 return false;
             }
@@ -8730,13 +9092,18 @@ public class EmojiView extends FrameLayout implements
         }
 
         public CharSequence getPageTitle(int position) {
-            switch (position) {
-                case 0:
+            if (position < 0 || position >= currentTabs.size()) {
+                return null;
+            }
+            switch (currentTabs.get(position).type) {
+                case TAB_EMOJI:
                     return getString(R.string.Emoji);
-                case 1:
+                case TAB_GIFS:
                     return getString(R.string.AccDescrGIFs);
-                case 2:
+                case TAB_STICKERS:
                     return getString(R.string.AccDescrStickers);
+                case TAB_FAVORITES:
+                    return getString(R.string.FavoriteStickers);
             }
             return null;
         }
@@ -10356,6 +10723,9 @@ public class EmojiView extends FrameLayout implements
                 if (stickersGridAdapter != null) {
                     stickersGridAdapter.notifyDataSetChanged();
                 }
+            }
+            if (favoritePacksAdapter != null) {
+                reloadFavoritePacks();
             }
         }
     }

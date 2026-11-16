@@ -374,7 +374,7 @@ public class GiftMessageBottomSheet extends BottomSheet {
         captionLimitView.setGravity(Gravity.CENTER);
         containerView.addView(captionLimitView, LayoutHelper.createFrame(56, 20, Gravity.BOTTOM | Gravity.RIGHT, 3, 0, 3, 54));
 
-        writeButton = new ChatActivityEnterView.SendButton(context, R.drawable.send_plane_24, resourcesProvider) {
+        writeButton = new ChatActivityEnterView.SendButton(context, R.drawable.icon_plane_24, resourcesProvider) {
             @Override
             public boolean isOpen() {
                 return true;

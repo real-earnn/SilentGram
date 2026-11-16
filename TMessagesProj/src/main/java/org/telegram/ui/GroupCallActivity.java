@@ -5534,7 +5534,7 @@ public class GroupCallActivity extends BottomSheet implements NotificationCenter
         ThemeBind.selectorBackground(callMessageSendButton, Theme.createSelectorDrawable(getThemedColor(Theme.key_listSelector)), null, ThemeBind.of(Theme.key_listSelector), resourcesProvider);
         ThemeBind.colorFilter(callMessageSendButton, Theme.key_windowBackgroundWhiteBlueIcon, resourcesProvider, PorterDuff.Mode.MULTIPLY);
         callMessageSendButton.setScaleType(ImageView.ScaleType.CENTER);
-        callMessageSendButton.setImageResource(R.drawable.ic_send);
+        callMessageSendButton.setImageResource(R.drawable.icon_plane_24);
         callMessageSendButton.setOnClickListener(v -> {
             CharSequence text = callMessageEnterView.getText();
             TLRPC.TL_textWithEntities toSend = new TLRPC.TL_textWithEntities();

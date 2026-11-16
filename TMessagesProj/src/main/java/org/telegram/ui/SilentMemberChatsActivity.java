@@ -21,7 +21,7 @@ import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.Theme;
-import org.telegram.ui.Cells.TextCell;
+import org.telegram.ui.Cells.UserCell;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.RecyclerListView;
 
@@ -129,6 +129,12 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
                 commonChats.load();
             }
             rebuildLists();
+            // getCommonChats pages (first 15, then 30 per page) — keep
+            // loading until every page is in, so channels on later pages
+            // show up too and not just the first page's groups.
+            if (!commonChats.endReached) {
+                commonChats.load();
+            }
         }
         updateTabs();
         return fragmentView;
@@ -172,16 +178,27 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
             return;
         }
         MessagesController mc = MessagesController.getInstance(currentAccount);
-        for (TLRPC.Chat chat : commonChats.chats) {
-            if (chat == null || chat.deactivated) {
+        for (TLRPC.Chat listChat : commonChats.chats) {
+            if (listChat == null || listChat.deactivated) {
+                continue;
+            }
+            // Resolve through the local cache: the list objects come straight
+            // from the server and may not carry creator/admin_rights, while
+            // the cached Chat (merged from dialogs/full syncs) does.
+            TLRPC.Chat chat = mc.getChat(listChat.id);
+            if (chat == null) {
+                chat = listChat;
+            }
+            if (chat.deactivated) {
                 continue;
             }
             // Only chats where I am creator or admin (so I can manage members).
             if (!chat.creator && chat.admin_rights == null) {
                 continue;
             }
-            boolean isChannel = ChatObject.isChannel(chat) && !chat.megagroup;
-            if (isChannel) {
+            // Broadcast channel = isChannel && !megagroup; anything else
+            // (megagroup / basic group) is a group.
+            if (ChatObject.isChannelAndNotMegaGroup(chat)) {
                 channels.add(chat);
             } else {
                 groups.add(chat);
@@ -332,6 +349,11 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
                     adapter.notifyDataSetChanged();
                 }
                 updateEmpty();
+                // Keep paging until the server says there is no more —
+                // otherwise only the first page of common chats ever shows.
+                if (commonChats != null && !commonChats.endReached) {
+                    commonChats.load();
+                }
             }
         }
     }
@@ -362,7 +384,9 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
 
         @Override
         public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-            TextCell cell = new TextCell(context);
+            // Telegram-style row: avatar on the left + name (UserCell with
+            // a round checkbox for the multi-select).
+            UserCell cell = new UserCell(context, 6, 1, false);
             cell.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
             return new RecyclerListView.Holder(cell);
         }
@@ -370,8 +394,9 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
         @Override
         public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
             TLRPC.Chat chat = (showChannels ? channels : groups).get(position);
-            TextCell cell = (TextCell) holder.itemView;
-            cell.setTextAndValue(chat.title, selected.contains(-chat.id) ? "✓" : "", false);
+            UserCell cell = (UserCell) holder.itemView;
+            cell.setData(chat, null, chat.title, "", 0, position != (showChannels ? channels : groups).size() - 1);
+            cell.setChecked(selected.contains(-chat.id), false);
             cell.setOnClickListener(v -> {
                 if (selectionMode) {
                     toggleSelect(chat);

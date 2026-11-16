@@ -9,6 +9,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import org.telegram.messenger.AndroidUtilities;
+import org.telegram.messenger.ChatObject;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.R;
@@ -125,12 +126,45 @@ public class SilentSponsoredCell extends FrameLayout {
             if (peer.chats == null || peer.chats.isEmpty()) {
                 return;
             }
-            TLRPC.Chat chat = peer.chats.get(0);
+            // Find the chat matching the resolved peer; fall back to the
+            // first entry if the peer is not a channel.
+            TLRPC.Chat resolvedChat = null;
+            if (peer.peer instanceof TLRPC.TL_peerChannel) {
+                long channelId = ((TLRPC.TL_peerChannel) peer.peer).channel_id;
+                for (int i = 0; i < peer.chats.size(); i++) {
+                    if (peer.chats.get(i).id == channelId) {
+                        resolvedChat = peer.chats.get(i);
+                        break;
+                    }
+                }
+            }
+            if (resolvedChat == null) {
+                resolvedChat = peer.chats.get(0);
+            }
+            if (!ChatObject.isChannel(resolvedChat)) {
+                // Not a channel (e.g. username points at a basic group or a
+                // user): nothing to join here.
+                return;
+            }
+            final TLRPC.Chat chat = resolvedChat;
+            // FIX (CHAT_ID_INVALID): addUserToChat looks the chat up with
+            // getChat(chatId), and MessagesController.chats is keyed by the
+            // POSITIVE chat id (putChat does chats.put(chat.id, chat)).
+            // The old code passed the negative dialog id (-chat.id), so
+            // getChat returned null even if the chat was cached, isChannel
+            // was false, and addUserToChat took the GROUP path
+            // (TL_messages_addChatUser with a negative chat_id) — the
+            // server answered CHAT_ID_INVALID. In-channel joins pass the
+            // positive id (ChatActivity/ProfileActivity pass
+            // currentChat.id), so do the same here — and cache the
+            // resolved chat first so the lookup succeeds at all.
+            MessagesController messagesController = MessagesController.getInstance(account);
+            messagesController.putChat(chat, false);
             // Join: addUserToChat with the current user on a channel id.
             // The CHANNELS_TOO_MUCH false limit was a bad api_id (now fixed
             // in BuildVars); the join itself needs no proxy workaround.
-            MessagesController.getInstance(account).addUserToChat(
-                    -chat.id,
+            messagesController.addUserToChat(
+                    chat.id,
                     UserConfig.getInstance(account).getCurrentUser(),
                     0, null, null, false,
                     () -> AndroidUtilities.runOnUIThread(() -> android.widget.Toast.makeText(context, LocaleController.getString(R.string.SilentJoined), android.widget.Toast.LENGTH_SHORT).show()),

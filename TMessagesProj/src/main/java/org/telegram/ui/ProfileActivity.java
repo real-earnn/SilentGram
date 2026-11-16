@@ -4463,13 +4463,8 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
             } else if (position == usernameRow) {
                 processOnClickOrPress(position, view, x, y);
             } else if (position == silentIdRow) {
-                // SilentGram: tap the ID row to copy the numeric ID.
-                String idText = null;
-                if (userId != 0) {
-                    idText = String.valueOf(userId);
-                } else if (chatId != 0) {
-                    idText = String.valueOf(chatId);
-                }
+                // SilentGram: tap the ID row to copy the (formatted) ID.
+                String idText = (userId != 0 || chatId != 0) ? getSilentIdText() : null;
                 if (idText != null) {
                     try {
                         android.content.ClipboardManager clipboard = (android.content.ClipboardManager) ApplicationLoader.applicationContext.getSystemService(Context.CLIPBOARD_SERVICE);
@@ -11780,13 +11775,6 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                 newString = Emoji.replaceEmoji(newString, nameTextView.getPaint().getFontMetricsInt(), false);
             } catch (Exception ignore) {
             }
-            // SilentGram: show "Owner" with a crown next to the owner's name.
-            if (user != null && org.telegram.messenger.SilentBranding.isOwner(user.username)) {
-                android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder(newString);
-                sb.append("  👑 ");
-                sb.append(org.telegram.messenger.SilentBranding.ownerLabel());
-                newString = sb;
-            }
             if (copyFromChatActivity) {
                 ChatActivity chatActivity = (ChatActivity) prevFragment;
                 BackupImageView fromAvatarImage = chatActivity.avatarContainer.getAvatarImageView();
@@ -13298,6 +13286,22 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
         });
     }
 
+    // SilentGram: Bot-API style ID for the profile ID row (display + copy).
+    // Users stay plain numeric; channels/supergroups are "-100<id>", basic
+    // groups are "-<id>". If the chat object is not loaded, a chat falls
+    // back to "-<id>".
+    private String getSilentIdText() {
+        if (userId != 0) {
+            return String.valueOf(userId);
+        } else if (chatId != 0) {
+            if (currentChat != null && ChatObject.isChannel(currentChat)) {
+                return "-100" + chatId;
+            }
+            return "-" + chatId;
+        }
+        return "—";
+    }
+
     private class ListAdapter extends RecyclerListView.SelectionAdapter {
         private final static int VIEW_TYPE_HEADER = 1,
                 VIEW_TYPE_TEXT_DETAIL = 2,
@@ -13715,16 +13719,9 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                         isFragmentPhoneNumber = phoneNumber != null && phoneNumber.matches("888\\d{8}");
                         detailCell.setTextAndValue(text, LocaleController.getString(isFragmentPhoneNumber ? R.string.AnonymousNumber : R.string.PhoneMobile), false);
                     } else if (position == silentIdRow) {
-                        // SilentGram: numeric ID (user, group or channel).
-                        String idText;
-                        if (userId != 0) {
-                            idText = String.valueOf(userId);
-                        } else if (chatId != 0) {
-                            idText = String.valueOf(chatId);
-                        } else {
-                            idText = "—";
-                        }
-                        detailCell.setTextAndValue(idText, "ID", false);
+                        // SilentGram: Bot-API style ID — users plain, channels /
+                        // supergroups "-100<id>", basic groups "-<id>".
+                        detailCell.setTextAndValue(getSilentIdText(), "ID", false);
                     } else if (position == noteRow) {
                         final TLRPC.UserFull userInfo = getMessagesController().getUserFull(userId);
                         if (userInfo == null) return;

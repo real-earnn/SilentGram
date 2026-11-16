@@ -92,7 +92,7 @@ public class SilentTeamActivity extends BaseFragment {
         addPlainRow(layout, context, LocaleController.getString(R.string.SilentTeamRole), LocaleController.getString(R.string.SilentTeamRoleValue), false);
         addPlainRow(layout, context, LocaleController.getString(R.string.SilentTeamDob), "15-05-2004", false);
         addPlainRow(layout, context, LocaleController.getString(R.string.SilentTeamLocation), "Multan, Pakistan", false);
-        addLinkRow(layout, context, LocaleController.getString(R.string.SilentTeamChannel), SilentBranding.DEVELOPER_ALIAS, SilentBranding.DEV_CHANNEL_USERNAME, true);
+        addLinkRow(layout, context, LocaleController.getString(R.string.SilentTeamChannel), SilentBranding.DEV_CHANNEL_DISPLAY_NAME, SilentBranding.DEV_CHANNEL_USERNAME, true);
         addLinkRow(layout, context, LocaleController.getString(R.string.SilentTeamContact), SilentBranding.DEVELOPER_ALIAS, SilentBranding.DEVELOPER_USERNAME, true);
 
         // Projects.
@@ -133,7 +133,7 @@ public class SilentTeamActivity extends BaseFragment {
         // Free community utilities.
         addSectionHeader(layout, context, LocaleController.getString(R.string.SilentTeamFreeUtils));
         addBody(layout, context, LocaleController.getString(R.string.SilentTeamFreeUtilsDesc));
-        addLinkRow(layout, context, LocaleController.getString(R.string.SilentTeamChannel), SilentBranding.DEVELOPER_ALIAS, SilentBranding.DEV_CHANNEL_USERNAME, true);
+        addLinkRow(layout, context, LocaleController.getString(R.string.SilentTeamChannel), SilentBranding.DEV_CHANNEL_DISPLAY_NAME, SilentBranding.DEV_CHANNEL_USERNAME, true);
 
         return fragmentView;
     }

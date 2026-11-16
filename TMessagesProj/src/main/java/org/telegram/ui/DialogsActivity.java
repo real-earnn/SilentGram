@@ -3437,14 +3437,12 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             } else {
                 statusDrawable = new AnimatedEmojiDrawable.SwapAnimatedEmojiDrawable(null, dp(26));
                 statusDrawable.center = true;
-                logoDrawable = context.getResources().getDrawable(R.drawable.telegram_logo_2).mutate();
-                logoDrawable.setBounds(0, dp(2), logoDrawable.getIntrinsicWidth(), dp(2) + logoDrawable.getIntrinsicHeight());
-                // a new drawable (also when the view is recreated after a theme switch made elsewhere): remember its tint, the
-                // theme hook only recolors when the color differs from the last one applied
-                logoDrawable.setColorFilter(lastLogoDrawableColor = getThemedColor(Theme.key_telegram_color_dialogsLogo), PorterDuff.Mode.MULTIPLY);
-                SpannableStringBuilder ssb = new SpannableStringBuilder(getString(R.string.AppName));
-                ssb.setSpan(new ImageSpan(logoDrawable), 0, ssb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-                actionBar.setTitle(ssb, statusDrawable);
+                // SilentGram: show the "SilentGram" wordmark as plain text.
+                // The old code covered the whole AppName title with an
+                // ImageSpan of R.drawable.telegram_logo_2, so the home page
+                // still showed Telegram's paper-plane logo even though
+                // AppName is already "SilentGram".
+                actionBar.setTitle(getString(R.string.AppName), statusDrawable);
                 updateStatus(UserConfig.getInstance(currentAccount).getCurrentUser(), false);
             }
             if (folderId == 0) {
@@ -5012,7 +5010,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                 }
             });
 
-            writeButton = new ChatActivityEnterView.SendButton(context, R.drawable.send_plane_24, resourceProvider) {
+            writeButton = new ChatActivityEnterView.SendButton(context, R.drawable.icon_plane_24, resourceProvider) {
                 @Override
                 public boolean isOpen() {
                     return true;
@@ -6728,6 +6726,66 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         }
     }
 
+    // SilentGram: remember the last folder tab across restarts (item 18).
+    // Upstream keeps the selected filter only in memory
+    // (MessagesController.selectedDialogFilter / ViewPage.selectedType),
+    // so a swiped-away process always reopened on "All". The filter's
+    // server id (0 = All) is stable across restarts; localId is not
+    // (reassigned in load order), so the id is what gets saved.
+    private static final String SILENT_LAST_FOLDER_KEY = "last_folder_id";
+    private boolean silentLastFolderRestored;
+    private java.util.Set<Long> silentLastKnownLockedChats;
+
+    private android.content.SharedPreferences silentPrefs() {
+        return ApplicationLoader.applicationContext.getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
+    }
+
+    private void silentSaveLastFolder(int filterId) {
+        if (onlySelect || folderId != 0 || communityId != 0 || initialDialogsType != DIALOGS_TYPE_DEFAULT) {
+            return;
+        }
+        silentPrefs().edit().putInt(SILENT_LAST_FOLDER_KEY, filterId).apply();
+    }
+
+    private int silentCurrentFilterId() {
+        if (viewPages == null || viewPages.length == 0) {
+            return 0;
+        }
+        ArrayList<MessagesController.DialogFilter> filters = getMessagesController().getDialogFilters();
+        int index = viewPages[0].selectedType;
+        if (index < 0 || index >= filters.size()) {
+            return 0;
+        }
+        return filters.get(index).id;
+    }
+
+    private void silentRestoreLastFolder() {
+        if (silentLastFolderRestored || onlySelect || folderId != 0 || communityId != 0 || initialDialogsType != DIALOGS_TYPE_DEFAULT) {
+            return;
+        }
+        silentLastFolderRestored = true;
+        int savedId = silentPrefs().getInt(SILENT_LAST_FOLDER_KEY, 0);
+        if (savedId == 0) {
+            return;
+        }
+        ArrayList<MessagesController.DialogFilter> filters = getMessagesController().getDialogFilters();
+        int index = -1;
+        for (int i = 0; i < filters.size(); i++) {
+            if (filters.get(i).id == savedId) {
+                index = i;
+                break;
+            }
+        }
+        if (index <= 0 || filters.get(index).locked) {
+            return;
+        }
+        viewPages[0].selectedType = index;
+        if (filterTabsView != null) {
+            filterTabsView.selectTabWithStableId(filters.get(index).localId);
+            filterTabsView.selectTabWithId(index, 1.0f);
+        }
+    }
+
     public void switchToCurrentSelectedMode(boolean animated) {
         for (int a = 0; a < viewPages.length; a++) {
             viewPages[a].listView.stopScroll();
@@ -6737,6 +6795,8 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             return;
         }
         MessagesController.DialogFilter filter = getMessagesController().getDialogFilters().get(viewPages[a].selectedType);
+        // SilentGram: persist the folder tab whenever it changes (item 18).
+        silentSaveLastFolder(filter.id);
         if (filter.isDefault()) {
             viewPages[a].dialogsType = initialDialogsType;
             viewPages[a].listView.updatePullState();
@@ -6835,6 +6895,8 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                 }
                 filterTabsView.finishAddingTabs(animatedUpdateItems);
                 if (updateCurrentTab) {
+                    // SilentGram: reopen on the last folder tab (item 18).
+                    silentRestoreLastFolder();
                     switchToCurrentSelectedMode(false);
                 }
                 if (filterTabsView.isLocked(filterTabsView.getCurrentTabId())) {
@@ -6948,6 +7010,24 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
     @Override
     public void onResume() {
         super.onResume();
+        // SilentGram (chat lock): a chat locked/unlocked while another
+        // screen was on top (ChatActivity menu, Chat Lock activity) must
+        // vanish from / return to the lists. Rebuild only when the locked
+        // set actually changed, so returning from an ordinary chat costs
+        // nothing.
+        java.util.Set<Long> lockedChats = org.telegram.messenger.SilentChatLock.getLockedChats();
+        if (silentLastKnownLockedChats == null) {
+            silentLastKnownLockedChats = lockedChats;
+        } else if (!silentLastKnownLockedChats.equals(lockedChats)) {
+            silentLastKnownLockedChats = lockedChats;
+            if (viewPages != null) {
+                for (int a = 0; a < viewPages.length; a++) {
+                    if (viewPages[a].dialogsAdapter != null) {
+                        viewPages[a].dialogsAdapter.notifyDataSetChanged();
+                    }
+                }
+            }
+        }
         // SilentGram: first-login folder setup — offer the 4 folders once.
         if (!onlySelect && folderId == 0 && communityId == 0 && getParentActivity() != null) {
             AndroidUtilities.runOnUIThread(() -> {
@@ -7178,6 +7258,9 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
     @Override
     public void onPause() {
         super.onPause();
+        // SilentGram: persist the current folder tab (item 18) — this is
+        // what survives the app being swiped out of the background.
+        silentSaveLastFolder(silentCurrentFilterId());
         if (storiesBulletin != null) {
             storiesBulletin.hide();
             storiesBulletin = null;

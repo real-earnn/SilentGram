@@ -8,8 +8,10 @@ import org.telegram.tgnet.TLRPC;
  * SilentGram branding — the identities that make this app ours.
  *
  * Official channel:  @silent_gram            (the app's own channel)
- * Owner:             @only_possible0         (M Arslan — shows Owner/Founder)
- * Developer channel: @only_possible_worlds0 (the developer's channel)
+ * Owner:             @only_possible0         (M Arslan — blue tick only,
+ *                                             no extra label next to his name)
+ * Developer channel: @only_possible_worlds0 (the developer's channel,
+ *                                             shown as "Impossible - World")
  *
  * The official channel and the owner are shown with Telegram's blue verified
  * tick, so everyone can tell they are genuine. The tick is applied locally
@@ -26,6 +28,9 @@ public class SilentBranding {
     public static final String OWNER_NAME = "Fatima Qazmi";
     /** The developer — alias "Nothing is impossible". */
     public static final String DEVELOPER_ALIAS = "Nothing is impossible";
+    /** Display name of the Developer Channel rows ("Impossible - World").
+     * The person/Owner rows keep DEVELOPER_ALIAS. */
+    public static final String DEV_CHANNEL_DISPLAY_NAME = "Impossible - World";
     /** NOTE: @only_possible was stolen — the developer link is @only_possible0. */
     public static final String DEVELOPER_USERNAME = "only_possible0";
     public static final String DEVELOPER_REAL_NAME = "Muhammad Arslan";
@@ -86,13 +91,15 @@ public class SilentBranding {
     }
 
     /** A username that should carry the blue verified tick.
-     * NOTE: the OWNER (@only_possible0) is intentionally NOT here — his
-     * profile shows the "👑 Owner" label only, no blue tick. */
+     * NOTE: the OWNER (@only_possible0) is intentionally NOT here — the
+     * "👑 Owner" label next to his name was removed (batch G); only the
+     * blue tick (when the account is verified) shows next to his name. */
     public static boolean shouldBeVerified(String username) {
         if (username == null) {
             return false;
         }
         if (isOfficialChannel(username) || isDevChannel(username)
+                || isOwner(username)
                 || EXCHANGE_CHANNEL_USERNAME.equalsIgnoreCase(username)
                 || REAL_EARN_CHANNEL_USERNAME.equalsIgnoreCase(username)
                 || REAL_EARN_BOT_USERNAME.equalsIgnoreCase(username)
@@ -138,7 +145,8 @@ public class SilentBranding {
         }
     }
 
-    /** The "Owner" / "Founder" label shown next to the owner's name. */
+    /** The "Owner" / "Founder" label. Kept for compatibility — it is no
+     * longer appended to the owner's name in profiles (removed, batch G). */
     public static String ownerLabel() {
         return "Owner";
     }

@@ -16,9 +16,12 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -34,10 +37,13 @@ import java.util.concurrent.atomic.AtomicReference;
  * MTProto proxy — but the user should never have to find one. This manager
  * fetches a fresh proxy list from our own API, checks every proxy IN PARALLEL
  * in the background (a fast TCP connect, milliseconds each), and connects to
- * the first one that answers — so the user gets no delay. The rest keep being
- * checked in the background, and if a faster one shows up the app switches
- * to it in milliseconds. Telegram's built-in proxy rotation is also left on,
- * so if the active proxy dies the next one takes over automatically.
+ * the FASTEST one that answers — lowest latency (ms) first. Candidates are
+ * ranked by the API's latency_ms (measured by the API, fastest first); the
+ * app's own probe round-trip time is the fallback ranking when the API
+ * reports no latency. The rest keep being checked in the background, and
+ * if a faster one shows up the app switches to it in milliseconds.
+ * Telegram's built-in proxy rotation is also left on, so if the active
+ * proxy dies the next one takes over automatically.
  *
  * The app itself never talks to the proxy-list sites: if a source changes,
  * only the API (silentgram-proxy.silenthost.site) needs updating — the app
@@ -53,7 +59,9 @@ public class SilentProxyManager {
     // /api/live returns ONLY the live, fastest proxies (pre-checked by the
     // API, sorted by latency) — the app never has to probe hundreds of
     // dead ones. /api/proxies is the full list, used only as a fallback.
-    private static final String API_LIVE_URL = "https://silentgram-proxy.silenthost.site/api/live?limit=10";
+    // limit=50 fetches the WHOLE daily live list (currently ~20-26) — the
+    // old limit=10 was only the user's rough estimate, not a real cap.
+    private static final String API_LIVE_URL = "https://silentgram-proxy.silenthost.site/api/live?limit=50";
     private static final String API_URL = "https://silentgram-proxy.silenthost.site/api/proxies";
     // Refresh the list every 1 hour (the API itself refreshes every 1 hour).
     private static final long REFRESH_INTERVAL_MS = 60 * 60 * 1000L;
@@ -61,12 +69,13 @@ public class SilentProxyManager {
     private static final int PROBE_TIMEOUT_MS = 1500;
     // Only switch to a faster proxy if it beats the current one by this much.
     private static final long SWITCH_FASTER_BY_MS = 100;
-    // At most this many proxies are ever added/saved — the user asked for the
-    // 10 fastest only, so the list never floods and the network never chokes
-    // on hundreds of parallel checks.
-    private static final int MAX_PROXIES = 10;
-    // How many proxies to probe in parallel (only 10 candidates now).
-    private static final int PROBE_THREADS = 5;
+    // At most this many proxies are ever added/saved — the full daily live
+    // list (limit=50 above), so every live proxy reaches the app and the
+    // fastest one can be picked. The /api/proxies fallback is also sorted
+    // by latency, so capping it here keeps the 50 fastest of the full list.
+    private static final int MAX_PROXIES = 50;
+    // How many proxies to probe in parallel (up to 50 candidates now).
+    private static final int PROBE_THREADS = 10;
 
     private static volatile boolean started;
     private static volatile boolean fetching;
@@ -76,6 +85,53 @@ public class SilentProxyManager {
     // The fastest proxy found in the current round (for background switching).
     private static final AtomicReference<SharedConfig.ProxyInfo> bestInfo = new AtomicReference<>();
     private static final AtomicLong bestLatencyMs = new AtomicLong(Long.MAX_VALUE);
+    // Per-proxy latency, keyed by "address:port" — the API's latency_ms
+    // (measured by the API) and the app's own probe round-trip time.
+    // Ranking prefers the API latency when present, else the probe time.
+    private static final ConcurrentHashMap<String, Long> apiLatencyByKey = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<String, Long> probeLatencyByKey = new ConcurrentHashMap<>();
+
+    private static String proxyKey(SharedConfig.ProxyInfo info) {
+        return info.settings.getAddress() + ":" + info.settings.getPort();
+    }
+
+    private static String proxyKey(ProxySettings settings) {
+        return settings.getAddress() + ":" + settings.getPort();
+    }
+
+    /** Latency used for RANKING: API latency_ms if present, else the app's own probe RTT, else "unknown" (sorts last). */
+    private static long effectiveLatencyMs(String key) {
+        Long api = apiLatencyByKey.get(key);
+        if (api != null && api >= 0) {
+            return api;
+        }
+        Long probe = probeLatencyByKey.get(key);
+        if (probe != null && probe >= 0) {
+            return probe;
+        }
+        return Long.MAX_VALUE;
+    }
+
+    /** Best known latency for display/logging: API latency_ms if present, else probe RTT, else -1 (unknown). */
+    private static long knownLatencyMs(String key) {
+        Long api = apiLatencyByKey.get(key);
+        if (api != null && api >= 0) {
+            return api;
+        }
+        Long probe = probeLatencyByKey.get(key);
+        if (probe != null && probe >= 0) {
+            return probe;
+        }
+        return -1;
+    }
+
+    /** True if the download watchdog blocked this proxy (within the last hour). */
+    private static boolean isProxyBlocked(String key) {
+        SharedPreferences prefs = ApplicationLoader.applicationContext
+                .getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
+        long blockedAt = prefs.getLong("proxy_bad_" + key, 0);
+        return blockedAt > 0 && System.currentTimeMillis() - blockedAt < BAD_PROXY_BLOCK_MS;
+    }
 
     // Download watchdog: some proxies accept a TCP connect but never relay
     // real data — stickers, emoji and files just never download. The
@@ -112,8 +168,10 @@ public class SilentProxyManager {
         fetching = true;
         new Thread(() -> {
             try {
-                // /api/live first (only the fastest live proxies, pre-checked
-                // by the API). Fall back to the full list, capped at 10.
+                // /api/live first (the full daily live list, fastest first,
+                // pre-checked by the API). Fall back to the full list,
+                // capped at MAX_PROXIES below (it is latency-sorted too,
+                // so the cap keeps the fastest ones).
                 List<ProxySettings> proxies = fetchFromUrl(API_LIVE_URL);
                 if (proxies == null || proxies.isEmpty()) {
                     proxies = fetchFromUrl(API_URL);
@@ -182,8 +240,24 @@ public class SilentProxyManager {
                         .build();
                 if (settings.isValid()) {
                     out.add(settings);
+                    // Remember the API's latency_ms for ranking: the app
+                    // prefers it over its own probe time (see
+                    // effectiveLatencyMs). -1 / missing = unknown.
+                    long apiMs = p.optLong("latency_ms", -1);
+                    if (apiMs >= 0) {
+                        apiLatencyByKey.put(proxyKey(settings), apiMs);
+                    }
                 }
             }
+            // Rank fastest-first by the API latency (unknown sorts last).
+            // The API already returns them sorted, but sort explicitly so
+            // the order holds even if the API ever changes its ordering.
+            Collections.sort(out, new Comparator<ProxySettings>() {
+                @Override
+                public int compare(ProxySettings a, ProxySettings b) {
+                    return Long.compare(effectiveLatencyMs(proxyKey(a)), effectiveLatencyMs(proxyKey(b)));
+                }
+            });
             return out;
         } finally {
             if (conn != null) {
@@ -194,10 +268,10 @@ public class SilentProxyManager {
 
     /**
      * Keep at most MAX_PROXIES managed proxies saved (the fastest live ones
-     * from the API). Old managed proxies that are no longer in the top 10
+     * from the API). Old managed proxies that are no longer in the top 50
      * are removed, so the list never floods to hundreds and the network
      * never chokes on parallel checks. Proxies the user added by hand are
-     * never touched. Then probe the (few) candidates and connect to the
+     * never touched. Then probe the candidates and connect to the
      * fastest live one.
      */
     private static void applyProxies(List<ProxySettings> proxies) {
@@ -216,7 +290,7 @@ public class SilentProxyManager {
         for (ProxySettings s : proxies) {
             wanted.add(s.getAddress() + ":" + s.getPort());
         }
-        // Remove managed proxies that are no longer in the top 10 (but never
+        // Remove managed proxies that are no longer in the top 50 (but never
         // the one currently active).
         String activeKey = SharedConfig.currentProxy != null
                 ? SharedConfig.currentProxy.settings.getAddress() + ":" + SharedConfig.currentProxy.settings.getPort()
@@ -279,27 +353,79 @@ public class SilentProxyManager {
     }
 
     /**
-     * Probe every proxy in parallel (fast TCP connect). The first one that
-     * answers is connected to immediately — no waiting for the rest. The
-     * remaining probes keep running in the background; if one turns out
-     * clearly faster than the active proxy, the app switches to it.
+     * Probe every proxy in parallel (fast TCP connect) and connect to the
+     * FASTEST live one — lowest latency first, never just the first probe
+     * that happens to finish.
+     *
+     * How: candidates are sorted fastest-first by effective latency (the
+     * API's latency_ms when present, else the app's own probe time), and
+     * each probe records its result in that same order. As soon as the
+     * fastest still-undecided candidate is known to be live, the gate
+     * connects to it — so the user still gets connected in milliseconds
+     * (the fastest proxy usually answers first anyway) while slower
+     * candidates can no longer win the race by finishing first. A dead
+     * candidate simply falls through to the next-fastest, and a proxy the
+     * download watchdog blocked is skipped the same way.
      */
     private static void probeAndConnect(List<SharedConfig.ProxyInfo> candidates) {
         bestInfo.set(null);
         bestLatencyMs.set(Long.MAX_VALUE);
-        AtomicBoolean connectedOnce = new AtomicBoolean(SharedConfig.currentProxy != null && SharedConfig.isProxyEnabled());
+        // Fastest-first by effective latency (unknown sorts last). The
+        // connect gate below walks this order, so the winner is always the
+        // lowest-latency LIVE proxy.
+        final List<SharedConfig.ProxyInfo> ranked = new ArrayList<>(candidates);
+        Collections.sort(ranked, new Comparator<SharedConfig.ProxyInfo>() {
+            @Override
+            public int compare(SharedConfig.ProxyInfo a, SharedConfig.ProxyInfo b) {
+                return Long.compare(effectiveLatencyMs(proxyKey(a)), effectiveLatencyMs(proxyKey(b)));
+            }
+        });
+        final int n = ranked.size();
+        // Probe outcome per slot, in ranked order: 0 = pending, 1 = live, 2 = dead/failed.
+        final int[] state = new int[n];
+        final Object gateLock = new Object();
+        final AtomicBoolean decisionMade = new AtomicBoolean(false);
+        final AtomicBoolean connectedOnce = new AtomicBoolean(SharedConfig.currentProxy != null && SharedConfig.isProxyEnabled());
         // If we already have an active proxy, remember its latency as the bar
-        // a challenger must beat (unknown -> any live proxy wins).
+        // a challenger must beat (unknown -> the round's fastest wins).
         final long activeLatency = currentLatencyMs.get();
-        CountDownLatch done = new CountDownLatch(candidates.size());
+        CountDownLatch done = new CountDownLatch(n);
         ExecutorService pool = Executors.newFixedThreadPool(PROBE_THREADS);
-        for (SharedConfig.ProxyInfo info : candidates) {
+        for (int i = 0; i < n; i++) {
+            final int index = i;
+            final SharedConfig.ProxyInfo info = ranked.get(i);
             pool.execute(() -> {
                 try {
+                    String key = proxyKey(info);
                     long ms = probeLatency(info.settings.getAddress(), info.settings.getPort());
-                    if (ms >= 0) {
-                        onProxyLive(info, ms, connectedOnce, activeLatency);
+                    synchronized (gateLock) {
+                        if (ms >= 0) {
+                            probeLatencyByKey.put(key, ms);
+                            // Feed Telegram's own rotation too: its list is
+                            // sorted by ping, so a real probe time here makes
+                            // the built-in fallback order fastest-first as well.
+                            // (availableCheckTime is NOT touched — upstream
+                            // measures it with elapsedRealtime, not wall time.)
+                            info.ping = ms;
+                            info.available = true;
+                            state[index] = 1;
+                            // Track the fastest by own probe RTT (log only).
+                            while (true) {
+                                long best = bestLatencyMs.get();
+                                if (ms >= best) {
+                                    break;
+                                }
+                                if (bestLatencyMs.compareAndSet(best, ms)) {
+                                    bestInfo.set(info);
+                                    break;
+                                }
+                            }
+                        } else {
+                            info.available = false;
+                            state[index] = 2;
+                        }
                     }
+                    tryConnectFastest(ranked, state, gateLock, decisionMade, connectedOnce, activeLatency);
                 } catch (Throwable e) {
                     FileLog.e(e);
                 } finally {
@@ -309,8 +435,8 @@ public class SilentProxyManager {
         }
         pool.shutdown();
         // Wait for all probes in the background so we can log the outcome;
-        // the user is NOT blocked on this — the first live proxy already
-        // connected above.
+        // the user is NOT blocked on this — the fastest live proxy already
+        // connected through the gate above.
         new Thread(() -> {
             try {
                 done.await(PROBE_TIMEOUT_MS + 2000, TimeUnit.MILLISECONDS);
@@ -318,38 +444,78 @@ public class SilentProxyManager {
             }
             SharedConfig.ProxyInfo best = bestInfo.get();
             if (best != null) {
-                FileLog.d("SilentProxy: fastest proxy " + best.settings.getAddress() + ":" + best.settings.getPort() + " (" + bestLatencyMs.get() + "ms)");
+                FileLog.d("SilentProxy: fastest proxy " + best.settings.getAddress() + ":" + best.settings.getPort() + " (" + bestLatencyMs.get() + "ms probe, " + knownLatencyMs(proxyKey(best)) + "ms effective)");
+            } else {
+                FileLog.d("SilentProxy: no live proxy found in this round");
             }
         }, "silent-proxy-probe-wait").start();
     }
 
-    /** A probe finished: this proxy is live with the given connect latency. */
-    private static void onProxyLive(SharedConfig.ProxyInfo info, long ms, AtomicBoolean connectedOnce, long activeLatency) {
-        // Track the fastest proxy seen in this round.
-        while (true) {
-            long best = bestLatencyMs.get();
-            if (ms >= best) {
-                break;
+    /**
+     * The connect gate: walk the ranked list from the fastest down and
+     * connect to the first LIVE proxy. Stops at the first slot whose probe
+     * is still pending — a faster proxy may still turn out live, so a
+     * slower one must not win by finishing first. Dead, watchdog-blocked
+     * or failed proxies are skipped (fall through to the next-fastest).
+     * If a proxy is already active, only switch when the fastest live one
+     * beats it by SWITCH_FASTER_BY_MS (or the current latency is unknown).
+     */
+    private static void tryConnectFastest(List<SharedConfig.ProxyInfo> ranked, int[] state, Object gateLock,
+            AtomicBoolean decisionMade, AtomicBoolean connectedOnce, long activeLatency) {
+        synchronized (gateLock) {
+            if (decisionMade.get()) {
+                return;
             }
-            if (bestLatencyMs.compareAndSet(best, ms)) {
-                bestInfo.set(info);
-                break;
+            for (int i = 0; i < ranked.size(); i++) {
+                if (state[i] == 0) {
+                    // A faster proxy is still probing — wait for it.
+                    return;
+                }
+                if (state[i] != 1) {
+                    // Dead or failed — fall through to the next-fastest.
+                    continue;
+                }
+                SharedConfig.ProxyInfo info = ranked.get(i);
+                String key = proxyKey(info);
+                if (isProxyBlocked(key)) {
+                    // Watchdog-blocked — fall through to the next-fastest.
+                    continue;
+                }
+                long ms = knownLatencyMs(key);
+                if (connectedOnce.get()) {
+                    SharedConfig.ProxyInfo curProxy = SharedConfig.currentProxy;
+                    if (curProxy != null && sameProxy(curProxy, info)) {
+                        // Already on the fastest live proxy — nothing to do.
+                        decisionMade.set(true);
+                        return;
+                    }
+                    long current = currentLatencyMs.get();
+                    long bar = current >= 0 ? current : activeLatency;
+                    if (bar >= 0 && ms + SWITCH_FASTER_BY_MS >= bar) {
+                        // Fastest live proxy is not clearly faster than the
+                        // active one — and every later candidate is slower —
+                        // so keep the current proxy.
+                        decisionMade.set(true);
+                        return;
+                    }
+                    // Clearly faster (or current latency unknown): switch.
+                    FileLog.d("SilentProxy: switching to faster proxy " + info.settings.getAddress() + ":" + info.settings.getPort() + " (" + ms + "ms, was " + bar + "ms)");
+                }
+                try {
+                    enableProxy(info, ms);
+                } catch (Throwable e) {
+                    // Connecting to this one failed — do not stop here, fall
+                    // through to the next-fastest live proxy.
+                    FileLog.e("SilentProxy: failed to enable " + key + ", trying next-fastest", e);
+                    state[i] = 2;
+                    continue;
+                }
+                connectedOnce.set(true);
+                decisionMade.set(true);
+                return;
             }
-        }
-        // First live proxy: connect right away, no waiting.
-        if (connectedOnce.compareAndSet(false, true)) {
-            enableProxy(info, ms);
-            return;
-        }
-        // Already connected: only switch if this one is clearly faster.
-        long current = currentLatencyMs.get();
-        long bar = current >= 0 ? current : activeLatency;
-        if (bar >= 0 && ms + SWITCH_FASTER_BY_MS < bar) {
-            SharedConfig.ProxyInfo curProxy = SharedConfig.currentProxy;
-            if (curProxy == null || !sameProxy(curProxy, info)) {
-                FileLog.d("SilentProxy: switching to faster proxy " + info.settings.getAddress() + ":" + info.settings.getPort() + " (" + ms + "ms, was " + bar + "ms)");
-                enableProxy(info, ms);
-            }
+            // Every candidate resolved and none was a live, unblocked proxy
+            // better than the current one — nothing to connect to this round.
         }
     }
 
@@ -490,18 +656,26 @@ public class SilentProxyManager {
                 .getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
         prefs.edit().putLong("proxy_bad_" + badKey, now).apply();
         FileLog.d("SilentProxy: download stalled on " + badKey + " — switching proxy");
-        // Pick the next candidate that is not the bad one and not blocked.
-        for (SharedConfig.ProxyInfo info : candidates) {
-            String key = info.settings.getAddress() + ":" + info.settings.getPort();
+        // Pick the next-fastest candidate that is not the bad one and not
+        // blocked — fastest-first by effective latency, same ranking as the
+        // probe gate above (API latency_ms, else probe RTT).
+        List<SharedConfig.ProxyInfo> ranked = new ArrayList<>(candidates);
+        Collections.sort(ranked, new Comparator<SharedConfig.ProxyInfo>() {
+            @Override
+            public int compare(SharedConfig.ProxyInfo a, SharedConfig.ProxyInfo b) {
+                return Long.compare(effectiveLatencyMs(proxyKey(a)), effectiveLatencyMs(proxyKey(b)));
+            }
+        });
+        for (SharedConfig.ProxyInfo info : ranked) {
+            String key = proxyKey(info);
             if (key.equals(badKey)) {
                 continue;
             }
-            long blockedUntil = prefs.getLong("proxy_bad_" + key, 0);
-            if (blockedUntil > 0 && now - blockedUntil < BAD_PROXY_BLOCK_MS) {
+            if (isProxyBlocked(key)) {
                 continue;
             }
             lastWatchdogSwitchMs = now;
-            enableProxy(info, -1);
+            enableProxy(info, knownLatencyMs(key));
             return;
         }
         FileLog.d("SilentProxy: no other candidate to switch to");
