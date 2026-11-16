@@ -1,7 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="AppName">Telegram</string>
-    <string name="AppNameBeta">Telegram Beta</string>
+    <string name="AppName">SilentGram</string>
+    <string name="AppNameBeta">SilentGram Beta</string>
+    <string name="SilentForwardNoQuote">Forward Without Quoting</string>
+    <string name="SilentScheduleDownload">Schedule Download</string>
+    <string name="SilentTranslateFrom">From language</string>
+    <string name="SilentTranslateTo">To language</string>
+    <string name="SilentTranslateButton">Translate</string>
+    <string name="SilentTranslating">Translating…</string>
+    <string name="SilentTranslateFailed">Translation failed. Check your connection and try again.</string>
+    <string name="SilentChooseLanguage">Choose language</string>
+    <string name="SilentDeveloperTitle">Developer</string>
+    <string name="SilentAboutApp">SilentGram is a fast, secure and private Telegram client — built for everyone, with the proxy handled automatically in the background so it just works, even where Telegram is blocked.</string>
+    <string name="SilentDeveloperLinks">Links</string>
+    <string name="SilentOfficialChannel">Official Channel</string>
+    <string name="SilentDevChannel">Developer Channel</string>
+    <string name="SilentOwner">Owner</string>
+    <string name="SilentCredits">Credits</string>
+    <string name="SilentDevelopedBy">Developed by</string>
+    <string name="SilentOwnedBy">Owned by</string>
+    <string name="SilentSponsored">Sponsored</string>
+    <string name="SilentJoin">Join</string>
     <string name="LanguageName">English</string>
     <string name="English">English</string>
     <string name="LanguageNameInEnglish">English</string>
@@ -2634,7 +2653,7 @@
     <string name="DirectShareInfo">Show recent chats in Android share menu</string>
     <string name="Emoji">Emoji</string>
     <string name="LargeEmoji">Large Emoji</string>
-    <string name="TelegramVersion">Telegram for Android %1$s</string>
+    <string name="TelegramVersion">SilentGram for Android %1$s</string>
     <string name="DebugMenu">Debug Menu</string>
     <string name="DebugMenuLongPress">Long press again for debug menu</string>
     <string name="DebugSendLogs">Send Logs</string>

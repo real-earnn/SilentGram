@@ -11755,6 +11755,13 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                 newString = Emoji.replaceEmoji(newString, nameTextView.getPaint().getFontMetricsInt(), false);
             } catch (Exception ignore) {
             }
+            // SilentGram: show "Owner" with a crown next to the owner's name.
+            if (user != null && org.telegram.messenger.SilentBranding.isOwner(user.username)) {
+                android.text.SpannableStringBuilder sb = new android.text.SpannableStringBuilder(newString);
+                sb.append("  👑 ");
+                sb.append(org.telegram.messenger.SilentBranding.ownerLabel());
+                newString = sb;
+            }
             if (copyFromChatActivity) {
                 ChatActivity chatActivity = (ChatActivity) prevFragment;
                 BackupImageView fromAvatarImage = chatActivity.avatarContainer.getAvatarImageView();
@@ -12047,9 +12054,22 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
                 } else if (chat.verified) {
                     nameTextView.setRightDrawable2(getVerifiedCrossfadeDrawable());
                     nameTextViewRightDrawableContentDescription = LocaleController.getString(R.string.AccDescrVerified);
+                    // SilentGram: tapping the blue tick on the official channel shows what it is.
+                    if (chat != null && org.telegram.messenger.SilentBranding.isOfficialChannel(chat.username)) {
+                        nameTextView.setRightDrawable2OnClick(v -> {
+                            new org.telegram.ui.ActionBar.AlertDialog.Builder(getParentActivity())
+                                    .setTitle(LocaleController.getString(R.string.SilentOfficialChannel))
+                                    .setMessage(org.telegram.messenger.SilentBranding.officialChannelInfo())
+                                    .setPositiveButton(LocaleController.getString(R.string.OK), null)
+                                    .show();
+                        });
+                    } else {
+                        nameTextView.setRightDrawable2OnClick(null);
+                    }
                 } else {
                     nameTextView.setRightDrawable2(null);
                     nameTextViewRightDrawableContentDescription = null;
+                    nameTextView.setRightDrawable2OnClick(null);
                 }
                 if (DialogObject.getEmojiStatusDocumentId(chat.emoji_status) != 0) {
                     nameTextView.setRightDrawable(getEmojiStatusDrawable(chat.emoji_status, true, false));

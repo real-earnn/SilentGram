@@ -445,6 +445,13 @@
             </intent-filter>
         </receiver>
 
+        <!-- SilentGram: fires when a scheduled download's time arrives. -->
+        <receiver android:name="org.telegram.messenger.SilentDownloadReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="org.telegram.messenger.ACTION_SILENT_SCHEDULED_DOWNLOAD"/>
+            </intent-filter>
+        </receiver>
+
         <!-- The widget engine (HTML widgets' code): no permissions, files or network; one process for every widget. -->
         <service
             android:name="org.telegram.utils.twidget.WidgetEngineService"

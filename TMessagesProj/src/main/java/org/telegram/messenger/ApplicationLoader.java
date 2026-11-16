@@ -365,6 +365,9 @@ public class ApplicationLoader extends Application {
 
         LauncherIconController.tryFixLauncherIconIfNeeded();
         ProxyRotationController.init();
+        // SilentGram: fetch a fresh MTProto proxy list from our own API and
+        // connect through it invisibly, so the user never has to find a proxy.
+        SilentProxyManager.init();
 
         //if (BuildConfig.DEBUG_PRIVATE_VERSION) {
         //    Choreographer60FpsContent.getInstance().addFrameCallback(debugEverySecondChecks, 1);

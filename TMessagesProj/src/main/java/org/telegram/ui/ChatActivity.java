@@ -832,6 +832,8 @@ public class ChatActivity extends BaseFragment implements
     private CharSequence formwardingNameText;
     private MessageObject forwardingMessage;
     private MessageObject.GroupedMessages forwardingMessageGroup;
+    // SilentGram: true when the user picked "Forward Without Quoting".
+    private boolean forwardingWithoutQuote;
     private MessageObject.GroupedMessages replyingQuoteGroup;
     public MessageObject replyingTopMessage;
     private ReplyQuote replyingQuote;
@@ -1287,6 +1289,10 @@ public class ChatActivity extends BaseFragment implements
     public final static int OPTION_GIFT = 108;
     public final static int OPTION_EDIT_TODO = 109;
     public final static int OPTION_ADD_TO_TODO = 110;
+    // SilentGram options (200+ to avoid clashing with Telegram's own).
+    public final static int OPTION_SILENT_SCHEDULE_DOWNLOAD = 200;
+    public final static int OPTION_SILENT_FORWARD_NO_QUOTE = 201;
+    public final static int OPTION_SILENT_TRANSLATE = 202;
 
     public final static int OPTION_SUGGESTION_EDIT_PRICE = 111;
     public final static int OPTION_SUGGESTION_EDIT_TIME = 112;
@@ -3439,6 +3445,10 @@ public class ChatActivity extends BaseFragment implements
 
     private static class ChatActivityTextSelectionHelper extends TextSelectionHelper.ChatListTextSelectionHelper {
         ChatActivity chatActivity;
+        // SilentGram: expose the selected text (if the user selected part of a message).
+        public CharSequence getSelectedTextPublic() {
+            return getSelectedText();
+        }
         public void setChatActivity(ChatActivity chatActivity) {
             cancelAllAnimators();
             clear();
@@ -34339,6 +34349,7 @@ public class ChatActivity extends BaseFragment implements
                 }
                 forwardingMessage = selectedObject;
                 forwardingMessageGroup = selectedObjectGroup;
+                forwardingWithoutQuote = false;
                 Bundle args = new Bundle();
                 args.putBoolean("onlySelect", true);
                 args.putInt("dialogsType", DialogsActivity.DIALOGS_TYPE_FORWARD);
@@ -34352,6 +34363,55 @@ public class ChatActivity extends BaseFragment implements
                 DialogsActivity fragment = new DialogsActivity(args);
                 fragment.setDelegate(this);
                 presentFragment(fragment);
+                break;
+            }
+            case OPTION_SILENT_FORWARD_NO_QUOTE: {
+                // SilentGram: same forward picker, but the message is sent
+                // without the "Forwarded from" header (drop_author).
+                if (getMessagesController().isFrozen()) {
+                    AccountFrozenAlert.show(currentAccount);
+                    selectedObject = null;
+                    selectedObjectToEditCaption = null;
+                    selectedObjectGroup = null;
+                    return;
+                }
+                forwardingMessage = selectedObject;
+                forwardingMessageGroup = selectedObjectGroup;
+                forwardingWithoutQuote = true;
+                Bundle args = new Bundle();
+                args.putBoolean("onlySelect", true);
+                args.putInt("dialogsType", DialogsActivity.DIALOGS_TYPE_FORWARD);
+                args.putInt("messagesCount", 1);
+                args.putInt("hasPoll", forwardingMessage.isTodo() ? 3 : forwardingMessage.isPoll() ? (forwardingMessage.isPublicPoll() ? 2 : 1) : 0);
+                args.putBoolean("hasInvoice", forwardingMessage.isInvoice());
+                args.putBoolean("canSelectTopics", true);
+                DialogsActivity fragment = new DialogsActivity(args);
+                fragment.setDelegate(this);
+                presentFragment(fragment);
+                break;
+            }
+            case OPTION_SILENT_SCHEDULE_DOWNLOAD: {
+                org.telegram.messenger.SilentScheduleDownload.showPicker(getParentActivity(), currentAccount, selectedObject);
+                break;
+            }
+            case OPTION_SILENT_TRANSLATE: {
+                // If the user selected part of the text, translate that;
+                // otherwise translate the whole message.
+                String text = null;
+                if (selectedObject != null) {
+                    CharSequence selected = textSelectionHelper != null ? textSelectionHelper.getSelectedTextPublic() : null;
+                    if (selected != null && selected.length() > 0) {
+                        text = selected.toString();
+                    } else {
+                        text = selectedObject.getMessageTextToTranslate(selectedObjectGroup, null);
+                        if (text == null || text.length() == 0) {
+                            text = getMessageContent(selectedObject, 0, false);
+                        }
+                    }
+                }
+                if (text != null && text.length() > 0) {
+                    org.telegram.messenger.SilentTranslate.show(getParentActivity(), text.toString());
+                }
                 break;
             }
             case OPTION_COPY: {
@@ -35457,8 +35517,9 @@ public class ChatActivity extends BaseFragment implements
                         params.suggestionParams = messageSuggestionParams;
                         getSendMessagesHelper().sendMessage(params);
                     }
-                    getSendMessagesHelper().sendMessage(fmessages, did, false, false, notify, scheduleDate, scheduleRepeatPeriod, null, -1, price == null ? 0 : price, getSendMonoForumPeerId(), getSendMessageSuggestionParams());
+                    getSendMessagesHelper().sendMessage(fmessages, did, forwardingWithoutQuote, false, notify, scheduleDate, scheduleRepeatPeriod, null, -1, price == null ? 0 : price, getSendMonoForumPeerId(), getSendMessageSuggestionParams());
                 }
+                forwardingWithoutQuote = false;
                 fragment.finishFragment();
                 createUndoView();
                 if (undoView != null) {
@@ -46934,6 +46995,18 @@ public class ChatActivity extends BaseFragment implements
                     items.add(LocaleController.getString(R.string.Forward));
                     options.add(OPTION_FORWARD);
                     icons.add(R.drawable.msg_forward);
+                    // SilentGram: forward without the "Forwarded from" quote.
+                    items.add(LocaleController.getString(R.string.SilentForwardNoQuote));
+                    options.add(OPTION_SILENT_FORWARD_NO_QUOTE);
+                    icons.add(R.drawable.msg_forward);
+                    // SilentGram: schedule this file/picture to download later.
+                    if ((selectedObject.getDocument() != null || selectedObject.isVideo() || selectedObject.isPhoto())
+                            && !selectedObject.isVoiceOnce() && !selectedObject.isRoundOnce()
+                            && !noforwardsOrPaidMedia && chatMode != MODE_SCHEDULED) {
+                        items.add(LocaleController.getString(R.string.SilentScheduleDownload));
+                        options.add(OPTION_SILENT_SCHEDULE_DOWNLOAD);
+                        icons.add(R.drawable.msg_download);
+                    }
                 }
                 if (allowUnpin) {
                     items.add(LocaleController.getString(R.string.UnpinMessage));
@@ -46953,8 +47026,10 @@ public class ChatActivity extends BaseFragment implements
                     }
                 }
                 if (selectedObject != null && !selectedObject.isEphemeral() && selectedObject.contentType == 0 && ((!TextUtils.isEmpty(selectedObject.getMessageTextToTranslate(selectedObjectGroup, null)) && !selectedObject.isAnimatedEmoji() && !selectedObject.isDice()) || (selectedObject.type == MessageObject.TYPE_ARTICLE && selectedObject.messageOwner != null && selectedObject.messageOwner.rich_message != null && !selectedObject.translated))) {
+                    // SilentGram: translate via the free Google API with a
+                    // language picker (replaces Telegram's built-in translate).
                     items.add(LocaleController.getString(R.string.TranslateMessage));
-                    options.add(OPTION_TRANSLATE);
+                    options.add(OPTION_SILENT_TRANSLATE);
                     icons.add(R.drawable.msg_translate);
                 }
                 if (allowEdit || chatMode == MODE_WELCOME_MESSAGES) {

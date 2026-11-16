@@ -196,9 +196,11 @@ public class DataSettingsActivity extends BaseFragment {
         useLessDataForCallsRow = rowCount++;
 //        quickRepliesRow = rowCount++;
         callsSection2Row = rowCount++;
-        proxySectionRow = rowCount++;
-        proxyRow = rowCount++;
-        proxySection2Row = rowCount++;
+        // SilentGram: proxy is handled automatically and invisibly by
+        // SilentProxyManager — the user never sees or touches proxy settings.
+        proxySectionRow = -1;
+        proxyRow = -1;
+        proxySection2Row = -1;
         clearDraftsRow = rowCount++;
         clearDraftsSectionRow = rowCount++;
 

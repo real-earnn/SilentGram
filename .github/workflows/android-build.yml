@@ -1,0 +1,95 @@
+name: Build SilentGram (AAB + APK)
+
+# Builds the release AAB and APK and attaches both to a GitHub Release.
+# Runs on every push to master and on manual dispatch.
+# NOTE: this build is signed with a debug keystore generated in the run,
+# so the APK installs for testing. For Google Play, replace the signing
+# step with a real release keystore (see the "release keystore" step).
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK 36 + NDK 27.2.12479018
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> $GITHUB_ENV
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build release APK + AAB
+        run: ./gradlew :TMessagesProj:assembleRelease :TMessagesProj:bundleRelease --stacktrace
+
+      - name: Sign APK + AAB (debug keystore, for testing)
+        run: |
+          # Generate a throwaway debug keystore so the APK is installable.
+          keytool -genkeypair -v -keystore /tmp/debug.keystore \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US"
+          APK=$(find TMessagesProj/build/outputs/apk/release -name "*.apk" | head -1)
+          AAB=$(find TMessagesProj/build/outputs/bundle/release -name "*.aab" | head -1)
+          echo "APK=$APK" >> $GITHUB_ENV
+          echo "AAB=$AAB" >> $GITHUB_ENV
+          echo "Found APK: $APK"
+          echo "Found AAB: $AAB"
+          # Sign the APK (zipalign + apksigner).
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+          "$BUILD_TOOLS/zipalign" -f 4 "$APK" /tmp/SilentGram-aligned.apk
+          "$BUILD_TOOLS/apksigner" sign --ks /tmp/debug.keystore \
+            --ks-key-alias androiddebugkey \
+            --ks-pass pass:android --key-pass pass:android \
+            --out /tmp/SilentGram-release.apk /tmp/SilentGram-aligned.apk
+          "$BUILD_TOOLS/apksigner" verify /tmp/SilentGram-release.apk
+          # Sign the AAB.
+          jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 \
+            -keystore /tmp/debug.keystore -storepass android -keypass android \
+            "$AAB" androiddebugkey
+          cp "$AAB" /tmp/SilentGram-release.aab
+          ls -lh /tmp/SilentGram-release.apk /tmp/SilentGram-release.aab
+
+      - name: Create Release (AAB + APK)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v13.2.2-silentgram-1
+          name: SilentGram v13.2.2 (1)
+          body: |
+            SilentGram — first build with the new features:
+            - Auto proxy in the background (parallel check, fastest wins)
+            - First-login folders (Bots / Users / Groups / Channels)
+            - Message menu: Forward Without Quoting, Schedule Download, Translate
+            - Official @silent_gram channel (Sponsored suggestion + blue tick)
+            - Developer page in Settings
+            - Owner badge on @only_possible0
+            - New SilentGram logo + violet accent
+
+            Signed with a debug key (for testing). For Google Play, a release
+            keystore is needed.
+          files: |
+            /tmp/SilentGram-release.apk
+            /tmp/SilentGram-release.aab
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

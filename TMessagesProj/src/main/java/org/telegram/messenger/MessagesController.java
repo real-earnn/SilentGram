@@ -6832,6 +6832,8 @@ public class MessagesController extends BaseController implements NotificationCe
         if (user == null) {
             return false;
         }
+        // SilentGram: blue verified tick for the owner / official identities.
+        SilentBranding.applyBranding(user);
         fromCache = fromCache && user.id / 1000 != 333 && user.id != 777000;
         TLRPC.User oldUser = users.get(user.id);
         if (oldUser == user && !force) {
@@ -6967,6 +6969,8 @@ public class MessagesController extends BaseController implements NotificationCe
         if (chat == null) {
             return;
         }
+        // SilentGram: blue verified tick for the official / developer channel.
+        SilentBranding.applyBranding(chat);
         TLRPC.Chat oldChat = chats.get(chat.id);
         if (oldChat == chat) {
             return;

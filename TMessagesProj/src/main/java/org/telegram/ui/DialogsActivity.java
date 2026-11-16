@@ -6944,6 +6944,16 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
     @Override
     public void onResume() {
         super.onResume();
+        // SilentGram: first-login folder setup — offer the 4 folders once.
+        if (!onlySelect && folderId == 0 && communityId == 0 && getParentActivity() != null) {
+            AndroidUtilities.runOnUIThread(() -> {
+                if (getParentActivity() != null && !getParentActivity().isFinishing()) {
+                    org.telegram.messenger.SilentFolderSetup.maybeShow(getParentActivity(), currentAccount);
+                    // SilentGram: start any scheduled download whose time passed.
+                    org.telegram.messenger.SilentScheduleDownload.triggerDueDownloads(getParentActivity().getApplicationContext());
+                }
+            }, 800);
+        }
         if (dialogStoriesCell != null) {
             dialogStoriesCell.onResume();
         }
@@ -7803,6 +7813,11 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         if (adapter instanceof DialogsAdapter) {
             DialogsAdapter dialogsAdapter = (DialogsAdapter) adapter;
             int dialogsType = dialogsAdapter.getDialogsType();
+            // SilentGram: sponsored @silent_gram row — open the official channel.
+            if (adapter.getItemViewType(position) == DialogsAdapter.VIEW_TYPE_SILENT_SPONSORED) {
+                getMessagesController().openByUserName(org.telegram.messenger.SilentBranding.OFFICIAL_CHANNEL_USERNAME, this, 0);
+                return;
+            }
             if (dialogsType == DIALOGS_TYPE_FOLDER1 || dialogsType == DIALOGS_TYPE_FOLDER2) {
                 MessagesController.DialogFilter dialogFilter = getMessagesController().selectedDialogFilter[dialogsType == DIALOGS_TYPE_FOLDER1 ? 0 : 1];
                 filterId = dialogFilter == null ? 0 : dialogFilter.id;
@@ -13433,26 +13448,10 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             });
         }
 
-        if (proxyMenuSubItem != null) {
-            ThemeBind.textColor(proxyMenuSubItem.subtextView, Theme.key_groupcreate_sectionText, getResourceProvider());
-            proxyMenuSubItem.setOnClickListener(v -> {
-                io.dismiss();
-                presentFragment(new ProxyListActivity());
-            });
-
-            final SharedPreferences preferences = ApplicationLoader.applicationContext
-                    .getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
-
-            final String proxyAddress = preferences.getString("proxy_ip", "");
-            final boolean proxyEnabled = preferences.getBoolean("proxy_enabled", false);
-            final boolean proxyVisible = proxyEnabled && !TextUtils.isEmpty(proxyAddress)
-                    || getMessagesController().blockedCountry && !SharedConfig.proxyList.isEmpty();
-
-            if (proxyVisible) {
-                io.addGap();
-                io.add(proxyMenuSubItem);
-            }
-        }
+        // SilentGram: proxy menu item removed — the proxy is handled fully in
+        // the background by SilentProxyManager, the user never sees a proxy
+        // button. (proxyMenuSubItem is still created in onCreate so that
+        // updateProxyButton() keeps working on the detached view.)
 
         io.show();
         io.setTranslationY(-dp(64));

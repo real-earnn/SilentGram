@@ -98,6 +98,9 @@ public class SimpleTextView extends View implements Drawable.Callback {
     private int textHeight;
     public int rightDrawableX;
     public int rightDrawableY;
+    // SilentGram: centre of the verified badge (rightDrawable2) for tap detection.
+    public int rightDrawable2X;
+    public int rightDrawable2Y;
     private boolean wasLayout;
 
     private boolean leftDrawableOutside, rightDrawableOutside;
@@ -128,6 +131,8 @@ public class SimpleTextView extends View implements Drawable.Callback {
     private boolean canHideRightDrawable;
     private boolean rightDrawableHidden;
     private OnClickListener rightDrawableOnClickListener;
+    // SilentGram: click listener for the second right drawable (the verified badge).
+    private OnClickListener rightDrawable2OnClickListener;
     private boolean maybeClick;
     private float touchDownX, touchDownY;
 
@@ -930,6 +935,8 @@ public class SimpleTextView extends View implements Drawable.Callback {
                 y = getPaddingTop() + (textHeight - dh) / 2 + rightDrawableTopPadding;
             }
             rightDrawable2.setBounds(x, y, x + dw, y + dh);
+            rightDrawable2X = x + (dw >> 1);
+            rightDrawable2Y = y + (dh >> 1);
             rightDrawable2.draw(canvas);
             totalWidth += drawablePadding + dw;
         }
@@ -1149,6 +1156,8 @@ public class SimpleTextView extends View implements Drawable.Callback {
                 y = getPaddingTop() + (textHeight - dh) / 2 + rightDrawableTopPadding;
             }
             rightDrawable2.setBounds(x, y, x + dw, y + dh);
+            rightDrawable2X = x + (dw >> 1);
+            rightDrawable2Y = y + (dh >> 1);
             rightDrawable2.draw(canvas);
         }
     }
@@ -1328,8 +1337,36 @@ public class SimpleTextView extends View implements Drawable.Callback {
         rightDrawableOnClickListener = onClickListener;
     }
 
+    // SilentGram: tap on the verified badge (rightDrawable2).
+    public void setRightDrawable2OnClick(OnClickListener onClickListener) {
+        rightDrawable2OnClickListener = onClickListener;
+    }
+
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (rightDrawable2OnClickListener != null && rightDrawable2 != null) {
+            AndroidUtilities.rectTmp.set(rightDrawable2X - dp(16), rightDrawable2Y - dp(16), rightDrawable2X + dp(16), rightDrawable2Y + dp(16));
+            if (event.getAction() == MotionEvent.ACTION_DOWN && AndroidUtilities.rectTmp.contains((int) event.getX(), (int) event.getY())) {
+                maybeClick = true;
+                touchDownX = event.getX();
+                touchDownY = event.getY();
+                getParent().requestDisallowInterceptTouchEvent(true);
+            } else if (event.getAction() == MotionEvent.ACTION_MOVE && maybeClick) {
+                if (Math.abs(event.getX() - touchDownX) >= AndroidUtilities.touchSlop || Math.abs(event.getY() - touchDownY) >= AndroidUtilities.touchSlop) {
+                    maybeClick = false;
+                    getParent().requestDisallowInterceptTouchEvent(false);
+                }
+            } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                if (maybeClick && event.getAction() == MotionEvent.ACTION_UP) {
+                    rightDrawable2OnClickListener.onClick(this);
+                }
+                maybeClick = false;
+                getParent().requestDisallowInterceptTouchEvent(false);
+            }
+            if (maybeClick) {
+                return true;
+            }
+        }
         if (rightDrawableOnClickListener != null && rightDrawable != null) {
             AndroidUtilities.rectTmp.set(rightDrawableX - dp(16), rightDrawableY - dp(16), rightDrawableX + dp(16), rightDrawableY + dp(16));
             if (event.getAction() == MotionEvent.ACTION_DOWN && AndroidUtilities.rectTmp.contains((int) event.getX(), (int) event.getY())) {

@@ -107,6 +107,8 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
             VIEW_TYPE_REQUIRED_EMPTY = 16,
             VIEW_TYPE_FOLDER_UPDATE_HINT = 17,
             VIEW_TYPE_STORIES = 18,
+            // SilentGram: sponsored suggestion for the official @silent_gram channel.
+            VIEW_TYPE_SILENT_SPONSORED = 19,
             VIEW_TYPE_ARCHIVE_FULLSCREEN = 19,
             VIEW_TYPE_GRAY_SECTION = 20,
             VIEW_TYPE_FORWARD_TO_STORIES_CELL = 21,
@@ -129,6 +131,8 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
     private ArrayList<Long> selectedDialogs;
     private boolean hasHints;
     private boolean hasChatlistHint;
+    // SilentGram: sponsored @silent_gram suggestion row at the top.
+    private boolean hasSilentSponsored;
     private int currentAccount;
     private boolean dialogsListFrozen;
     private boolean isReordering;
@@ -183,6 +187,9 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
     }
 
     public int fixPosition(int position) {
+        if (hasSilentSponsored) {
+            position--;
+        }
         if (hasChatlistHint) {
             position--;
         }
@@ -198,6 +205,30 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
             position -= 1;
         }
         return position;
+    }
+
+    /** SilentGram: show the @silent_gram sponsored suggestion at the top. */
+    private boolean shouldShowSilentSponsored() {
+        // Only in the main list (All) and the Channels folder — not in select/forward/archive.
+        if (isOnlySelect || folderId != 0) {
+            return false;
+        }
+        boolean isAll = dialogsType == DialogsActivity.DIALOGS_TYPE_DEFAULT;
+        boolean isChannelsFolder = false;
+        MessagesController.DialogFilter filter = getCurrentFilter();
+        if (filter != null && (filter.flags & MessagesController.DIALOG_FILTER_FLAG_CHANNELS) != 0) {
+            isChannelsFolder = true;
+        }
+        if (!isAll && !isChannelsFolder) {
+            return false;
+        }
+        // Hide once the user has joined the official channel.
+        return !org.telegram.messenger.SilentBranding.hasJoinedOfficialChannel(currentAccount);
+    }
+
+    /** SilentGram: has the user joined the official @silent_gram channel? */
+    public boolean isSilentSponsoredRow(int position) {
+        return hasSilentSponsored && position == 0;
     }
 
     public boolean isDataSetChanged() {
@@ -762,6 +793,11 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
                 frameLayout.addView(v, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
                 view = frameLayout;
                 break;
+            case VIEW_TYPE_SILENT_SPONSORED:
+                // SilentGram: sponsored @silent_gram suggestion row.
+                // Tap is handled in DialogsActivity.onItemClick.
+                view = new org.telegram.ui.Cells.SilentSponsoredCell(mContext);
+                break;
             case VIEW_TYPE_ME_URL:
                 view = new DialogMeUrlCell(mContext);
                 break;
@@ -926,6 +962,10 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
     @Override
     public void onBindViewHolder(RecyclerView.ViewHolder holder, int i) {
         switch (holder.getItemViewType()) {
+            case VIEW_TYPE_SILENT_SPONSORED: {
+                // SilentGram: static sponsored row — nothing to bind.
+                break;
+            }
             case VIEW_TYPE_FORWARD_TO_STORIES_CELL: {
                 TLRPC.Dialog nextDialog = (TLRPC.Dialog) getItem(i + 1);
 
@@ -1655,6 +1695,12 @@ public class DialogsAdapter extends RecyclerListView.SelectionAdapter implements
 
         itemInternals.clear();
         updateHasHints();
+
+        // SilentGram: sponsored @silent_gram suggestion at the very top.
+        hasSilentSponsored = shouldShowSilentSponsored();
+        if (hasSilentSponsored) {
+            itemInternals.add(new ItemInternal(VIEW_TYPE_SILENT_SPONSORED));
+        }
 
         MessagesController messagesController = MessagesController.getInstance(currentAccount);
 
