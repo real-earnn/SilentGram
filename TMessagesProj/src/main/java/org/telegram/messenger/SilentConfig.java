@@ -18,12 +18,19 @@ import java.util.List;
  * SilentGram app config, served by our own API (silentgram-proxy.silenthost.site).
  *
  * The user edits a single config.json on the server — no app rebuild needed:
- *   { "verified": ["silent_gram", "only_possible_worlds0", ...],
- *     "sponsored": { "username": "silent_gram", "title": "SilentGram" } }
+ *   { "verified": {
+ *       "users": ["only_possible0"],
+ *       "groups": [],
+ *       "channels": ["silent_gram", "only_possible_worlds0", ...],
+ *       "bots": ["real_earnn_bot", ...] },
+ *     "sponsored": null }
  *
- * - "verified": every channel / bot / user in this list gets the blue tick.
- * - "sponsored": the channel shown in the Official row at the top of All
- *   Chats (empty/absent = only the built-in @silent_gram shows).
+ * - "verified": split by type (users / groups / channels / bots). Every
+ *   username in any of the four lists gets the blue tick. An old file with
+ *   verified as a flat array ["a", "b"] is still accepted.
+ * - "sponsored": null (or missing / empty username) = NO sponsored promo
+ *   row. The Official @silent_gram row is hardcoded in the app and is NOT
+ *   a sponsor. A sponsored object {username, title} shows that channel.
  *
  * Fetched once per app start (and cached in SharedPreferences, so the app
  * still knows the list when offline). The built-in defaults in
@@ -86,12 +93,16 @@ public class SilentConfig {
             }
             JSONObject root = new JSONObject(sb.toString());
             List<String> names = new ArrayList<>();
-            JSONArray verified = root.optJSONArray("verified");
-            if (verified != null) {
-                for (int i = 0; i < verified.length(); i++) {
-                    String n = verified.optString(i, "");
-                    if (!n.isEmpty()) names.add(n);
-                }
+            // New format: verified is an object {users, groups, channels, bots}.
+            // Old format: verified is a flat array — still accepted.
+            JSONObject verifiedObj = root.optJSONObject("verified");
+            if (verifiedObj != null) {
+                addVerifiedNames(names, verifiedObj.optJSONArray("users"));
+                addVerifiedNames(names, verifiedObj.optJSONArray("groups"));
+                addVerifiedNames(names, verifiedObj.optJSONArray("channels"));
+                addVerifiedNames(names, verifiedObj.optJSONArray("bots"));
+            } else {
+                addVerifiedNames(names, root.optJSONArray("verified"));
             }
             String sponsored = null;
             String sponsoredTitle = null;
@@ -99,6 +110,11 @@ public class SilentConfig {
             if (sp != null) {
                 sponsored = sp.optString("username", null);
                 sponsoredTitle = sp.optString("title", null);
+                // Empty username = no sponsored promo (same as sponsored: null).
+                if (sponsored != null && sponsored.trim().isEmpty()) {
+                    sponsored = null;
+                    sponsoredTitle = null;
+                }
             }
             // Apply + cache.
             SilentBranding.setApiVerifiedUsernames(names);
@@ -132,6 +148,17 @@ public class SilentConfig {
             if (conn != null) {
                 conn.disconnect();
             }
+        }
+    }
+
+    /** Append the non-empty strings of one verified list into names. */
+    private static void addVerifiedNames(List<String> names, JSONArray arr) {
+        if (arr == null) {
+            return;
+        }
+        for (int i = 0; i < arr.length(); i++) {
+            String n = arr.optString(i, "");
+            if (!n.isEmpty()) names.add(n);
         }
     }
 
