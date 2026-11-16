@@ -122,7 +122,7 @@
     <string name="SilentAutoDownloadEmpty">No chats yet.</string>
     <string name="SilentAutoDownloadAlways">Always download</string>
     <string name="SilentAutoDownloadNever">Never download</string>
-    <string name="SilentAutoDownloadNormal">Normal (Telegram settings)</string>
+    <string name="SilentAutoDownloadNormal">Normal (SilentGram settings)</string>
     <string name="SilentRemindMe">Remind me</string>
     <string name="SilentRemind1h">In 1 hour</string>
     <string name="SilentRemind3h">In 3 hours</string>
