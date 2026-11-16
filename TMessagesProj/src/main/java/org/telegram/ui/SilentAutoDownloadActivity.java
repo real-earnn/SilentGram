@@ -75,8 +75,10 @@ public class SilentAutoDownloadActivity extends BaseFragment {
     private void reload() {
         dialogs.clear();
         MessagesController mc = MessagesController.getInstance(currentAccount);
-        if (mc.dialogs != null) {
-            for (TLRPC.Dialog d : mc.dialogs) {
+        // dialogs_dict holds every dialog by id (there is no plain `dialogs` list).
+        if (mc.dialogs_dict != null) {
+            for (int i = 0; i < mc.dialogs_dict.size(); i++) {
+                TLRPC.Dialog d = mc.dialogs_dict.valueAt(i);
                 if (d != null && d.id != 0) {
                     dialogs.add(d);
                 }
@@ -145,7 +147,7 @@ public class SilentAutoDownloadActivity extends BaseFragment {
             cell.setOnClickListener(v -> {
                 int next = (rule + 1) % 3;
                 SilentAutoDownload.setRule(did, next);
-                AndroidUtilities.showToast(getParentActivity(), name + ": " + ruleLabel(next));
+                android.widget.Toast.makeText(getParentActivity(), name + ": " + ruleLabel(next), android.widget.Toast.LENGTH_SHORT).show();
                 notifyDataSetChanged();
             });
         }

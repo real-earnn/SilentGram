@@ -113,10 +113,10 @@ public class SilentChatLockActivity extends BaseFragment {
             String pin = pinField.getText().toString().trim();
             if (pin.length() == 6) {
                 SilentChatLock.setPin(pin);
-                AndroidUtilities.showToast(context, LocaleController.getString(R.string.SilentChatLockPinSaved));
+                android.widget.Toast.makeText(context, LocaleController.getString(R.string.SilentChatLockPinSaved), android.widget.Toast.LENGTH_SHORT).show();
                 reload();
             } else {
-                AndroidUtilities.showToast(context, LocaleController.getString(R.string.SilentChatLockPinMustBe6));
+                android.widget.Toast.makeText(context, LocaleController.getString(R.string.SilentChatLockPinMustBe6), android.widget.Toast.LENGTH_SHORT).show();
             }
         });
         builder.setNegativeButton(LocaleController.getString(R.string.Cancel), null);

@@ -36,11 +36,11 @@ public class SilentVoiceTranscribe {
         if (audioFile == null || !audioFile.exists()) {
             // Download it first, then transcribe.
             FileLoader.getInstance(account).loadFile(msg.getDocument(), msg, FileLoader.PRIORITY_HIGH, 0);
-            AndroidUtilities.showToast(context, LocaleController.getString(R.string.SilentTranscribeDownloading));
+            android.widget.Toast.makeText(context, LocaleController.getString(R.string.SilentTranscribeDownloading), android.widget.Toast.LENGTH_SHORT).show();
             return;
         }
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-            AndroidUtilities.showToast(context, LocaleController.getString(R.string.SilentTranscribeUnavailable));
+            android.widget.Toast.makeText(context, LocaleController.getString(R.string.SilentTranscribeUnavailable), android.widget.Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -148,7 +148,7 @@ public class SilentVoiceTranscribe {
                 recognizer.destroy();
             } catch (Exception ignored) {
             }
-            AndroidUtilities.showToast(context, LocaleController.getString(R.string.SilentTranscribeFailed));
+            android.widget.Toast.makeText(context, LocaleController.getString(R.string.SilentTranscribeFailed), android.widget.Toast.LENGTH_SHORT).show();
             dialog.dismiss();
         }
     }

@@ -2,6 +2,7 @@ package org.telegram.messenger;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.telegram.tgnet.TLRPC;
 
 import java.util.ArrayList;
 import java.util.Iterator;

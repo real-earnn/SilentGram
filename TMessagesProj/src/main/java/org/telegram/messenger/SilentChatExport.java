@@ -5,7 +5,7 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Environment;
 
-import org.telegram.sqlite.SQLiteCursor;
+import org.telegram.SQLite.SQLiteCursor;
 import org.telegram.tgnet.NativeByteBuffer;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.BaseFragment;
@@ -37,7 +37,7 @@ public class SilentChatExport {
         if (context == null) {
             return;
         }
-        AndroidUtilities.showToast(context, LocaleController.getString(R.string.SilentExportWorking));
+        android.widget.Toast.makeText(context, LocaleController.getString(R.string.SilentExportWorking), android.widget.Toast.LENGTH_SHORT).show();
         MessagesStorage.getInstance(account).getStorageQueue().postRunnable(() -> {
             ArrayList<ExportMsg> msgs = new ArrayList<>();
             try {
@@ -115,10 +115,10 @@ public class SilentChatExport {
             final File outFile = file;
             AndroidUtilities.runOnUIThread(() -> {
                 if (!done) {
-                    AndroidUtilities.showToast(context, LocaleController.getString(R.string.SilentExportFailed));
+                    android.widget.Toast.makeText(context, LocaleController.getString(R.string.SilentExportFailed), android.widget.Toast.LENGTH_SHORT).show();
                     return;
                 }
-                AndroidUtilities.showToast(context, LocaleController.getString(R.string.SilentExportDone) + " " + fileName);
+                android.widget.Toast.makeText(context, LocaleController.getString(R.string.SilentExportDone) + " " + fileName, android.widget.Toast.LENGTH_SHORT).show();
                 // Offer to share/open the file.
                 try {
                     Intent intent = new Intent(Intent.ACTION_SEND);

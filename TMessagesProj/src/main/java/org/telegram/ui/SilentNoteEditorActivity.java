@@ -13,6 +13,7 @@ import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SilentNotes;
 import org.telegram.ui.ActionBar.ActionBar;
+import org.telegram.ui.ActionBar.ActionBarMenu;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Components.LayoutHelper;
@@ -131,7 +132,7 @@ public class SilentNoteEditorActivity extends BaseFragment {
 
     private void save() {
         SilentNotes.saveNote(getParentActivity(), userId, chatName, noteField.getText().toString(), remindAt);
-        AndroidUtilities.showToast(getParentActivity(), LocaleController.getString(R.string.SilentNoteSaved));
+        android.widget.Toast.makeText(getParentActivity(), LocaleController.getString(R.string.SilentNoteSaved), android.widget.Toast.LENGTH_SHORT).show();
         finishFragment();
     }
 }

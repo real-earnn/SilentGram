@@ -15,7 +15,7 @@ import org.telegram.messenger.MessagesStorage;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SilentMessageHistory;
 import org.telegram.messenger.UserConfig;
-import org.telegram.sqlite.SQLiteCursor;
+import org.telegram.SQLite.SQLiteCursor;
 import org.telegram.tgnet.NativeByteBuffer;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.ActionBar;

@@ -3877,14 +3877,14 @@ public class ChatActivity extends BaseFragment implements
                     if (dialog_id != 0) {
                         if (org.telegram.messenger.SilentChatLock.isLocked(dialog_id)) {
                             org.telegram.messenger.SilentChatLock.setLocked(dialog_id, false);
-                            AndroidUtilities.showToast(getParentActivity(), LocaleController.getString(R.string.SilentChatLockRemoved));
+                            android.widget.Toast.makeText(getParentActivity(), LocaleController.getString(R.string.SilentChatLockRemoved), android.widget.Toast.LENGTH_SHORT).show();
                         } else {
                             if (!org.telegram.messenger.SilentChatLock.hasPin()) {
                                 presentFragment(new SilentChatLockActivity());
-                                AndroidUtilities.showToast(getParentActivity(), LocaleController.getString(R.string.SilentChatLockSetPinFirst));
+                                android.widget.Toast.makeText(getParentActivity(), LocaleController.getString(R.string.SilentChatLockSetPinFirst), android.widget.Toast.LENGTH_SHORT).show();
                             } else {
                                 org.telegram.messenger.SilentChatLock.setLocked(dialog_id, true);
-                                AndroidUtilities.showToast(getParentActivity(), LocaleController.getString(R.string.SilentChatLockAdded));
+                                android.widget.Toast.makeText(getParentActivity(), LocaleController.getString(R.string.SilentChatLockAdded), android.widget.Toast.LENGTH_SHORT).show();
                             }
                         }
                     }
@@ -10280,7 +10280,7 @@ public class ChatActivity extends BaseFragment implements
             if (org.telegram.messenger.SilentChatLock.checkPin(pin)) {
                 unlockSilentChat();
             } else {
-                AndroidUtilities.showToast(context, LocaleController.getString(R.string.SilentChatLockWrongPin));
+                android.widget.Toast.makeText(context, LocaleController.getString(R.string.SilentChatLockWrongPin), android.widget.Toast.LENGTH_SHORT).show();
                 pinField.setText("");
             }
         });
@@ -10374,7 +10374,7 @@ public class ChatActivity extends BaseFragment implements
         builder.setTitle(LocaleController.getString(R.string.SilentRemindMe));
         builder.setItems(items, (d, which) -> {
             org.telegram.messenger.SilentReminders.addReminder(context, dialog_id, msg.getId(), body, name, times[which]);
-            AndroidUtilities.showToast(context, items[which]);
+            android.widget.Toast.makeText(context, items[which], android.widget.Toast.LENGTH_SHORT).show();
         });
         builder.show();
     }

@@ -845,7 +845,7 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         // feature (Developer, Templates, Downloads, Bot Tester, Deleted
         // Chats, History, Scheduled, Chat Lock, Auto-download, Notes) lives
         // inside it.
-        items.add(SettingCell.Factory.of(30, IconBackgroundColors.VIOLET.top, IconBackgroundColors.VIOLET.bottom, R.drawable.settings_gram_24, "SilentGram"));
+        items.add(SettingCell.Factory.of(30, IconBackgroundColors.PURPLE.top, IconBackgroundColors.PURPLE.bottom, R.drawable.settings_gram_24, "SilentGram"));
 
         if (SharedSettings.experimentalSettingsAllowed.get()) {
             items.add(UItem.asShadow(null));

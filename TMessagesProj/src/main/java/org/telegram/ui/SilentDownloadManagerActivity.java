@@ -139,7 +139,7 @@ public class SilentDownloadManagerActivity extends BaseFragment {
             cell.setTextAndValue(name, LocaleController.getString(R.string.SilentBoostDownload), true);
             cell.setOnClickListener(v -> {
                 boostFile(currentAccount, msg);
-                AndroidUtilities.showToast(getParentActivity(), LocaleController.getString(R.string.SilentDownloadBoosted));
+                android.widget.Toast.makeText(getParentActivity(), LocaleController.getString(R.string.SilentDownloadBoosted), android.widget.Toast.LENGTH_SHORT).show();
                 reload();
             });
         }

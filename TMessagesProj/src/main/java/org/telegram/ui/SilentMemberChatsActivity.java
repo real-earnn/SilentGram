@@ -265,22 +265,23 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
         if (isChannel || chat.megagroup) {
             TLRPC.TL_channels_editBanned req = new TLRPC.TL_channels_editBanned();
             req.channel = mc.getInputChannel(-chat.id);
-            req.participant = mc.getInputUser(userId);
+            // participant is an InputPeer (not InputUser).
+            req.participant = MessagesController.getInputPeer(mc.getUser(userId));
             TLRPC.TL_chatBannedRights rights = new TLRPC.TL_chatBannedRights();
             if (action.equals("ban")) {
                 rights.view_messages = true;
-                req.until_date = 0; // permanent ban
+                rights.until_date = 0; // permanent ban
             } else if (action.equals("mute")) {
                 rights.send_messages = true;
-                req.until_date = 0; // permanent mute
+                rights.until_date = 0; // permanent mute
             } else { // remove (kick): 1-minute ban = removed, can rejoin after
                 rights.view_messages = true;
-                req.until_date = (int) (System.currentTimeMillis() / 1000) + 60;
+                rights.until_date = (int) (System.currentTimeMillis() / 1000) + 60;
             }
             req.banned_rights = rights;
             ConnectionsManager.getInstance(currentAccount).sendRequest(req, (res, err) -> {
                 if (err != null) {
-                    AndroidUtilities.runOnUIThread(() -> AndroidUtilities.showToast(getParentActivity(), err.text));
+                    AndroidUtilities.runOnUIThread(() -> android.widget.Toast.makeText(getParentActivity(), err.text, android.widget.Toast.LENGTH_SHORT).show());
                 }
             });
         } else {
@@ -290,7 +291,7 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
             req.user_id = mc.getInputUser(userId);
             ConnectionsManager.getInstance(currentAccount).sendRequest(req, (res, err) -> {
                 if (err != null) {
-                    AndroidUtilities.runOnUIThread(() -> AndroidUtilities.showToast(getParentActivity(), err.text));
+                    AndroidUtilities.runOnUIThread(() -> android.widget.Toast.makeText(getParentActivity(), err.text, android.widget.Toast.LENGTH_SHORT).show());
                 }
             });
         }

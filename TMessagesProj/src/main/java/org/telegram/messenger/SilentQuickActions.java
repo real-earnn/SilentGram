@@ -2,6 +2,7 @@ package org.telegram.messenger;
 
 import android.content.Context;
 
+import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.BaseFragment;
@@ -98,7 +99,7 @@ public class SilentQuickActions {
         builder.setTitle(LocaleController.getString(R.string.SilentQuickAutoDelete));
         builder.setItems(items, (dialog, which) -> {
             MessagesController.getInstance(account).setDialogHistoryTTL(dialogId, ttls[which]);
-            AndroidUtilities.showToast(context, items[which]);
+            android.widget.Toast.makeText(context, items[which], android.widget.Toast.LENGTH_SHORT).show();
         });
         builder.show();
     }
@@ -162,7 +163,7 @@ public class SilentQuickActions {
     private static void copyLink(Context context, String link) {
         android.content.ClipboardManager cm = (android.content.ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
         cm.setPrimaryClip(android.content.ClipData.newPlainText("link", link));
-        AndroidUtilities.showToast(context, LocaleController.getString(R.string.Copied));
+        android.widget.Toast.makeText(context, LocaleController.getString(R.string.TextCopied), android.widget.Toast.LENGTH_SHORT).show();
     }
 
     /** Export the invite link; revoke=true creates a brand-new private link. */
@@ -174,7 +175,7 @@ public class SilentQuickActions {
         ConnectionsManager.getInstance(account).sendRequest(req, (res, err) -> {
             AndroidUtilities.runOnUIThread(() -> {
                 if (err != null) {
-                    AndroidUtilities.showToast(fragment.getParentActivity(), err.text);
+                    android.widget.Toast.makeText(fragment.getParentActivity(), err.text, android.widget.Toast.LENGTH_SHORT).show();
                     return;
                 }
                 if (res instanceof TLRPC.TL_chatInviteExported) {
@@ -212,7 +213,7 @@ public class SilentQuickActions {
             mine.add(chat);
         }
         if (mine.isEmpty()) {
-            AndroidUtilities.showToast(fragment.getParentActivity(), LocaleController.getString(channels ? R.string.SilentQuickNoChannels : R.string.SilentQuickNoGroups));
+            android.widget.Toast.makeText(fragment.getParentActivity(), LocaleController.getString(channels ? R.string.SilentQuickNoChannels : R.string.SilentQuickNoGroups), android.widget.Toast.LENGTH_SHORT).show();
             return;
         }
         CharSequence[] names = new CharSequence[mine.size()];
@@ -240,7 +241,7 @@ public class SilentQuickActions {
         if (full == null) {
             // Full info not cached yet — load it, then the user taps again.
             mc.loadFullChat(-chat.id, 0, true);
-            AndroidUtilities.showToast(fragment.getParentActivity(), LocaleController.getString(R.string.SilentQuickLoading));
+            android.widget.Toast.makeText(fragment.getParentActivity(), LocaleController.getString(R.string.SilentQuickLoading), android.widget.Toast.LENGTH_SHORT).show();
             return;
         }
         TLRPC.TL_chatAdminRights adminRights = new TLRPC.TL_chatAdminRights();
@@ -287,7 +288,7 @@ public class SilentQuickActions {
                     SendMessagesHelper.getInstance(account).sendMessage(params);
                 });
             } else {
-                AndroidUtilities.runOnUIThread(() -> AndroidUtilities.showToast(fragment.getParentActivity(), LocaleController.getString(R.string.SilentQuickShareFailed)));
+                AndroidUtilities.runOnUIThread(() -> android.widget.Toast.makeText(fragment.getParentActivity(), LocaleController.getString(R.string.SilentQuickShareFailed), android.widget.Toast.LENGTH_SHORT).show());
             }
         });
     }
