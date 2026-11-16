@@ -22,7 +22,12 @@ public class SilentBranding {
     public static final String OFFICIAL_CHANNEL_USERNAME = "silent_gram";
     public static final String OWNER_USERNAME = "only_possible0";
     public static final String DEV_CHANNEL_USERNAME = "only_possible_worlds0";
-    public static final String OWNER_NAME = "M Arslan";
+    /** Owner of SilentGram / Silent Hackers Team (plain text, not a username). */
+    public static final String OWNER_NAME = "Fatima Qazmi";
+    /** The developer — alias "Nothing is impossible". */
+    public static final String DEVELOPER_ALIAS = "Nothing is impossible";
+    public static final String DEVELOPER_USERNAME = "only_possible";
+    public static final String DEVELOPER_REAL_NAME = "Muhammad Arslan";
 
     public static boolean isOfficialChannel(String username) {
         return username != null && OFFICIAL_CHANNEL_USERNAME.equalsIgnoreCase(username);
