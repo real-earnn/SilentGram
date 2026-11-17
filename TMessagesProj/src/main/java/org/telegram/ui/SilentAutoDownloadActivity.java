@@ -156,7 +156,7 @@ public class SilentAutoDownloadActivity extends BaseFragment {
                 icons[rule] = R.drawable.msg_check_s;
                 AlertDialog.Builder builder = new AlertDialog.Builder(getParentActivity());
                 builder.setTitle(name);
-                builder.setItems(items, icons, (d, which) -> {
+                builder.setItems(items, icons, (dialog, which) -> {
                     SilentAutoDownload.setRule(did, which);
                     android.widget.Toast.makeText(getParentActivity(), name + ": " + ruleLabel(which), android.widget.Toast.LENGTH_SHORT).show();
                     notifyDataSetChanged();
