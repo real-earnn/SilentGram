@@ -805,7 +805,6 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         // (SilentMessageHistory / SilentDeletedChatsActivity) stays.
         items.add(UItem.asHeader(LocaleController.getString(R.string.SilentSettingsHeader)));
         items.add(SettingCell.Factory.of(31, IconBackgroundColors.BLUE_DEEP.top, IconBackgroundColors.BLUE_DEEP.bottom, R.drawable.msg_bot, LocaleController.getString(R.string.SilentBotTesterTitle), LocaleController.getString(R.string.SilentMenuBotTesterSub)));
-        items.add(SettingCell.Factory.of(32, IconBackgroundColors.GREEN.top, IconBackgroundColors.GREEN.bottom, R.drawable.msg_download, LocaleController.getString(R.string.SilentDownloadManagerTitle), LocaleController.getString(R.string.SilentMenuDownloadsSub)));
         items.add(SettingCell.Factory.of(33, IconBackgroundColors.ORANGE.top, IconBackgroundColors.ORANGE.bottom, R.drawable.msg_saved, LocaleController.getString(R.string.SilentTemplatesTitle), LocaleController.getString(R.string.SilentMenuTemplatesSub)));
         items.add(SettingCell.Factory.of(34, IconBackgroundColors.BLUE_ALT.top, IconBackgroundColors.BLUE_ALT.bottom, R.drawable.msg_media, LocaleController.getString(R.string.SilentAutoDownloadTitle), LocaleController.getString(R.string.SilentMenuAutoDownloadSub)));
         items.add(SettingCell.Factory.of(35, IconBackgroundColors.CYAN.top, IconBackgroundColors.CYAN.bottom, R.drawable.msg_calendar, LocaleController.getString(R.string.SilentScheduledTitle), LocaleController.getString(R.string.SilentMenuScheduledSub)));
@@ -997,9 +996,6 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
             // its activity directly, same targets as SilentGramMenuActivity.
             case 31:
                 presentFragment(new SilentBotTesterActivity());
-                break;
-            case 32:
-                presentFragment(new SilentDownloadManagerActivity());
                 break;
             case 33:
                 presentFragment(new SilentTemplatesActivity());

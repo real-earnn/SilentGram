@@ -1295,7 +1295,6 @@ public class ChatActivity extends BaseFragment implements
     public final static int OPTION_SILENT_TRANSLATE = 202;
     public final static int OPTION_SILENT_SAVE_TO_SAVED = 203;
     public final static int OPTION_SILENT_STICKER_RESIZE = 204;
-    public final static int OPTION_SILENT_BOOST_DOWNLOAD = 205;
     public final static int OPTION_SILENT_FORWARD_ACCOUNT = 206;
     public final static int OPTION_SILENT_REMIND_ME = 207;
     public final static int OPTION_SILENT_TRANSCRIBE = 208;
@@ -35372,14 +35371,6 @@ public class ChatActivity extends BaseFragment implements
                 }
                 break;
             }
-            case OPTION_SILENT_BOOST_DOWNLOAD: {
-                // SilentGram E6: boost this download to the highest priority.
-                if (selectedObject != null) {
-                    org.telegram.ui.SilentDownloadManagerActivity.boostFile(currentAccount, selectedObject);
-                    BulletinFactory.of(this).createSimpleBulletin(R.drawable.msg_download, LocaleController.getString(R.string.SilentDownloadBoosted)).show();
-                }
-                break;
-            }
             case OPTION_SILENT_FORWARD_ACCOUNT: {
                 // SilentGram E9: forward this message from another account.
                 ArrayList<MessageObject> toForward = new ArrayList<>();
@@ -48021,15 +48012,6 @@ public class ChatActivity extends BaseFragment implements
                         items.add(LocaleController.getString(R.string.SilentStickerResize));
                         options.add(OPTION_SILENT_STICKER_RESIZE);
                         icons.add(R.drawable.msg_expand);
-                    }
-                    // SilentGram E6: boost a downloading file to top priority.
-                    if (selectedObject.getDocument() != null || selectedObject.isPhoto() || selectedObject.isVideo()) {
-                        String fileName = selectedObject.getFileName();
-                        if (fileName != null && FileLoader.getInstance(currentAccount).isLoadingFile(fileName)) {
-                            items.add(LocaleController.getString(R.string.SilentBoostDownload));
-                            options.add(OPTION_SILENT_BOOST_DOWNLOAD);
-                            icons.add(R.drawable.msg_download);
-                        }
                     }
                     // SilentGram E9: forward this message from another account.
                     items.add(LocaleController.getString(R.string.SilentForwardToAccount));

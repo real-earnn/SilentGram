@@ -1358,12 +1358,6 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     int buttonPressed;
     int videoButtonPressed;
     int miniButtonPressed;
-    int silentBoostPressed;
-    // SilentGram K1: literal "BOOST" text drawn right after the file-size
-    // text on a downloading document row (replaces the old icon badge next
-    // to the download icon). Its view-space bounds, for tap detection.
-    private final RectF silentBoostTextRect = new RectF();
-    private boolean silentBoostTextVisible;
     int otherX;
     int otherY;
     private int lastWidth;
@@ -3485,11 +3479,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 area2 = x >= buttonX + offset && x <= buttonX + offset + side && y >= buttonY + offset && y <= buttonY + offset + side;
             }
             boolean allowClickButtons = currentMessageObject == null || !currentMessageObject.hasMediaSpoilers() || currentMessageObject.isMediaSpoilersRevealed || buttonState == 1;
-            if (isInSilentBoostArea(x, y) && allowClickButtons) {
-                silentBoostPressed = 1;
-                invalidate();
-                result = true;
-            } else if (area2) {
+            if (area2) {
                 miniButtonPressed = 1;
                 invalidate();
                 result = true;
@@ -3562,11 +3552,6 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     playSoundEffect(SoundEffectConstants.CLICK);
                     didPressMiniButton(true);
                     invalidate();
-                } else if (silentBoostPressed == 1) {
-                    silentBoostPressed = 0;
-                    playSoundEffect(SoundEffectConstants.CLICK);
-                    didPressSilentBoost();
-                    invalidate();
                 } else if (imagePressed) {
                     imagePressed = false;
                     if (buttonState == -1 || buttonState == 1 && isRoundVideo || buttonState == 2 || buttonState == 3 || drawVideoImageButton) {
@@ -3627,11 +3612,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 }
             }
             if (event.getAction() == MotionEvent.ACTION_DOWN) {
-                if (isInSilentBoostArea(x, y)) {
-                    silentBoostPressed = 1;
-                    invalidate();
-                    result = true;
-                } else if (area || area2) {
+                if (area || area2) {
                     if (area) {
                         buttonPressed = 1;
                     } else {
@@ -3667,21 +3648,6 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 } else if (event.getAction() == MotionEvent.ACTION_MOVE) {
                     if (!area2) {
                         miniButtonPressed = 0;
-                        invalidate();
-                    }
-                }
-            } else if (silentBoostPressed != 0) {
-                if (event.getAction() == MotionEvent.ACTION_UP) {
-                    silentBoostPressed = 0;
-                    playSoundEffect(SoundEffectConstants.CLICK);
-                    didPressSilentBoost();
-                    invalidate();
-                } else if (event.getAction() == MotionEvent.ACTION_CANCEL) {
-                    silentBoostPressed = 0;
-                    invalidate();
-                } else if (event.getAction() == MotionEvent.ACTION_MOVE) {
-                    if (!isInSilentBoostArea(x, y)) {
-                        silentBoostPressed = 0;
                         invalidate();
                     }
                 }
@@ -6762,7 +6728,6 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             buttonPressed = 0;
             additionalTimeOffsetY = 0;
             miniButtonPressed = 0;
-            silentBoostPressed = 0;
             pressedBotButton = -1;
             pressedVoteButton = -1;
             pollHintPressed = false;
@@ -10984,10 +10949,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         }
         resetPressedLink(-1);
         resetCompactHeaderPressed();
-        if (buttonPressed != 0 || miniButtonPressed != 0 || silentBoostPressed != 0 || videoButtonPressed != 0 || pressedBotButton != -1) {
+        if (buttonPressed != 0 || miniButtonPressed != 0 || videoButtonPressed != 0 || pressedBotButton != -1) {
             buttonPressed = 0;
             miniButtonPressed = 0;
-            silentBoostPressed = 0;
             videoButtonPressed = 0;
             pressedBotButton = -1;
             invalidate();
@@ -13613,29 +13577,10 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 if (infoLayout != null) {
                     canvas.save();
                     canvas.translate(x, subtitleY);
-                    StaticLayout silentBoostAnchorLayout;
                     if (buttonState == 1 && loadingProgressLayout != null) {
                         loadingProgressLayout.draw(canvas);
-                        silentBoostAnchorLayout = loadingProgressLayout;
                     } else {
                         infoLayout.draw(canvas);
-                        silentBoostAnchorLayout = infoLayout;
-                    }
-                    // SilentGram K1: literal "BOOST" right after the
-                    // file-size text (e.g. "14 MB", or "3.2 MB / 14 MB"
-                    // while downloading). Tapping it boost-downloads
-                    // this file (see isInSilentBoostArea).
-                    silentBoostTextVisible = false;
-                    if (isSilentBoostVisible() && silentBoostAnchorLayout.getLineCount() > 0) {
-                        float anchorWidth = silentBoostAnchorLayout.getLineLeft(0) + silentBoostAnchorLayout.getLineWidth(0);
-                        float boostX = anchorWidth + dp(8);
-                        Theme.chat_infoBoldPaint.setColor(getThemedColor(currentMessageObject.isOutOwner() ? Theme.key_chat_outLoader : Theme.key_chat_inLoader));
-                        Theme.chat_infoBoldPaint.setAlpha((int) (255 * controlsAlpha));
-                        canvas.drawText("BOOST", boostX, silentBoostAnchorLayout.getLineBaseline(0), Theme.chat_infoBoldPaint);
-                        float boostW = Theme.chat_infoBoldPaint.measureText("BOOST");
-                        silentBoostTextRect.set(x + boostX - dp(2), subtitleY, x + boostX + boostW + dp(4), subtitleY + dp(16));
-                        silentBoostTextVisible = true;
-                        Theme.chat_infoBoldPaint.setAlpha(255);
                     }
                     canvas.restore();
                 }
@@ -15314,41 +15259,6 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             radialProgress.setMiniIcon(getMiniIconForCurrentState(), false, true);
             invalidate();
         }
-    }
-
-    // SilentGram K1 (replaces the H12 icon badge): the literal word
-    // "BOOST" drawn right after the file-size text ("14 MB") on a file
-    // that is downloading right now, so the user can boost it without
-    // opening the Download Manager. Shown only while FileLoader is
-    // actually loading this message's document, and only when Telegram's
-    // own mini button is not in use (miniButtonState >= 0), so native
-    // behaviour is never disturbed. Photos have no document to
-    // prioritise, so no BOOST text.
-    private boolean isSilentBoostVisible() {
-        if (currentMessageObject == null || currentMessageObject.getDocument() == null || buttonState == -1 || miniButtonState >= 0) {
-            return false;
-        }
-        if (radialProgress == null || radialProgress.getIcon() == MediaActionDrawable.ICON_NONE) {
-            return false;
-        }
-        String fileName = currentMessageObject.getFileName();
-        return !TextUtils.isEmpty(fileName) && FileLoader.getInstance(currentAccount).isLoadingFile(fileName);
-    }
-
-    private boolean isInSilentBoostArea(int x, int y) {
-        if (!isSilentBoostVisible() || !silentBoostTextVisible) {
-            return false;
-        }
-        return silentBoostTextRect.contains(x, y);
-    }
-
-    void didPressSilentBoost() {
-        if (currentMessageObject == null || currentMessageObject.getDocument() == null) {
-            return;
-        }
-        FileLoader.getInstance(currentAccount).changePriority(FileLoader.PRIORITY_HIGH, currentMessageObject.getDocument(), null, null, null, null, null);
-        Toast.makeText(getContext(), getString(R.string.SilentDownloadBoosted), Toast.LENGTH_SHORT).show();
-        invalidate();
     }
 
     void didPressButton(boolean animated, boolean video) {

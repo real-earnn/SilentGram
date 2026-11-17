@@ -41,7 +41,6 @@ public class SilentGramMenuActivity extends BaseFragment {
 
     private static final int ROW_DEVELOPER = 1;
     private static final int ROW_TEMPLATES = 2;
-    private static final int ROW_DOWNLOADS = 3;
     private static final int ROW_BOT_TESTER = 4;
     private static final int ROW_DELETED_CHATS = 5;
     private static final int ROW_HISTORY = 6;
@@ -53,7 +52,6 @@ public class SilentGramMenuActivity extends BaseFragment {
     private final Row[] rows = new Row[]{
             new Row(ROW_DEVELOPER, LocaleController.getString(R.string.SilentDeveloperTitle), LocaleController.getString(R.string.SilentMenuDeveloperSub)),
             new Row(ROW_TEMPLATES, LocaleController.getString(R.string.SilentTemplatesTitle), LocaleController.getString(R.string.SilentMenuTemplatesSub)),
-            new Row(ROW_DOWNLOADS, LocaleController.getString(R.string.SilentDownloadManagerTitle), LocaleController.getString(R.string.SilentMenuDownloadsSub)),
             new Row(ROW_BOT_TESTER, LocaleController.getString(R.string.SilentBotTesterTitle), LocaleController.getString(R.string.SilentMenuBotTesterSub)),
             new Row(ROW_DELETED_CHATS, LocaleController.getString(R.string.SilentDeletedChatsTitle), LocaleController.getString(R.string.SilentMenuDeletedChatsSub)),
             new Row(ROW_HISTORY, LocaleController.getString(R.string.SilentHistoryTitle), LocaleController.getString(R.string.SilentMenuHistorySub)),
@@ -136,9 +134,6 @@ public class SilentGramMenuActivity extends BaseFragment {
                 break;
             case ROW_TEMPLATES:
                 presentFragment(new SilentTemplatesActivity());
-                break;
-            case ROW_DOWNLOADS:
-                presentFragment(new SilentDownloadManagerActivity());
                 break;
             case ROW_BOT_TESTER:
                 presentFragment(new SilentBotTesterActivity());
