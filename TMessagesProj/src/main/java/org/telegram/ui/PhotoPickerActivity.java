@@ -1053,10 +1053,10 @@ public class PhotoPickerActivity extends BaseFragment implements NotificationCen
                 writeButtonDrawable = combinedDrawable;
             }
             writeButton.setBackgroundDrawable(writeButtonDrawable);
-            writeButton.setImageResource(R.drawable.icon_plane);
+            writeButton.setImageResource(R.drawable.icon_plane_crescent);
             writeButton.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             ThemeBind.colorFilter(writeButton, Theme.key_dialogFloatingIcon, PorterDuff.Mode.MULTIPLY);
-            writeButton.setScaleType(ImageView.ScaleType.CENTER_INSIDE); // SilentGram: icon_plane is a 90dp vector, scale it down into the 56dp FAB (was CENTER with the 54dp attach_send webp)
+            writeButton.setScaleType(ImageView.ScaleType.CENTER_INSIDE); // SilentGram: icon_plane_crescent is a 90dp vector, scale it down into the 56dp FAB (was CENTER with the 54dp attach_send webp)
             if (Build.VERSION.SDK_INT >= 21) {
                 writeButton.setOutlineProvider(new ViewOutlineProvider() {
                     @SuppressLint("NewApi")

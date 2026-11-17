@@ -7345,7 +7345,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         videoAvatarTooltip.setTextColor(0xff8c8c8c);
         containerView.addView(videoAvatarTooltip, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.LEFT | Gravity.BOTTOM, 0, 8, 0, 0));
 
-        pickerViewSendButton = new ChatActivityEnterView.SendButton(parentActivity, R.drawable.icon_plane_24, resourcesProvider) {
+        pickerViewSendButton = new ChatActivityEnterView.SendButton(parentActivity, R.drawable.icon_plane_crescent_24, resourcesProvider) {
             @Override
             public boolean isOpen() {
                 return true;
@@ -7451,7 +7451,7 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
 
             final ItemOptions options = ItemOptions.makeOptions(containerView, new DarkThemeResourceProvider(), view)
                 .addIf(showSendAsFile, R.drawable.msg_sendfile, getString(multipleSelected ? R.string.SendAsFiles : R.string.SendAsFile), () -> sendPressed(true, 0, 0, false, true, false))
-                .addIf(canReplace, R.drawable.icon_plane_24, getString(R.string.SendAsNewPhoto), () -> sendPressed(true, 0, 0))
+                .addIf(canReplace, R.drawable.icon_plane_crescent_24, getString(R.string.SendAsNewPhoto), () -> sendPressed(true, 0, 0))
                 .addIf(canReplace, R.drawable.msg_replace, getString(R.string.ReplacePhoto), this::replacePressed)
                 .addIf(showSchedule, R.drawable.msg_calendar2, getString(userIsSelf ? R.string.SetReminder : R.string.ScheduleMessage), this::showScheduleDatePickerDialog)
                 .addIf(showWithoutSound, R.drawable.input_notify_off, getString(R.string.SendWithoutSound), () -> sendPressed(false, 0, 0));
@@ -17101,8 +17101,8 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
         if (pickerViewSendButton != null) {
             FrameLayout.LayoutParams layoutParams2 = (FrameLayout.LayoutParams) pickerViewSendButton.getLayoutParams();
             if (type == 4 || type == 5) {
-                pickerViewSendButton.setResourceId(R.drawable.icon_plane_24);
-//                pickerViewSendButton.setImageResource(R.drawable.send_plane_24);
+                pickerViewSendButton.setResourceId(R.drawable.icon_plane_crescent_24);
+//                pickerViewSendButton.setImageResource(R.drawable.icon_plane_crescent_24);
                 layoutParams2.bottomMargin = dp(1);
             } else if (type == SELECT_TYPE_POLL_MEDIA || type == SELECT_TYPE_POLL_MEDIA_EDIT || type == SELECT_TYPE_AVATAR || type == SELECT_TYPE_WALLPAPER || type == SELECT_TYPE_QR || type == SELECT_TYPE_STICKER) {
 //                pickerViewSendButton.setImageResource(R.drawable.floating_check);
@@ -17110,8 +17110,8 @@ public class PhotoViewer implements NotificationCenter.NotificationCenterDelegat
                 pickerViewSendButton.setPadding(0, dp(1), 0, 0);
                 layoutParams2.bottomMargin = dp(1f);
             } else {
-//                pickerViewSendButton.setImageResource(R.drawable.send_plane_24);
-                pickerViewSendButton.setResourceId(R.drawable.icon_plane_24);
+//                pickerViewSendButton.setImageResource(R.drawable.icon_plane_crescent_24);
+                pickerViewSendButton.setResourceId(R.drawable.icon_plane_crescent_24);
                 layoutParams2.bottomMargin = dp(1);
             }
             pickerViewSendButton.setLayoutParams(layoutParams2);

@@ -2220,7 +2220,7 @@ public class WalletActivity extends UniversalFragment implements NotificationCen
         sendText.setSpan(new ColoredImageSpan(R.drawable.wallet_intro_arrow, ColoredImageSpan.ALIGN_CENTER), sendArrowIndex, sendArrowIndex + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         sendCell.setPadding(dp(0), dp(8), dp(0), dp(8));
         sendCell.set(
-                R.drawable.icon_plane_24,
+                R.drawable.icon_plane_crescent_24,
                 LocaleController.getString(R.string.WalletSend),
                 sendText
         );

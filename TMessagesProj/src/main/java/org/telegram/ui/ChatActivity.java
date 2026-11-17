@@ -1744,6 +1744,12 @@ public class ChatActivity extends BaseFragment implements
     private final static int chat_menu_silent_export = 78;
     private final static int chat_menu_silent_translate_chat = 79;
 
+    // SilentGram H5b: ids of deleted-message tombstones restored from local
+    // history for the current dialog (so a reload never restores the same
+    // tombstone twice). Reset when the dialog changes.
+    private final java.util.HashSet<Integer> silentRestoredTombstoneIds = new java.util.HashSet<>();
+    private long silentRestoredTombstoneDialogId = 0;
+
     private final static int id_chat_compose_panel = 1000;
 
     RecyclerListView.OnItemLongClickListenerExtended onItemLongClickListener = new RecyclerListView.OnItemLongClickListenerExtended() {
@@ -22273,6 +22279,9 @@ public class ChatActivity extends BaseFragment implements
                 dropPhotoAction = action;
             }
         }
+        // SilentGram H5b: restore durable deleted-message tombstones from
+        // local history into this batch before the merge loop places them.
+        silentRestoreDeletedTombstones(messArr, loadIndex);
         for (int a = 0; a < messArr.size(); a++) {
             MessageObject obj = messArr.get(a);
             if (obj.replyMessageObject != null) {
@@ -22512,7 +22521,12 @@ public class ChatActivity extends BaseFragment implements
             } else {
                 obj.stableId = lastStableId++;
             }
-            getMessagesController().getTranslateController().checkTranslation(obj, false);
+            // SilentGram H5b: a tombstone's text is UI chrome ("This message
+            // was deleted"), not user content — never translate it (a
+            // translation would overwrite the delete icon + text).
+            if (!obj.silentTombstone) {
+                getMessagesController().getTranslateController().checkTranslation(obj, false);
+            }
             if (load_type == 1) {
                 messages.add(0, obj);
             } else {
@@ -27626,6 +27640,187 @@ public class ChatActivity extends BaseFragment implements
         icon.setColorKey(obj.isOutOwner() ? Theme.key_chat_messageTextOut : Theme.key_chat_messageTextIn);
         ssb.setSpan(icon, 0, 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         obj.applyNewText(ssb);
+    }
+
+    // SilentGram H5b: durable deleted-message tombstones.
+    //
+    // Telegram deletes the message from ITS server, but our app already saved
+    // the deleted text + arrival time locally (SilentMessageHistory, prefs
+    // msg_history_<dialogId>). When a chat loads, messages from that local
+    // store that are no longer in the DB are rendered back in place as
+    // LOCAL-ONLY tombstones: the delete icon + "This message was deleted"
+    // with the ORIGINAL arrival time (the cell draws the time from
+    // messageOwner.date, exactly like a real message). They are never
+    // written to the DB, never sent anywhere, and never counted as real
+    // messages. Only plain-text deletions we actually saw before they were
+    // deleted can come back (a message never displayed was never cached);
+    // tombstones only appear inside the currently loaded date/id window, so
+    // pagination bounds stay exact. The merge loop below places them exactly
+    // like real messages (date objects, day arrays, stable ids included).
+    private void silentRestoreDeletedTombstones(ArrayList<MessageObject> messArr, int loadIndex) {
+        if (chatMode != MODE_DEFAULT || chatAdapter == null || chatAdapter.isFiltered || currentEncryptedChat != null || dialog_id == 0) {
+            return;
+        }
+        if (loadIndex != 0 || messArr == null || messArr.isEmpty()) {
+            return;
+        }
+        if (silentRestoredTombstoneDialogId != dialog_id) {
+            silentRestoredTombstoneIds.clear();
+            silentRestoredTombstoneDialogId = dialog_id;
+        }
+        java.util.List<org.telegram.messenger.SilentMessageHistory.Entry> history;
+        try {
+            history = org.telegram.messenger.SilentMessageHistory.getHistory(dialog_id);
+        } catch (Exception e) {
+            return;
+        }
+        if (history == null || history.isEmpty()) {
+            return;
+        }
+        // Bounds of the loaded window, from real messages only (this batch
+        // plus whatever was already loaded): id + date.
+        int minId = Integer.MAX_VALUE, maxId = Integer.MIN_VALUE;
+        int minDate = Integer.MAX_VALUE, maxDate = Integer.MIN_VALUE;
+        for (MessageObject o : messArr) {
+            if (o == null || o.messageOwner == null) {
+                continue;
+            }
+            int id = o.getId();
+            if (id > 0) {
+                if (id < minId) minId = id;
+                if (id > maxId) maxId = id;
+            }
+            int d = o.messageOwner.date;
+            if (d != 0) {
+                if (d < minDate) minDate = d;
+                if (d > maxDate) maxDate = d;
+            }
+        }
+        // Normal chats: maxMessageId holds the smallest loaded id,
+        // minMessageId the largest.
+        if (maxMessageId[loadIndex] != Integer.MAX_VALUE && minMessageId[loadIndex] != Integer.MIN_VALUE) {
+            if (maxMessageId[loadIndex] < minId) minId = maxMessageId[loadIndex];
+            if (minMessageId[loadIndex] > maxId) maxId = minMessageId[loadIndex];
+        }
+        if (minDate[loadIndex] != 0 && minDate[loadIndex] < minDate) minDate = minDate[loadIndex];
+        if (maxDate[loadIndex] != Integer.MIN_VALUE && maxDate[loadIndex] > maxDate) maxDate = maxDate[loadIndex];
+        if (minId == Integer.MAX_VALUE || minDate == Integer.MAX_VALUE) {
+            return;
+        }
+        // messArr order, detected from its own first/last elements.
+        boolean descending = true;
+        if (messArr.size() >= 2) {
+            MessageObject first = messArr.get(0), last = messArr.get(messArr.size() - 1);
+            int fd = first.messageOwner != null ? first.messageOwner.date : 0;
+            int ld = last.messageOwner != null ? last.messageOwner.date : 0;
+            if (fd != ld) {
+                descending = fd > ld;
+            } else {
+                descending = first.getId() > last.getId();
+            }
+        }
+        for (org.telegram.messenger.SilentMessageHistory.Entry e : history) {
+            if (e == null || !"deleted".equals(e.kind)) {
+                continue;
+            }
+            if (e.msgId <= 0 || e.text == null || e.text.isEmpty()) {
+                continue;
+            }
+            if (silentRestoredTombstoneIds.contains(e.msgId)) {
+                continue;
+            }
+            if (messagesDict[loadIndex].indexOfKey(e.msgId) >= 0) {
+                continue;
+            }
+            int date = (int) (e.time / 1000);
+            if (date < minDate || date > maxDate) {
+                continue;
+            }
+            if (e.msgId < minId || e.msgId > maxId) {
+                continue;
+            }
+            MessageObject tomb = silentBuildDeletedTombstone(e, date);
+            if (tomb == null) {
+                continue;
+            }
+            int pos = messArr.size();
+            for (int i = 0; i < messArr.size(); i++) {
+                MessageObject o = messArr.get(i);
+                if (o == null || o.messageOwner == null) {
+                    continue;
+                }
+                if (silentCompareMessageOrder(date, e.msgId, o.messageOwner.date, o.getId(), descending) <= 0) {
+                    pos = i;
+                    break;
+                }
+            }
+            messArr.add(pos, tomb);
+            silentRestoredTombstoneIds.add(e.msgId);
+        }
+    }
+
+    // Compare two (date, id) pairs in messArr's own order: negative when
+    // (dateA, idA) comes before (dateB, idB) in the list.
+    private static int silentCompareMessageOrder(int dateA, int idA, int dateB, int idB, boolean descending) {
+        int c;
+        if (dateA != dateB) {
+            c = Integer.compare(dateA, dateB);
+        } else {
+            c = Integer.compare(idA, idB);
+        }
+        return descending ? -c : c;
+    }
+
+    // Build a LOCAL-ONLY tombstone MessageObject from a deleted-history
+    // entry. It only ever lives in this ChatActivity's in-memory lists.
+    private MessageObject silentBuildDeletedTombstone(org.telegram.messenger.SilentMessageHistory.Entry e, int date) {
+        try {
+            TLRPC.TL_message msg = new TLRPC.TL_message();
+            msg.id = e.msgId;
+            msg.date = date;
+            msg.message = e.text;
+            msg.dialog_id = dialog_id;
+            msg.unread = false;
+            if (dialog_id > 0) {
+                TLRPC.TL_peerUser peer = new TLRPC.TL_peerUser();
+                peer.user_id = dialog_id;
+                msg.peer_id = peer;
+            } else {
+                TLRPC.Chat chat = getMessagesController().getChat(-dialog_id);
+                if (chat != null && org.telegram.messenger.ChatObject.isChannel(chat)) {
+                    TLRPC.TL_peerChannel peer = new TLRPC.TL_peerChannel();
+                    peer.channel_id = -dialog_id;
+                    msg.peer_id = peer;
+                } else {
+                    TLRPC.TL_peerChat peer = new TLRPC.TL_peerChat();
+                    peer.chat_id = -dialog_id;
+                    msg.peer_id = peer;
+                }
+            }
+            if ("You".equals(e.sender)) {
+                msg.out = true;
+                TLRPC.TL_peerUser from = new TLRPC.TL_peerUser();
+                from.user_id = getUserConfig().getClientUserId();
+                msg.from_id = from;
+            } else if (dialog_id > 0) {
+                msg.out = false;
+                TLRPC.TL_peerUser from = new TLRPC.TL_peerUser();
+                from.user_id = dialog_id;
+                msg.from_id = from;
+            } else {
+                // Group/channel message whose sender id was never stored
+                // (only the display name) — from_id stays null, so the
+                // tombstone shows no author name, only the delete icon,
+                // the text and the arrival time.
+                msg.out = false;
+            }
+            MessageObject obj = new MessageObject(currentAccount, msg, false, false);
+            obj.silentTombstone = true;
+            silentApplyDeletedTombstone(obj);
+            return obj;
+        } catch (Exception ex) {
+            return null;
+        }
     }
 
     private void processDeletedMessages(ArrayList<Integer> markAsDeletedMessages, long channelId, boolean sent, boolean thanos) {
@@ -47314,7 +47509,7 @@ public class ChatActivity extends BaseFragment implements
                 if (!selectedObject.isPaidSuggestedPostProtected() && chatMode == MODE_SCHEDULED) {
                     items.add(LocaleController.getString(R.string.MessageScheduleSend));
                     options.add(OPTION_SEND_NOW);
-                    icons.add(R.drawable.icon_plane_24);
+                    icons.add(R.drawable.icon_plane_crescent_24);
                 }
                 if (selectedObject.messageOwner.action instanceof TLRPC.TL_messageActionPhoneCall) {
                     TLRPC.TL_messageActionPhoneCall call = (TLRPC.TL_messageActionPhoneCall) message.messageOwner.action;

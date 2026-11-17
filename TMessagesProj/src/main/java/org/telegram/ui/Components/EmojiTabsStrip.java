@@ -623,6 +623,10 @@ public class EmojiTabsStrip extends ScrollableHorizontalScrollView {
                     tabsView.contentView.getChildAt(a).setOnClickListener(e -> {
                         onTabClick(index);
                     });
+                    // SilentGram (H20): long-press a pack tab to favorite it.
+                    // Wired here (not on creation) so recycled tab buttons
+                    // always carry the listener for their current index.
+                    tabsView.contentView.getChildAt(a).setOnLongClickListener(e -> onTabLongClick(index));
                 }
                 --j;
             } else if (child != null) {
@@ -630,6 +634,7 @@ public class EmojiTabsStrip extends ScrollableHorizontalScrollView {
                 child.setOnClickListener(e -> {
                     onTabClick(index);
                 });
+                child.setOnLongClickListener(e -> onTabLongClick(index));
             }
         }
         if (settingsTab != null) {
@@ -643,6 +648,14 @@ public class EmojiTabsStrip extends ScrollableHorizontalScrollView {
 
     protected boolean onTabClick(int index) {
         return true;
+    }
+
+    // SilentGram (H20): long-press a tab button. Default does nothing —
+    // subclasses override it for the tabs that have a long-press action
+    // (EmojiView favorites emoji packs from here). Returning false leaves
+    // the gesture unhandled, exactly as before.
+    protected boolean onTabLongClick(int index) {
+        return false;
     }
 
     private float paddingLeftDp = 5 + 6;

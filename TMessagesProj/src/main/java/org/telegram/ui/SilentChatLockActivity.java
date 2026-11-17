@@ -388,7 +388,7 @@ public class SilentChatLockActivity extends BaseFragment {
         }
         Set<Long> lockedSet = SilentChatLock.getLockedChats();
         ArrayList<Long> ids = new ArrayList<>();
-        android.util.LongSparseArray<TLRPC.Dialog> dict = MessagesController.getInstance(currentAccount).dialogs_dict;
+        androidx.collection.LongSparseArray<TLRPC.Dialog> dict = MessagesController.getInstance(currentAccount).dialogs_dict;
         for (int i = 0; i < dict.size(); i++) {
             TLRPC.Dialog dialog = dict.valueAt(i);
             if (dialog == null || dialog.isFolder) {

@@ -8,7 +8,7 @@
         </shape>
     </item>
     <item
-        android:drawable="@drawable/icon_plane"
+        android:drawable="@drawable/icon_plane_crescent"
 		android:gravity="center"
         android:left="-2dp"
         android:width="24dp"

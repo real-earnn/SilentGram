@@ -16291,8 +16291,11 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         // text — pass the true current text (messageOwner.message) so a
         // real later edit is still recorded and the composite is never
         // cached as a version.
+        // SilentGram H5b: never cache a tombstone's display text — it is
+        // not a real message; caching it would record a bogus "edited"
+        // entry and overwrite the cached original text.
         try {
-            if (messageObject != null && messageObject.messageText != null && messageObject.messageText.length() > 0) {
+            if (messageObject != null && !messageObject.silentTombstone && messageObject.messageText != null && messageObject.messageText.length() > 0) {
                 String sender = "";
                 if (messageObject.isOutOwner()) {
                     sender = "You";

@@ -433,7 +433,7 @@ public class AIEditorAlert extends BottomSheetWithRecyclerListView implements No
     private void updateSendButtonIcon() {
         sendButton.setVisibility(editing || !hasSend() ? View.GONE : View.VISIBLE);
         final SpannableStringBuilder sendButtonText = new SpannableStringBuilder(getString(R.string.Send));
-        final ColoredImageSpan sendIconSpan = new ColoredImageSpan(editing ? R.drawable.filled_profile_edit_24 : R.drawable.icon_plane_24);
+        final ColoredImageSpan sendIconSpan = new ColoredImageSpan(editing ? R.drawable.filled_profile_edit_24 : R.drawable.icon_plane_crescent_24);
         sendIconSpan.setTranslateY(dp(1));
         sendButtonText.setSpan(sendIconSpan, 0, sendButtonText.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         sendButton.setText(sendButtonText);

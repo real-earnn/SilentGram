@@ -129,39 +129,61 @@ public class IntroActivity extends BaseFragment implements NotificationCenter.No
 
     private boolean isOnLogout;
 
+    // SilentGram H22: the intro must say "SilentGram" even when Telegram's
+    // cloud language pack overrides our bundled strings. LocaleController
+    // consults the downloaded pack FIRST (USE_CLOUD_STRINGS, getStringV2),
+    // and the official pack still says "Telegram" for Page1Title and
+    // Page2-6Message — that is why v2.0.2 showed "Telegram" again after
+    // batch 3+E had fixed res/values/strings.xml (v2.0.1 was tested before
+    // the pack had downloaded). The pack is applied at startup, even
+    // logged-out, so the intro can never trust the localizable string for
+    // the brand name: swap the brand word here, at the one place the intro
+    // consumes it. Latin covers en/es/de/it/nl/pt/ru/uk/ko packs; Arabic
+    // covers the ar pack (تيليجرام). Other scripts' transliterations of
+    // the name are not covered — see the H22 report.
+    private static String silentBrand(String s) {
+        if (s == null) {
+            return null;
+        }
+        return s.replace("Telegram", "SilentGram").replace("تيليجرام", "SilentGram");
+    }
+
     @Override
     public boolean onFragmentCreate() {
         MessagesController.getGlobalMainSettings().edit().putLong("intro_crashed_time", System.currentTimeMillis()).apply();
 
         titles = new CharSequence[]{
                 null,
-                LocaleController.getString(R.string.Page2Title),
-                LocaleController.getString(R.string.Page3Title),
-                LocaleController.getString(R.string.Page5Title),
-                LocaleController.getString(R.string.Page4Title),
-                LocaleController.getString(R.string.Page6Title)
+                silentBrand(LocaleController.getString(R.string.Page2Title)),
+                silentBrand(LocaleController.getString(R.string.Page3Title)),
+                silentBrand(LocaleController.getString(R.string.Page5Title)),
+                silentBrand(LocaleController.getString(R.string.Page4Title)),
+                silentBrand(LocaleController.getString(R.string.Page6Title))
         };
         messages = new String[]{
-                LocaleController.getString(R.string.Page1Message),
-                LocaleController.getString(R.string.Page2Message),
-                LocaleController.getString(R.string.Page3Message),
-                LocaleController.getString(R.string.Page5Message),
-                LocaleController.getString(R.string.Page4Message),
-                LocaleController.getString(R.string.Page6Message)
+                silentBrand(LocaleController.getString(R.string.Page1Message)),
+                silentBrand(LocaleController.getString(R.string.Page2Message)),
+                silentBrand(LocaleController.getString(R.string.Page3Message)),
+                silentBrand(LocaleController.getString(R.string.Page5Message)),
+                silentBrand(LocaleController.getString(R.string.Page4Message)),
+                silentBrand(LocaleController.getString(R.string.Page6Message))
         };
         return true;
     }
 
     @Override
     public View createView(Context context) {
-        // SilentGram: first page shows our white "S" monogram + "SilentGram"
-        // text (was: the "Telegram" wordmark vector R.drawable.telegram_logo).
-        // The S is white, so the existing MULTIPLY tint in updateColors() /
+        // SilentGram: first page shows our white plane + crescent icon
+        // (R.drawable.icon_plane_crescent) + "SilentGram" text (was: the
+        // "Telegram" wordmark vector R.drawable.telegram_logo). The icon is
+        // white, so the existing MULTIPLY tint in updateColors() /
         // onThemeColorsChanged() colours it with the title colour, exactly
-        // as it did for the old wordmark.
-        logoDrawable = context.getResources().getDrawable(R.drawable.icon_plane).mutate();
+        // as it did for the old wordmark. Page1Title goes through
+        // silentBrand(): the cloud language pack can still return
+        // "Telegram" here — see the note above onFragmentCreate.
+        logoDrawable = context.getResources().getDrawable(R.drawable.icon_plane_crescent).mutate();
         logoDrawable.setBounds(0, 0, dp(28), dp(28));
-        SpannableStringBuilder ssb = new SpannableStringBuilder(" " + LocaleController.getString(R.string.Page1Title));
+        SpannableStringBuilder ssb = new SpannableStringBuilder(" " + silentBrand(LocaleController.getString(R.string.Page1Title)));
         ssb.setSpan(new ImageSpan(logoDrawable), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         titles[0] = ssb;
 
@@ -797,19 +819,20 @@ public class IntroActivity extends BaseFragment implements NotificationCenter.No
             loadTexture(R.drawable.intro_powerful_star, 18);
             loadTexture(R.drawable.intro_private_door, 19);
             loadTexture(R.drawable.intro_private_screw, 20);
-            // SilentGram: the big intro mark is our white "S" monogram (was
-            // Telegram's paper plane, R.drawable.intro_tg_plane). Rendered
-            // white-on-transparent like the old plane texture — the native
-            // code draws it additively (GL_ONE, GL_ONE_MINUS_SRC_ALPHA) over
-            // the navy circle, so it must stay white with a transparent
-            // background. The native plane rect is 82x74, so the square S is
+            // SilentGram: the big intro mark is our white plane + crescent
+            // (R.drawable.icon_plane_crescent, was Telegram's paper plane,
+            // R.drawable.intro_tg_plane). Rendered white-on-transparent
+            // like the old plane texture — the native code draws it
+            // additively (GL_ONE, GL_ONE_MINUS_SRC_ALPHA) over the navy
+            // circle, so it must stay white with a transparent background.
+            // The native plane rect is 82x74, so the square icon is
             // centred in a 246x222 bitmap to avoid squashing it.
             loadTexture(v -> {
                 int w = 246, h = 222, s = 222;
                 Bitmap bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
                 try {
                     Context ctx = getParentActivity() != null ? getParentActivity() : ApplicationLoader.applicationContext;
-                    Drawable d = ctx.getResources().getDrawable(R.drawable.icon_plane);
+                    Drawable d = ctx.getResources().getDrawable(R.drawable.icon_plane_crescent);
                     if (d != null) {
                         Canvas c = new Canvas(bm);
                         d.setBounds((w - s) / 2, 0, (w - s) / 2 + s, s);

@@ -986,7 +986,7 @@ public class RichEditor extends BaseFragment implements NotificationCenter.Notif
         aiStyleButton.setOnClickListener(v -> onAiStyleSelection());
         formattingLayout1.addView(aiStyleButton, LayoutHelper.createLinear(38, 38, Gravity.CENTER_VERTICAL));
 
-        final int sendIcon = editingMessageObject != null ? R.drawable.input_done : (isInScheduleMode() ? R.drawable.input_schedule : R.drawable.icon_plane_24);
+        final int sendIcon = editingMessageObject != null ? R.drawable.input_done : (isInScheduleMode() ? R.drawable.input_schedule : R.drawable.icon_plane_crescent_24);
         sendButton = new ChatActivityEnterView.SendButton(context, sendIcon, getResourceProvider(), true) {
             @Override
             public boolean isOpen() {

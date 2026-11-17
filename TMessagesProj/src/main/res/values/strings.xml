@@ -203,6 +203,11 @@
     <string name="SilentBotNeedReplyId">Enter the message id to reply to first.</string>
     <string name="SilentRemoveFromFavorites">Remove from Favorites</string>
     <string name="SilentNoFavoritePacks">No favorite packs yet</string>
+    <string name="SilentAddPackLinkTitle">Add Pack by Link</string>
+    <string name="SilentAddPackLinkHint">Pack link, e.g. https://t.me/addstickers/packname</string>
+    <string name="SilentInvalidPackLink">Couldn\'t find a pack in that link</string>
+    <string name="SilentPackAddedNotInstalled">Added to Favorites — it will appear once the pack is installed</string>
+    <string name="SilentAddPackToFavorites">Add pack to Favorites</string>
     <string name="SilentEditHistoryView">View edit history</string>
     <string name="SilentEditHistoryHide">Hide edit history</string>
     <string name="SilentEditHistorySeparator">────────────────────</string>
@@ -2053,8 +2058,8 @@
     <string name="NotificationGroupFew">%1$s sent %3$s to the group %2$s</string>
     <string name="NotificationGroupAlbum">%1$s sent an album to the group %2$s</string>
     <string name="NotificationGroupForwardedFew">%1$s forwarded %3$s to the group %2$s</string>
-    <string name="NotificationHiddenName">Telegram</string>
-    <string name="NotificationHiddenChatName">Telegram</string>
+    <string name="NotificationHiddenName">SilentGram</string>
+    <string name="NotificationHiddenChatName">SilentGram</string>
     <string name="NotificationHiddenChatUserName">User</string>
     <string name="NotificationHiddenMessage">New message</string>
     <string name="Reply">Reply</string>
@@ -2124,7 +2129,7 @@
     <string name="NotificationActionMissedCallConference">You missed a call from %1$s</string>
     <string name="NotificationActionMissedCallConferenceOther_one">You missed a call from %2$s and %1$d other</string>
     <string name="NotificationActionMissedCallConferenceOther_other">You missed a call from %2$s and %1$d others</string>
-    <string name="SecretChatName">Telegram</string>
+    <string name="SecretChatName">SilentGram</string>
     <!--contacts view-->
     <string name="SelectContact">Select Contact</string>
     <string name="ShareContactTitle">Share Contact</string>
@@ -2151,11 +2156,11 @@
     <string name="WithinAMonth">last seen within a month</string>
     <string name="ALongTimeAgo">last seen a long time ago</string>
     <string name="NewMessageTitle">New Message</string>
-    <string name="InviteFriendsHelp">Select contacts to invite them to Telegram</string>
-    <string name="InviteToTelegram">INVITE TO TELEGRAM</string>
-    <string name="ShareTelegram2">Share Telegram</string>
+    <string name="InviteFriendsHelp">Select contacts to invite them to SilentGram</string>
+    <string name="InviteToTelegram">INVITE TO SILENTGRAM</string>
+    <string name="ShareTelegram2">Share SilentGram</string>
     <string name="UpdateContactsTitle">Update contacts?</string>
-    <string name="UpdateContactsMessage">Telegram has detected many unsynced contacts, would you like to sync them now? Choose \'OK\' if you\'re using your own device, SIM card and Google account.</string>
+    <string name="UpdateContactsMessage">SilentGram has detected many unsynced contacts, would you like to sync them now? Choose \'OK\' if you\'re using your own device, SIM card and Google account.</string>
     <string name="SortedByName">Sorted by name</string>
     <string name="SortedByLastSeen">Sorted by last seen time</string>
     <string name="AddContactByPhone">Add %1$s</string>
@@ -2163,7 +2168,7 @@
     <string name="NoContactsYet2Invite">Invite Friends ></string>
 
     <string name="NoContactsYet3">Add Contacts</string>
-    <string name="NoContactsYet3Sub">You have no contacts on Telegram yet. How about adding them?</string>
+    <string name="NoContactsYet3Sub">You have no contacts on SilentGram yet. How about adding them?</string>
 
     <string name="NewContactAlertTitle">New contact</string>
     <string name="NewContactAlertMessage">Phone number **%1$s** is not in your contacts list. Do you want to add it?</string>
@@ -2245,8 +2250,8 @@
     <string name="ShareContact">Share contact</string>
     <string name="AddContact">Add to contacts</string>
     <string name="AddContactTitle">Add Contact</string>
-    <string name="ContactNotRegisteredTitle">Invite to Telegram</string>
-    <string name="ContactNotRegistered">%1$s is not on Telegram yet, would you like to invite them to join?</string>
+    <string name="ContactNotRegisteredTitle">Invite to SilentGram</string>
+    <string name="ContactNotRegistered">%1$s is not on SilentGram yet, would you like to invite them to join?</string>
     <string name="Invite">Invite</string>
     <string name="Block">BLOCK</string>
     <string name="BlockAndDeleteReplies">BLOCK AND DELETE REPLIES</string>
@@ -2416,7 +2421,7 @@
     <string name="NoReactionsFound">No reactions found</string>
     <string name="NoEffectsFound">No effects found</string>
     <string name="EmojiSuggestions">Emoji suggestions</string>
-    <string name="EmojiSuggestionsInfo">**Telegram** lets you find emoji by thousands of keywords, but there is always something missing. If you want to suggest a new emoji replacement, you can help us by visiting:</string>
+    <string name="EmojiSuggestionsInfo">**SilentGram** lets you find emoji by thousands of keywords, but there is always something missing. If you want to suggest a new emoji replacement, you can help us by visiting:</string>
     <string name="EmojiSuggestionsUrl">https://translations.telegram.org/%1$s/emoji</string>
     <string name="Masks">Masks</string>
     <string name="MasksInfo">You can add masks to photos you send. To do this, open the photo editor before sending a photo.</string>
@@ -2465,7 +2470,7 @@
     <string name="ImportStickersLinkTaken">Sorry, this link is already taken.</string>
     <string name="ImportStickersImportingTitle">Importing stickers</string>
     <string name="ImportStickersDoneTitle">Stickers imported successfully!</string>
-    <string name="ImportStickersDoneInfo">Import more stickers to Telegram and share them with your friends.</string>
+    <string name="ImportStickersDoneInfo">Import more stickers to SilentGram and share them with your friends.</string>
     <!--theme view-->
     <string name="Theme">Theme</string>
     <string name="AutoNightTheme">Auto-Night Mode</string>
@@ -2516,7 +2521,7 @@
     <string name="NewThemeTitle">New Theme</string>
     <string name="EditThemeTitle">Edit Theme</string>
     <string name="CreateNewThemeHelp">Tap on the palette icon to view the list of elements on each screen - and edit them.</string>
-    <string name="CreateNewThemeAlert">You can create your own theme by changing colors within the app.\n\nYou can always switch back to the default Telegram theme here.</string>
+    <string name="CreateNewThemeAlert">You can create your own theme by changing colors within the app.\n\nYou can always switch back to the default SilentGram theme here.</string>
     <string name="ThemeSetUrlHelp">You can use a-z, 0-9 and underscores.\nMinimum length is 5 characters.</string>
     <string name="ThemeHelpLink">Your theme will be updated for all users each time you change it. Anyone can install it using this link:\n%1$s</string>
     <string name="ThemeCreateHelp">Anyone can install your theme using this link. When you change the theme, it will be updated for all users who installed it.\n\nThe theme will be based on your currently selected theme and wallpaper.</string>
@@ -2618,7 +2623,7 @@
     <string name="NotificationsAndSounds">Notifications and Sounds</string>
     <string name="CustomNotifications">Custom Notifications</string>
     <string name="ProfilePopupNotification">Popup notifications</string>
-    <string name="ProfilePopupNotificationInfo">New messages from this contact will appear on your screen when you are not using Telegram.</string>
+    <string name="ProfilePopupNotificationInfo">New messages from this contact will appear on your screen when you are not using SilentGram.</string>
     <string name="NotificationsLed">LED</string>
     <string name="NotificationsLedColor">Color</string>
     <string name="ColorBlue">Blue</string>
@@ -2719,7 +2724,7 @@
     <string name="LanguageUnknownTitle">Insufficient data</string>
     <string name="LanguageUnsupportedError">There is no such language.</string>
     <string name="LanguageSame">You are already using this language pack (**%1$s**). You can change your language at any time in Settings.</string>
-    <string name="LanguageUnknownCustomAlert">Unfortunately, this custom language pack (**%1$s**) doesn\'t contain data for Telegram Android.</string>
+    <string name="LanguageUnknownCustomAlert">Unfortunately, this custom language pack (**%1$s**) doesn\'t contain data for SilentGram Android.</string>
     <string name="AskAQuestionInfo">Please note that Telegram Support is done by volunteers. We try to respond as quickly as possible, but it may take a while.\n\nPlease take a look at the <![CDATA[<a href=\"https://telegram.org/faq#general-questions\">Telegram FAQ</a>]]>: it has answers to most questions and important tips for <![CDATA[<a href=\"https://telegram.org/faq#troubleshooting\">troubleshooting</a>]]>.</string>
     <string name="AskButton">Ask a volunteer</string>
     <string name="TelegramFAQ">Telegram FAQ</string>
@@ -2935,14 +2940,14 @@
     <string name="UseProxyWeb">WEB Proxy</string>
     <string name="UseProxyTelegramError">The proxy you are using is not configured correctly and will be disabled. Please find another one.</string>
     <string name="UseProxySponsor">Proxy sponsor</string>
-    <string name="UseProxySponsorInfo">This channel is shown by your proxy server. To remove this channel from your chat list, disable the proxy in Telegram Settings.</string>
+    <string name="UseProxySponsorInfo">This channel is shown by your proxy server. To remove this channel from your chat list, disable the proxy in SilentGram Settings.</string>
     <string name="UseProxyInfo">SOCKS5 proxy settings.</string>
     <string name="UseProxyTelegramInfo">MTProto proxy settings.</string>
     <string name="UseProxyTelegramInfo2">This proxy may display a sponsored channel in your chat list. This doesn\'t reveal any of your Telegram traffic.</string>
     <string name="UseProxyWebInfo">WEB proxy uses an HTTPS page inside a private WebView. Enter a hostname without a scheme or path and a 16-byte MTProxy secret. This proof of concept requires a current Android System WebView and is intended for foreground testing.</string>
     <string name="ConnectingToProxyEnable">Enable</string>
     <string name="LowDiskSpaceTitle">Attention</string>
-    <string name="LowDiskSpaceMessage">Your device is almost out of disk space. To free some space, you can set up Telegram to cache only recent media.</string>
+    <string name="LowDiskSpaceMessage">Your device is almost out of disk space. To free some space, you can set up SilentGram to cache only recent media.</string>
     <string name="LowDiskSpaceMessage2">Your device is almost out of disk space. You can use cache settings to remove unnecessary media — and re-download files if you need them again.</string>
     <string name="LowDiskSpaceButton">Manage Cache</string>
     <string name="AutodownloadContacts">Contacts</string>
@@ -2977,7 +2982,7 @@
     <string name="ClearSelectedCache">Clear Selected</string>
     <string name="ClearCacheInfo">Free up disk space on your device; your media will stay in the cloud.</string>
     <string name="ClearingCache">Clearing cache…</string>
-    <string name="ClearingCacheDescription">Please keep this window open while Telegram is clearing your cache.</string>
+    <string name="ClearingCacheDescription">Please keep this window open while SilentGram is clearing your cache.</string>
     <string name="ChangePhoneNumber">Change Phone Number</string>
     <string name="ChangePhoneNumberInfo">Move your account, chats and media to a new number.</string>
     <string name="ChangePhoneNumberSuccessWithPhone">Your phone number has been successfully changed to %1$s.</string>
@@ -3006,10 +3011,10 @@
     <string name="AuthAnotherClientInfo2">Run Telegram Desktop to get the QR code.</string>
     <string name="AuthAnotherClientInfo3">Scan the QR code to connect your account.</string>
     <string name="AuthAnotherClientUrl">This code can be used to allow someone to log in to your Telegram account.\n\nTo confirm Telegram login, please go to Settings &gt; Devices &gt; Scan QR and scan the code.</string>
-    <string name="QRCodePermissionNoCameraWithHint">**Telegram** needs camera access so that you can scan QR codes. Tap Settings -> Permissions, and turn **Camera** on.</string>
+    <string name="QRCodePermissionNoCameraWithHint">**SilentGram** needs camera access so that you can scan QR codes. Tap Settings -> Permissions, and turn **Camera** on.</string>
     <string name="SetProfilePhoto">Set Profile Photo</string>
-    <string name="AppUpdate">Update Telegram</string>
-    <string name="AppUpdateBeta">Update Telegram Beta</string>
+    <string name="AppUpdate">Update SilentGram</string>
+    <string name="AppUpdateBeta">Update SilentGram Beta</string>
     <string name="AppUpdateVersionAndSize">Version %1$s • %2$s</string>
     <string name="AppBetaUpdateVersion">Version %1$s (%2$s)</string>
     <string name="AppUpdateDownloading">Downloading %1$d%%...</string>
@@ -3057,7 +3062,7 @@
     <string name="LocalDatabaseClearTextTitle">Clear local database</string>
     <string name="LocalDatabaseClearText">Are you sure you want to clear cached text messages?</string>
     <string name="LocalDatabaseClearText2">This operation can take a few minutes to complete.\n\nLocal database size: **%s**</string>
-    <string name="LocalDatabaseInfo">Clearing the local database will delete the texts of cached messages and compress the database to save internal disk space. Telegram needs some data to work, so database size will not reach zero.\n\nThis operation can take a few minutes to complete.</string>
+    <string name="LocalDatabaseInfo">Clearing the local database will delete the texts of cached messages and compress the database to save internal disk space. SilentGram needs some data to work, so database size will not reach zero.\n\nThis operation can take a few minutes to complete.</string>
     <string name="ClearMediaCache">Clear Cache</string>
     <string name="CacheClear">Clear</string>
     <string name="CalculatingSize">Calculating...</string>
@@ -3368,7 +3373,7 @@
     <!--passcode view-->
     <string name="Passcode">Passcode Lock</string>
     <string name="ChangePasscode">Change Passcode</string>
-    <string name="ChangePasscodeInfo">When you set up an additional passcode, a lock icon will appear on the chats page. Tap it to lock and unlock your Telegram app.\n\nNote: if you forget the passcode, you\'ll need to delete and reinstall the app. All secret chats will be lost.</string>
+    <string name="ChangePasscodeInfo">When you set up an additional passcode, a lock icon will appear on the chats page. Tap it to lock and unlock your SilentGram app.\n\nNote: if you forget the passcode, you\'ll need to delete and reinstall the app. All secret chats will be lost.</string>
     <string name="ChangePasscodeInfoShort">When you set up a passcode, a lock icon will apear on the chats page. Tap it to lock and unlock the app.</string>
     <string name="EnablePasscode">Enable passcode</string>
     <string name="ConfirmCreatePasscode">Re-enter your passcode</string>
@@ -3376,7 +3381,7 @@
     <string name="PasscodeSwitchToPIN">Switch to PIN</string>
     <string name="PasscodesDoNotMatchTryAgain">Passcodes don\'t match. Please try again.</string>
     <string name="EnterYourPasscode">Enter your passcode</string>
-    <string name="EnterYourPasscodeInfo">Please enter your current Telegram passcode to manage this option.</string>
+    <string name="EnterYourPasscodeInfo">Please enter your current SilentGram passcode to manage this option.</string>
     <string name="ForgotPasscode">Forgot passcode?</string>
     <string name="ForgotPasscodeInfo">If you forgot your passcode, you\'ll need to delete and reinstall the app.\n\nAll secret chats will be lost.</string>
     <string name="PasscodeScreenHint">Tap a lock icon on the chats page to lock and unlock the app.</string>
@@ -3384,7 +3389,7 @@
     <string name="DisablePasscodeConfirmMessage">Are you sure you want to turn off passcode?</string>
     <string name="DisablePasscodeTurnOff">Turn Off</string>
     <string name="EnterNewPasscode">Enter your new passcode</string>
-    <string name="EnterYourTelegramPasscode">Enter your Telegram passcode</string>
+    <string name="EnterYourTelegramPasscode">Enter your SilentGram passcode</string>
     <string name="AutoLock">Auto-lock</string>
     <string name="AutoLockInfo">Require passcode if away for a time.</string>
     <string name="AutoLockInTime">in %1$s</string>
@@ -3394,7 +3399,7 @@
     <string name="ScreenCaptureHeader">App Content in Task Switcher</string>
     <string name="ScreenCaptureShowContent">Show Content</string>
     <string name="ScreenCaptureInfo">If disabled, you won\'t be able to take screenshots in the app but chat content will be hidden in the task switcher.</string>
-    <string name="ScreenCaptureAlert">This will hide the contents of your chats or chat list from the task switcher, but you will not be able to take screenshots on Telegram.\n\nYou may need to restart the app for this to take effect.</string>
+    <string name="ScreenCaptureAlert">This will hide the contents of your chats or chat list from the task switcher, but you will not be able to take screenshots on SilentGram.\n\nYou may need to restart the app for this to take effect.</string>
     <string name="TooManyTries">Too many tries.\nPlease try again in %1$s.</string>
     <!--media view-->
     <string name="January">January</string>
@@ -3458,7 +3463,7 @@
     <string name="SharingLiveLocation">Sharing Location...</string>
     <string name="SharingLiveLocationAdd">tap to add more time</string>
     <string name="LiveLocationPausedTitle">Live Location paused</string>
-    <string name="LiveLocationPausedText">Open Telegram to continue sharing your location.</string>
+    <string name="LiveLocationPausedText">Open SilentGram to continue sharing your location.</string>
     <string name="StopLiveLocationAlertToTitle">Stop location sharing</string>
     <string name="StopLiveLocationAlertToUserText">Do you want to stop sharing your live location with **%1$s**?</string>
     <string name="StopLiveLocationAlertToGroupText">Do you want to stop sharing your live location with **%1$s**?</string>
@@ -3794,8 +3799,8 @@
     <string name="StorageUsage">Storage Usage</string>
     <string name="StorageCleared">Storage Cleared</string>
     <string name="StorageUsageCalculating">Calculating cache size...</string>
-    <string name="StorageUsageTelegram">Telegram uses %s of your device storage.</string>
-    <string name="StorageUsageTelegramLess">Telegram uses %s of your device storage.</string>
+    <string name="StorageUsageTelegram">SilentGram uses %s of your device storage.</string>
+    <string name="StorageUsageTelegramLess">SilentGram uses %s of your device storage.</string>
     <string name="StorageCleared2">All media can be re-downloaded from the Telegram cloud if you need it again.</string>
     <string name="StorageUsageInfo">All media will stay in the Telegram cloud and can be re-downloaded if you need it again.</string>
     <string name="NetworkUsage">Data Usage</string>
@@ -3819,7 +3824,7 @@
     <string name="IncomingCalls">Incoming calls</string>
     <string name="IncomingCallsSystemSetting">Internal calls notifications</string>
     <string name="InternalNotificationsSystemSetting">Internal notifications</string>
-    <string name="IncomingCallsSystemSettingDescription">You can change ringtone sound in Telegram -> Settings -> Notifications and Sounds.</string>
+    <string name="IncomingCallsSystemSettingDescription">You can change ringtone sound in SilentGram -> Settings -> Notifications and Sounds.</string>
     <string name="OutgoingCallsCount_one">%1$d outgoing call</string>
     <string name="OutgoingCallsCount_other">%1$d outgoing calls</string>
     <string name="IncomingCallsCount_one">%1$d incoming call</string>
@@ -4148,7 +4153,7 @@
     <string name="ActionBotDocumentEmail">Email Address</string>
     <string name="ActionNewCreatorPending">un1 will be the new main admin in 7 days if un2 does not return.</string>
     <string name="ActionChangeCreator">un1 has transferred ownership of the group to un2.</string>
-    <string name="UnsupportedMedia2">This message is not supported on your version of Telegram. Please update to the latest version.</string>
+    <string name="UnsupportedMedia2">This message is not supported on your version of SilentGram. Please update to the latest version.</string>
     <string name="YourVersionIsLatest">Your version is up to date.</string>
     <string name="AttachPhoto">Photo</string>
     <string name="AttachVideo">Video</string>
@@ -4202,8 +4207,8 @@
     <string name="DeleteAll">Delete All</string>
     <string name="StopLoadingTitle">Stop loading?</string>
     <string name="StopLoading">Do you want to cancel loading?</string>
-    <string name="UpdateTelegram">Update Telegram</string>
-    <string name="UpdateAppAlert">Sorry, your Telegram app is out of date and can\'t handle this request. Please update Telegram.</string>
+    <string name="UpdateTelegram">Update SilentGram</string>
+    <string name="UpdateAppAlert">Sorry, your SilentGram app is out of date and can\'t handle this request. Please update SilentGram.</string>
     <string name="InvalidPhoneNumber">Invalid phone number. Please check the number and try again.</string>
     <string name="PleaseLoginPassport">Please log in to your Telegram account to use Telegram Passport.</string>
     <string name="BannedPhoneNumber">This phone number is banned.</string>
@@ -4229,7 +4234,7 @@
     <string name="NoPlayerInstalled">You don\'t have a video player, please install one to continue</string>
     <string name="NoMailInstalled">Please send an email describing your problem to sms@telegram.org</string>
     <string name="NoHandleAppInstalled">You don\'t have applications that can handle the file type \'%1$s\', please install one to continue</string>
-    <string name="InviteUser">This user does not have Telegram yet, send an invitation?</string>
+    <string name="InviteUser">This user does not have SilentGram yet, send an invitation?</string>
     <string name="AreYouSure">Are you sure?</string>
     <string name="AddToTheGroupAlertTitle">Add bot</string>
     <string name="AddToTheGroupAlertText">Do you want to add **%1$s** to the group **%2$s**?</string>
@@ -4245,8 +4250,8 @@
     <string name="SendMessagesToText">Do you want to send this message to **%1$s**?</string>
     <string name="SendGameToText">Do you want to share this game to **%1$s**?</string>
     <string name="SendContactToText">Do you want to send this contact to **%1$s**?</string>
-    <string name="AreYouSureLogout">Are you sure you want to log out?\n\nThis will cancel all your Secret Chats.\n\nYou can use Telegram on all your devices at once and use several accounts in the same app.</string>
-    <string name="AreYouSureLogoutGrams">Are you sure you want to log out?\n\nThis will cancel all your Secret Chats and **delete wallet backups holding %s**. Without their recovery phrases, you\'ll lose access to these funds.\n\nYou can use Telegram on all your devices at once and use several accounts in the same app.</string>
+    <string name="AreYouSureLogout">Are you sure you want to log out?\n\nThis will cancel all your Secret Chats.\n\nYou can use SilentGram on all your devices at once and use several accounts in the same app.</string>
+    <string name="AreYouSureLogoutGrams">Are you sure you want to log out?\n\nThis will cancel all your Secret Chats and **delete wallet backups holding %s**. Without their recovery phrases, you\'ll lose access to these funds.\n\nYou can use SilentGram on all your devices at once and use several accounts in the same app.</string>
     <string name="DeleteFewChatsTitle">Delete %1$s</string>
     <string name="ClearFewChatsTitle">Clear %1$s</string>
     <string name="ClearCacheFewChatsTitle">Empty cache for %1$s</string>
@@ -4319,10 +4324,10 @@
     <string name="SecretLinkPreviewAlert">Would you like to enable extended link previews in Secret Chats? Note that link previews are generated on Telegram servers.</string>
     <string name="SecretChatContextBotAlert">Please note that inline bots are provided by third-party developers. For the bot to work, the symbols you type after the bot\'s username are sent to the respective developer.</string>
     <string name="EditMessageError">Sorry, you can\'t edit this message.</string>
-    <string name="AllowReadCall">Please allow Telegram to receive calls so that we can automatically enter your code for you.</string>
-    <string name="AllowReadCallAndLog">Please allow Telegram to receive calls and read the call log so that we can automatically enter your code for you.</string>
-    <string name="AllowReadCallLog">Please allow Telegram to read the call log so that we can automatically enter your code for you.</string>
-    <string name="AllowFillNumber">Please allow Telegram to receive calls so that we can automatically confirm your phone number.</string>
+    <string name="AllowReadCall">Please allow SilentGram to receive calls so that we can automatically enter your code for you.</string>
+    <string name="AllowReadCallAndLog">Please allow SilentGram to receive calls and read the call log so that we can automatically enter your code for you.</string>
+    <string name="AllowReadCallLog">Please allow SilentGram to read the call log so that we can automatically enter your code for you.</string>
+    <string name="AllowFillNumber">Please allow SilentGram to receive calls so that we can automatically confirm your phone number.</string>
     <string name="UserRestricted">Sorry, you are not allowed to do this.</string>
     <string name="YouBlockedUser">Sorry, you can\'t add this user or bot to groups because you\'ve blocked them. Please unblock to proceed.</string>
     <string name="AddAdminErrorNotAMember">Sorry, you can\'t add this user as an admin because they are not a member of this group and you are not allowed to add them.</string>
@@ -4359,26 +4364,26 @@
     <string name="TosUpdateDecline">We\'re very sorry, but this means we must part ways here. Unlike others, we don\'t use your data for ad targeting or other commercial purposes. Telegram only stores the information it needs to function as a feature-rich cloud service. You can adjust how we use your data (e.g., delete synced contacts) in Privacy &amp; Security settings.\n\nBut if you\'re generally not OK with Telegram\'s modest needs, it won\'t be possible for us to provide this service. You can deactivate your account now — or look around some more and deactivate it later if you feel you\'re not happy with the way we use your data.</string>
     <string name="TosDeclineDeleteAccount">Warning, this will irreversibly delete your Telegram account along with all the data you store in the Telegram cloud.\n\nImportant: You can Cancel now and export your data before deleting your account instead of losing it all. (To do this, open the latest version of Telegram Desktop and go to Settings &gt; Export Telegram Data.)</string>
     <!--permissions-->
-    <string name="PermissionStorageWithHint">**Telegram** needs storage access so you can send and save photos, videos, music and other media. Tap Settings -> Permissions, and turn **Files and media** on.</string>
-    <string name="PermissionNoAudioWithHint">**Telegram** needs microphone access so that you can send voice messages. Tap Settings -> Permissions, and turn **Microphone** on.</string>
-    <string name="PermissionNoBluetoothWithHint">**Telegram** needs bluetooth access to record video from your headset microphone. Tap Settings -> Permissions, and turn **Bluetooth** on.</string>
-    <string name="PermissionNoAudioVideoWithHint">**Telegram** needs microphone access so that you can send voice messages. Tap Settings -> Permissions, and turn **Microphone** on. </string>
-    <string name="PermissionNoCameraWithHint">**Telegram** needs camera access so that you can take photos and videos. Tap Settings -> Permissions, and turn **Camera** on.</string>
-    <string name="PermissionNoCameraMicVideo">**Telegram** needs camera and microphone access so that you can send video messages. Tap Settings -> Permissions, and turn **Microphone** and **Camera** on.</string>
-    <string name="PermissionNoLocation">Telegram needs access to your location so that you can share it with your friends.</string>
-    <string name="PermissionNoLocationStory">Telegram needs access to your location so that you can add your current weather widget to a story.</string>
-    <string name="PermissionNoLocationFriends">**Telegram** needs access to location so that you can share it with your friends. Tap Settings -> Permissions, and turn **Location** on.</string>
-    <string name="PermissionNoLocationNavigation">**Telegram** needs access to location so that you can get directions. Tap Settings -> Permissions, and turn **Location** on.</string>
-    <string name="PermissionNoContactsSharing">**Telegram** needs access to contacts so that you can share them with your friends. Tap Settings -> Permissions, and turn **Contacts** on.</string>
-    <string name="PermissionNoContactsSaving">**Telegram** needs access to contacts to save them on your phone. Tap Settings -> Permissions, and turn **Contacts** on.</string>
-    <string name="PermissionNoStorageAvatar">**Telegram** needs storage access so you can upload profile picture. Tap Settings -> Permissions, and turn **Files and media** on.</string>
-    <string name="PermissionNoAudioStorageStory">**Telegram** needs access to music files to upload with your story. Tap Settings -> Permissions, and turn **Music and Audio** on.</string>
-    <string name="PermissionDrawAboveOtherApps">Telegram needs access to draw above other apps to play videos in Picture-in-Picture mode.</string>
-    <string name="PermissionDrawAboveOtherAppsGroupCall">Overlay mode lets you use push-to-talk and see who is talking even when you are outside of Telegram.</string>
+    <string name="PermissionStorageWithHint">**SilentGram** needs storage access so you can send and save photos, videos, music and other media. Tap Settings -> Permissions, and turn **Files and media** on.</string>
+    <string name="PermissionNoAudioWithHint">**SilentGram** needs microphone access so that you can send voice messages. Tap Settings -> Permissions, and turn **Microphone** on.</string>
+    <string name="PermissionNoBluetoothWithHint">**SilentGram** needs bluetooth access to record video from your headset microphone. Tap Settings -> Permissions, and turn **Bluetooth** on.</string>
+    <string name="PermissionNoAudioVideoWithHint">**SilentGram** needs microphone access so that you can send voice messages. Tap Settings -> Permissions, and turn **Microphone** on. </string>
+    <string name="PermissionNoCameraWithHint">**SilentGram** needs camera access so that you can take photos and videos. Tap Settings -> Permissions, and turn **Camera** on.</string>
+    <string name="PermissionNoCameraMicVideo">**SilentGram** needs camera and microphone access so that you can send video messages. Tap Settings -> Permissions, and turn **Microphone** and **Camera** on.</string>
+    <string name="PermissionNoLocation">SilentGram needs access to your location so that you can share it with your friends.</string>
+    <string name="PermissionNoLocationStory">SilentGram needs access to your location so that you can add your current weather widget to a story.</string>
+    <string name="PermissionNoLocationFriends">**SilentGram** needs access to location so that you can share it with your friends. Tap Settings -> Permissions, and turn **Location** on.</string>
+    <string name="PermissionNoLocationNavigation">**SilentGram** needs access to location so that you can get directions. Tap Settings -> Permissions, and turn **Location** on.</string>
+    <string name="PermissionNoContactsSharing">**SilentGram** needs access to contacts so that you can share them with your friends. Tap Settings -> Permissions, and turn **Contacts** on.</string>
+    <string name="PermissionNoContactsSaving">**SilentGram** needs access to contacts to save them on your phone. Tap Settings -> Permissions, and turn **Contacts** on.</string>
+    <string name="PermissionNoStorageAvatar">**SilentGram** needs storage access so you can upload profile picture. Tap Settings -> Permissions, and turn **Files and media** on.</string>
+    <string name="PermissionNoAudioStorageStory">**SilentGram** needs access to music files to upload with your story. Tap Settings -> Permissions, and turn **Music and Audio** on.</string>
+    <string name="PermissionDrawAboveOtherApps">SilentGram needs access to draw above other apps to play videos in Picture-in-Picture mode.</string>
+    <string name="PermissionDrawAboveOtherAppsGroupCall">Overlay mode lets you use push-to-talk and see who is talking even when you are outside of SilentGram.</string>
     <string name="PermissionOpenSettings">SETTINGS</string>
-    <string name="PermissionXiaomiLockscreen">Please allow Telegram to be shown on the lock screen so that calls can work properly.</string>
-    <string name="PermissionFSILockscreen">Please allow Telegram to be shown on the lock screen so that calls can work properly.</string>
-    <string name="PermissionBackgroundLocation">To share your live location in this chat, Telegram needs access to your location all the time, including while the app is in the background.\n\nWe will access your location only for the duration you choose, and you can stop sharing it any time. We won\'t use your location for any purpose other than sharing it in this chat.</string>
+    <string name="PermissionXiaomiLockscreen">Please allow SilentGram to be shown on the lock screen so that calls can work properly.</string>
+    <string name="PermissionFSILockscreen">Please allow SilentGram to be shown on the lock screen so that calls can work properly.</string>
+    <string name="PermissionBackgroundLocation">To share your live location in this chat, SilentGram needs access to your location all the time, including while the app is in the background.\n\nWe will access your location only for the duration you choose, and you can stop sharing it any time. We won\'t use your location for any purpose other than sharing it in this chat.</string>
     <string name="PermissionDrawAboveOtherAppsTitle">Picture-in-Picture</string>
     <string name="PermissionDrawAboveOtherAppsGroupCallTitle">Voice Chat Overlay</string>
     <!--charts-->
@@ -4401,7 +4406,7 @@
     <string name="SlideUpToLock">Slide up to lock recording</string>
     <string name="NotificationsChartTitle">Notifications</string>
     <string name="TotalDeviceFreeSize">%s Free</string>
-    <string name="ClearTelegramCache">Clear Telegram Cache</string>
+    <string name="ClearTelegramCache">Clear SilentGram Cache</string>
     <string name="StatisticOverview">Overview</string>
     <string name="ViewsPerPost">Views Per Post</string>
     <string name="ViewsPerStory">Views Per Story</string>
@@ -4411,8 +4416,8 @@
     <string name="SharesPerPost">Shares Per Post</string>
     <string name="EnabledNotifications">Enabled Notifications</string>
     <string name="ClearLocalDatabase">Clear Local Database</string>
-    <string name="TelegramCacheSize">%s Telegram Cache</string>
-    <string name="LocalDatabaseSize">%s Telegram Local Database</string>
+    <string name="TelegramCacheSize">%s SilentGram Cache</string>
+    <string name="LocalDatabaseSize">%s SilentGram Local Database</string>
     <string name="CacheWasCleared">%s freed on your device!</string>
     <string name="TotalDeviceSize">%s Other Data</string>
     <string name="GroupMembersChartTitle">Group members</string>
@@ -4475,10 +4480,10 @@
     <string name="VoipFailed">Failed to connect</string>
     <string name="VoipRinging">Ringing</string>
     <string name="VoipBusy">Line busy</string>
-    <string name="VoipInCallBranding">Telegram Call</string>
-    <string name="VoipInVideoCallBranding">Telegram Video Call</string>
-    <string name="VoipInConferenceCallBranding">Telegram Group Call</string>
-    <string name="VoipOutgoingCall">Ongoing Telegram call</string>
+    <string name="VoipInCallBranding">SilentGram Call</string>
+    <string name="VoipInVideoCallBranding">SilentGram Video Call</string>
+    <string name="VoipInConferenceCallBranding">SilentGram Group Call</string>
+    <string name="VoipOutgoingCall">Ongoing SilentGram call</string>
     <string name="VoipVoiceChat">Ongoing Voice Chat</string>
     <string name="VoipLiveStream">Ongoing Live Stream</string>
     <string name="VoipConference">Ongoing Video Chat</string>
@@ -4494,7 +4499,7 @@
     <string name="VoipOngoingConferenceChatAlert2">Leave group call with **%1$s** and call **%2$s**?</string>
     <string name="VoipNotificationSettings">Voice calls</string>
     <string name="VoipSettingsRingtone">Ringtone</string>
-    <string name="VoipRingtoneInfo">You can customize the ringtone used when this contact calls you on Telegram.</string>
+    <string name="VoipRingtoneInfo">You can customize the ringtone used when this contact calls you on SilentGram.</string>
     <string name="Calls">Calls</string>
     <string name="DeleteAllCalls">Delete all calls</string>
     <string name="HideCallTab">Hide Call Tab</string>
@@ -4539,19 +4544,19 @@
     <string name="NoRecentCallsInfo">Your recent voice and video calls\nwill appear here.</string>
     <string name="VoipPeerIncompatible">**%1$s**\'s app is using an incompatible protocol. They need to update their app before you can call them.</string>
     <string name="VoipPeerOutdated">**%1$s**\'s app does not support calls. They need to update their app before you can call them.</string>
-    <string name="VoipPeerVideoOutdated">Sorry, **%1$s** is using an old version of Telegram that doesn\'t support video calls.</string>
+    <string name="VoipPeerVideoOutdated">Sorry, **%1$s** is using an old version of SilentGram that doesn\'t support video calls.</string>
     <string name="VoipPeerVideoOutdatedMakeVoice">Make a voice call</string>
-    <string name="VoipRateCallAlert">Please rate the quality of your Telegram call</string>
-    <string name="VoipNeedMicPermissionWithHint">**Telegram** needs microphone access so that you can make calls. Tap Settings -> Permissions, and turn **Microphone** on.</string>
-    <string name="VoipNeedMicCameraPermissionWithHint">**Telegram** needs camera and microphone access so that you can make video calls. Tap Settings -> Permissions, and turn **Microphone** and **Camera** on.</string>
-    <string name="VoipNeedCameraPermission">Telegram needs access to your camera so that you can make video calls.</string>
+    <string name="VoipRateCallAlert">Please rate the quality of your SilentGram call</string>
+    <string name="VoipNeedMicPermissionWithHint">**SilentGram** needs microphone access so that you can make calls. Tap Settings -> Permissions, and turn **Microphone** on.</string>
+    <string name="VoipNeedMicCameraPermissionWithHint">**SilentGram** needs camera and microphone access so that you can make video calls. Tap Settings -> Permissions, and turn **Microphone** and **Camera** on.</string>
+    <string name="VoipNeedCameraPermission">SilentGram needs access to your camera so that you can make video calls.</string>
     <string name="VoipFeedbackCommentHint">Add an optional comment</string>
     <string name="CallBack">Call Back</string>
     <string name="CallAgain">Call Again</string>
     <string name="DefaultRingtone">Default</string>
-    <string name="CallViaTelegram">Telegram Call</string>
-    <string name="VideoCallViaTelegram">Telegram Video Call</string>
-    <string name="VoiceCallViaTelegram">Telegram Voice Call</string>
+    <string name="CallViaTelegram">SilentGram Call</string>
+    <string name="VideoCallViaTelegram">SilentGram Video Call</string>
+    <string name="VoiceCallViaTelegram">SilentGram Voice Call</string>
     <string name="VoiceCallViaCarrier">Call via Carrier</string>
     <string name="VoipAudioRoutingEarpiece">Earpiece</string>
     <string name="VoipAudioRoutingHeadset">Headset</string>
@@ -4566,14 +4571,14 @@
     <string name="CallReportHint">What went wrong?</string>
     <string name="CallReportIncludeLogs">Include technical information</string>
     <string name="CallReportLogsExplain">Doesn\'t reveal chat contents and helps us fix the issue sooner.</string>
-    <string name="CallReportSent">Thank you for helping make Telegram calls better.</string>
+    <string name="CallReportSent">Thank you for helping make SilentGram calls better.</string>
     <string name="TranscriptionReportSent">Thank you for your feedback.</string>
     <string name="VoipQuickReplies">Respond with Text</string>
-    <string name="VoipQuickRepliesExplain">These quick responses will be available when you respond to an incoming call with a Telegram message. Change them to say anything you like.</string>
+    <string name="VoipQuickRepliesExplain">These quick responses will be available when you respond to an incoming call with a SilentGram message. Change them to say anything you like.</string>
     <string name="AllowCustomQuickReply">Allow Custom</string>
-    <string name="VoipInCallBrandingWithName">Telegram Call to %s</string>
-    <string name="VoipInVideoCallBrandingWithName">Telegram Video Call to %s</string>
-    <string name="VoipErrorUnknown">Can\'t place a Telegram call at the moment.</string>
+    <string name="VoipInCallBrandingWithName">SilentGram Call to %s</string>
+    <string name="VoipInVideoCallBrandingWithName">SilentGram Video Call to %s</string>
+    <string name="VoipErrorUnknown">Can\'t place a SilentGram call at the moment.</string>
     <string name="RateCallEcho">I heard my own voice</string>
     <string name="RateCallNoise">I heard background noise</string>
     <string name="RateCallInterruptions">The other side kept disappearing</string>
@@ -4829,8 +4834,8 @@
     <string name="VoipNoiseCancellationEnabled">Enabled</string>
     <string name="VoipNoiseCancellationDisabled">Disabled</string>
     <string name="VoipVideoNotAvailable">Video is only available\nfor the first %1$s</string>
-    <string name="VoipVideoNotAvailableAdmin">The video chat has over %1$s.\nNew participants must use the latest version of Telegram to view video.</string>
-    <string name="VoipChannelVideoNotAvailableAdmin">The live stream is over %1$s.\nNew participants must use the latest version of Telegram to view video.</string>
+    <string name="VoipVideoNotAvailableAdmin">The video chat has over %1$s.\nNew participants must use the latest version of SilentGram to view video.</string>
+    <string name="VoipChannelVideoNotAvailableAdmin">The live stream is over %1$s.\nNew participants must use the latest version of SilentGram to view video.</string>
     <string name="VoipRecordAudio">AUDIO ONLY</string>
     <string name="VoipRecordPortrait">PORTRAIT VIDEO</string>
     <string name="VoipRecordLandscape">LANDSCAPE VIDEO</string>
@@ -4845,8 +4850,8 @@
     <string name="VoipWeakNetwork">Weak network signal</string>
     <string name="VoipHideEmoji">Hide Emoji</string>
     <string name="VoipMyMicrophoneState">Your microphone is turned off</string>
-    <string name="NoRtmpStreamFromAppOwner">**Oops!** Telegram doesn\'t see any stream coming from your streaming app.\n\nPlease make sure you entered the right Server URL and Stream Key in your app.</string>
-    <string name="NoRtmpStreamFromAppViewer">%1$s is currently not broadcasting live stream data to Telegram.</string>
+    <string name="NoRtmpStreamFromAppOwner">**Oops!** SilentGram doesn\'t see any stream coming from your streaming app.\n\nPlease make sure you entered the right Server URL and Stream Key in your app.</string>
+    <string name="NoRtmpStreamFromAppViewer">%1$s is currently not broadcasting live stream data to SilentGram.</string>
     <!--invite links-->
     <string name="ManageInviteLinks">Manage Invite Links</string>
     <string name="ManageLinksInfoHelp">You can create additional invite links that have a limited time or number of uses.</string>
@@ -5511,7 +5516,7 @@
     <string name="ChatThemeSaveDialogText">Do you want to apply the new theme for this chat?</string>
     <string name="ChatThemeSaveDialogApply">Apply</string>
     <string name="ChatThemeSaveDialogDiscard">Discard</string>
-    <string name="OptimizingTelegram">Optimizing Telegram...</string>
+    <string name="OptimizingTelegram">Optimizing SilentGram...</string>
     <string name="OptimizingTelegramDescription1">This may take a while, depending on the size of the database. Please keep the app open until the process is finished.</string>
     <string name="OptimizingTelegramDescription2">Sorry for the inconvenience.</string>
     <string name="EnjoyngAnimations">**oo** watching %1$s</string>
@@ -5676,7 +5681,7 @@
     <string name="DidNotGetTheCodePhone">Get code on this phone</string>
     <string name="MigrateOldFolderButton">Move Files Now</string>
     <string name="MigrateOldFolderTitle">Migrate Files to Scoped Storage</string>
-    <string name="MigrateOldFolderDescription">Due to a change made by **Google**, we need to move the files you downloaded using **Telegram** to a new folder.\n\nThis may take a few moments. You can continue using the app while the files are moved.</string>
+    <string name="MigrateOldFolderDescription">Due to a change made by **Google**, we need to move the files you downloaded using **SilentGram** to a new folder.\n\nThis may take a few moments. You can continue using the app while the files are moved.</string>
     <string name="MigratingFiles">Migrating files</string>
     <string name="ReactionsCount_one">%1$d reaction</string>
     <string name="ReactionsCount_other">%1$d reactions</string>
@@ -5768,9 +5773,9 @@
     <string name="BlurInChat">Blur in chat</string>
 
     <string name="AllowBackgroundActivity">Allow background activity</string>
-    <string name="AllowBackgroundActivityInfo">This will improve reliability for incoming notifications and Telegram calls.</string>
-    <string name="AllowBackgroundActivityInfoOneUIBelowS">This will improve reliability for incoming notifications and Telegram calls. Tap Settings -> Battery and turn **Allow background activity** on.</string>
-    <string name="AllowBackgroundActivityInfoOneUIAboveS">This will improve reliability for incoming notifications and Telegram calls. Please select **Optimised** or **Unrestricted** in Settings > Battery.</string>
+    <string name="AllowBackgroundActivityInfo">This will improve reliability for incoming notifications and SilentGram calls.</string>
+    <string name="AllowBackgroundActivityInfoOneUIBelowS">This will improve reliability for incoming notifications and SilentGram calls. Tap Settings -> Battery and turn **Allow background activity** on.</string>
+    <string name="AllowBackgroundActivityInfoOneUIAboveS">This will improve reliability for incoming notifications and SilentGram calls. Please select **Optimised** or **Unrestricted** in Settings > Battery.</string>
     <string name="SetNewPassword">Set a new password</string>
     <string name="ReadAllReactions">Read all reactions</string>
     <string name="ReadAllMentions">Read all mentions</string>
@@ -5788,7 +5793,7 @@
     <string name="ManageDeviceStorage">Manage Device Storage</string>
     <string name="RemoveDocumentsAlertMessage">They will be deleted from your disk, but will remain accessible in the cloud.</string>
 
-    <string name="DownloadedFilesMessage">Telegram lets you store all documents you send and receive in the cloud and save storage space on your device.</string>
+    <string name="DownloadedFilesMessage">SilentGram lets you store all documents you send and receive in the cloud and save storage space on your device.</string>
     <string name="ClearDownloadsList">Clear Download List</string>
     <string name="SearchEmptyViewDownloads">No recent downloads</string>
     <string name="ForceSetPasswordAlertMessageShort_one">If you do not set a password, you will only be able to log into your account via SMS once every %1$s day. Do you want to proceed without a password?</string>
@@ -5796,8 +5801,8 @@
     <string name="YourPasswordReset">Your password was successfully deactivated</string>
     <string name="CreatePassword">Create a Password</string>
     <string name="CreatePasscode">Create a passcode</string>
-    <string name="CreatePasscodeInfoPIN">Please enter any 4 digits that you will use to unlock Telegram.</string>
-    <string name="CreatePasscodeInfoPassword">Please enter the password you will use to unlock Telegram.</string>
+    <string name="CreatePasscodeInfoPIN">Please enter any 4 digits that you will use to unlock SilentGram.</string>
+    <string name="CreatePasscodeInfoPassword">Please enter the password you will use to unlock SilentGram.</string>
     <string name="PasscodeReinstallNotice">If you forget your passcode, you\'ll need to **reinstall** the app. All secret chats will be lost.</string>
     <string name="EditNumberInfo">Do you want to edit your number?\n\n**%1$s**\n\nIf the number above is correct, please wait for the verification code.</string>
     <string name="ReportChatIllegalDrugs">Illegal Drugs</string>
@@ -5820,7 +5825,7 @@
     <string name="SoundOnHint">You will receive notifications with sound.</string>
     <string name="SoundOffHint">"You will receive silent notifications. "</string>
     <string name="NotificationsSound">Notification Sound</string>
-    <string name="TelegramTones">Telegram tones</string>
+    <string name="TelegramTones">SilentGram tones</string>
     <string name="SystemTones">System tones</string>
     <string name="UploadSound">Upload sound</string>
     <string name="NotificationsSoundPrivate">Private Chats Sound</string>
@@ -6376,7 +6381,7 @@
     <string name="ActionSuggestPhotoShort">Suggested profile photo</string>
     <string name="ActionSuggestVideoShort">Suggested profile video</string>
     <string name="SetAsMyPhoto">Set as My Photo</string>
-    <string name="InviteToTelegramShort">Invite To Telegram</string>
+    <string name="InviteToTelegramShort">Invite To SilentGram</string>
     <string name="ActionAttachMenuBotAllowed">You allowed this bot to message you when you added it to your attachment menu</string>
     <string name="ActionRequestedPeer">You shared un1 with un2</string>
     <string name="ActionRequestedPeerUserPlural_one">You shared a user with un2</string>
@@ -6614,10 +6619,10 @@
     <string name="BlockBot">Block bot</string>
     <string name="AreYouSureDeleteThisChatWithBotWithCheckmark">Are you sure you want to delete the chat with **%1$s**?</string>
     <string name="DecreaseSpeed">Decrease speed</string>
-    <string name="SdCardAlert">Storing on SD card will make Telegram slow. Proceed anyway?</string>
+    <string name="SdCardAlert">Storing on SD card will make SilentGram slow. Proceed anyway?</string>
     <string name="Proceed">Proceed</string>
     <string name="SdCardError">SD Card Error</string>
-    <string name="SdCardErrorDescription">Telegram is unable to save data on your SD card.</string>
+    <string name="SdCardErrorDescription">SilentGram is unable to save data on your SD card.</string>
     <string name="DoNotUseSDCard">Do not use SD card</string>
     <string name="NextMediaTap">Show next media on Tap</string>
     <string name="NextMediaTapInfo">Tap near the edge of the screen while viewing media to navigate between photos</string>
@@ -6965,7 +6970,7 @@
     <string name="ViewStory">View Story</string>
     <string name="StoryPeriodPremium_one">Subscribe to **Telegram Premium** to make your stories disappear after %d hour.</string>
     <string name="StoryPeriodPremium_other">Subscribe to **Telegram Premium** to make your stories disappear after %d hours.</string>
-    <string name="StoryUnsupported">This story is not supported by your version of Telegram.</string>
+    <string name="StoryUnsupported">This story is not supported by your version of SilentGram.</string>
     <string name="StoryReplyDisabled">You can’t reply to this story</string>
     <string name="StorySharedTo">Story forwarded to **%s**.</string>
     <string name="StorySharedToSavedMessages">Story forwarded to **Saved Messages**</string>
@@ -8573,7 +8578,7 @@
     <string name="ReturnEnteringWord">Return to entering the word ></string>
     <string name="ReturnEnteringPhrase">Return to entering the word ></string>
     <string name="SmsAvailableIn2">You can request another\nSMS in %1$d:%2$02d</string>
-    <string name="CallAvailableIn2">Telegram can call you in %1$d:%2$02d</string>
+    <string name="CallAvailableIn2">SilentGram can call you in %1$d:%2$02d</string>
     <string name="ForwardedFrom">Forwarded from</string>
     <string name="RestrictedParticipantSending">Restricted **%s** from sending any messages</string>
     <string name="EventLogExpandMore_one">Show %d More Message</string>
@@ -8583,18 +8588,18 @@
     <string name="AddEffectMessageHint">Add an animated effect</string>
     <string name="AnimatedEffectPremium">Subscribe to **Telegram Premium** to add this animated effect.</string>
     <string name="StickerEffects">Effects from stickers</string>
-    <string name="NumberNotOnTelegram">This number is not on Telegram</string>
-    <string name="NoUsernameFound2">This user doesn’t exist on Telegram</string>
+    <string name="NumberNotOnTelegram">This number is not on SilentGram</string>
+    <string name="NoUsernameFound2">This user doesn’t exist on SilentGram</string>
     <string name="ViewProfile">View Profile ></string>
     <string name="ViewGroupProfile">View Group Info ></string>
     <string name="ViewChannelProfile">View Channel Info ></string>
     <string name="BuyUsernameOnFragment">Buy on Fragment</string>
     <string name="ViewChannel">View Channel</string>
-    <string name="UnlockToUse">Unlock to use Telegram</string>
+    <string name="UnlockToUse">Unlock to use SilentGram</string>
     <string name="UsePIN">Use PIN</string>
     <string name="EnterPINorFingerprint">Enter your PIN or use a fingerprint</string>
     <string name="EnterPIN">Enter your PIN</string>
-    <string name="AppLocked">Telegram Locked</string>
+    <string name="AppLocked">SilentGram Locked</string>
     <string name="ShowSensitiveContent">Show 18+ Content</string>
     <string name="ShowSensitiveContentInfo">Do not hide media that contain content suitable only for adults</string>
     <string name="ConfirmSensitiveContentTitle">18+ Content</string>
@@ -8857,7 +8862,7 @@
     <string name="WebRecentClearTitle">Clear recent searches?</string>
     <string name="WebRecentClearText">Do you want to clear your recent search queries?</string>
     <string name="SearchEngine">Search Engine</string>
-    <string name="OpenInTelegramBrowser">Open in Telegram</string>
+    <string name="OpenInTelegramBrowser">Open in SilentGram</string>
     <string name="OpenInTelegramBrowser2">Open In-App</string>
     <string name="OpenInSystemBrowser">Open in...</string>
     <string name="OpenInSystemBrowser2">Open in Browser</string>
@@ -8943,15 +8948,15 @@
     <string name="BrowserSettingsTitle">Web Browser</string>
     <string name="BrowserSettingsEnable">Enable In-App Browser</string>
     <string name="BrowserSettingsCustomTabsTitle">Open external links in</string>
-    <string name="BrowserSettingsCustomTabs">New Pages within Telegram</string>
+    <string name="BrowserSettingsCustomTabs">New Pages within SilentGram</string>
     <string name="BrowserSettingsNoCustomTabs">New Tabs in External Browser</string>
-    <string name="BrowserSettingsNoCustomTabsInfo">You can choose to open external link without leaving Telegram.</string>
-    <string name="BrowserSettingsEnableInfo">Open links inside Telegram without starting an external browser.</string>
+    <string name="BrowserSettingsNoCustomTabsInfo">You can choose to open external link without leaving SilentGram.</string>
+    <string name="BrowserSettingsEnableInfo">Open links inside SilentGram without starting an external browser.</string>
     <string name="BrowserSettingsCacheClear">Clear Cache</string>
     <string name="BrowserSettingsCookiesClear">Clear Cookies</string>
     <string name="BrowserSettingsCacheClearText">Are you sure you want to clear browser cache%s?</string>
     <string name="BrowserSettingsCookiesClearText">Are you sure you want to clear browser cookies%s?\n\nThis might log you out from website account sessions.</string>
-    <string name="BrowserSettingsCookiesInfo">Delete all cookies and cache from the Telegram in-app browser and miniapps.</string>
+    <string name="BrowserSettingsCookiesInfo">Delete all cookies and cache from the SilentGram in-app browser and miniapps.</string>
     <string name="BrowserSettingsHistoryShow">View History</string>
     <string name="BrowserSettingsHistoryClear">Clear History</string>
     <string name="BrowserSettingsHistoryPages_one">%d page</string>
@@ -8981,7 +8986,7 @@
     <string name="BrowserExternalCheck">Always open links from **%s** in browser</string>
     <string name="BrowserAlwaysOpenExternal">Always open this site in Browser</string>
     <string name="BrowserAlwaysOpenInApp">Always open this site in-app</string>
-    <string name="BrowserExternalRestricted">Telegram will now open links from this website in the external browser. You can change this in **Settings.**</string>
+    <string name="BrowserExternalRestricted">SilentGram will now open links from this website in the external browser. You can change this in **Settings.**</string>
     <string name="StoryEditCover">Edit Cover</string>
     <string name="StoryEditCoverInfo">Choose a frame from the story to show in your Profile.</string>
     <string name="StoryEditCoverMenu">Edit Cover</string>
@@ -9534,7 +9539,7 @@
     <string name="BotProfilePermissionEmojiStatus">Emoji Status</string>
     <string name="BotProfilePermissionBiometry">Biometry</string>
     <string name="BotLocationPermissionRequestGranted">**%s** can now have access to your location</string>
-    <string name="BotLocationPermissionRequestDeniedApp">**%s** can\'t have access to your location since you restricted Telegram from accessing it.</string>
+    <string name="BotLocationPermissionRequestDeniedApp">**%s** can\'t have access to your location since you restricted SilentGram from accessing it.</string>
     <string name="BotLocationPermissionRequestDeniedAppSettings">Change in Settings \></string>
     <string name="BotEmojiStatusPermissionRequestGranted">**%s** can now set your emoji status anytime.</string>
     <string name="BotEmojiStatusUpdated">Your emoji status is updated.</string>
@@ -9819,7 +9824,7 @@
     <string name="Gift2ExportTONUnlocksAlertText_one">In %d day, youll be able to send this collectible to any TON blockchain address outside Telegram for sale or auction.</string>
     <string name="Gift2ExportTONUnlocksAlertText_other">In %d days, youll be able to send this collectible to any TON blockchain address outside Telegram for sale or auction.</string>
     <string name="Gift2ExportTONUpdateRequiredTitle">Update required</string>
-    <string name="Gift2ExportTONUpdateRequiredText">Please update your Telegram application to the latest version.</string>
+    <string name="Gift2ExportTONUpdateRequiredText">Please update your SilentGram application to the latest version.</string>
     <string name="Gift2ExportTONFragmentTitle">Manage with Fragment</string>
     <string name="Gift2ExportTONFragmentText">You can use Fragment, a third-party service, to transfer **%s** to your TON account. After that, you can manage it as an NFT with any TON wallet outside Telegram.\n\nYou can also move such NFTs back to your Telegram account via Fragment.</string>
     <string name="Gift2ExportTONFragmentOpen">Open Fragment</string>
@@ -9967,7 +9972,7 @@
     <string name="SMSFee1Text">Telecom providers in your country charge Telegram very high prices for SMS.</string>
     <string name="SMSFee1TextCountry">Telecom providers in your country (%s) charge Telegram very high prices for SMS.</string>
     <string name="SMSFee2Title">Verification Required</string>
-    <string name="SMSFee2Text">Telegram needs to send you an SMS with a verification code to confirm your phone number.</string>
+    <string name="SMSFee2Text">SilentGram needs to send you an SMS with a verification code to confirm your phone number.</string>
     <string name="SMSFee3Title">Support via **Telegram Premium >**</string>
     <string name="SMSFee3Text">Sign up for 1-week Telegram Premium subscription to help cover the SMS costs.</string>
     <string name="SMSFee3TextDays_one">Sign up for %d day of Telegram Premium subscription to help cover the SMS costs.</string>
@@ -10015,7 +10020,7 @@
     <string name="JoinCall">Join Call</string>
     <string name="ViewCollection">VIEW COLLECTION</string>
     <string name="GroupCallLinkTitle">Group Call</string>
-    <string name="GroupCallLinkText">You are invited to join a Telegram call.</string>
+    <string name="GroupCallLinkText">You are invited to join a SilentGram call.</string>
     <string name="GroupCallLinkText2One">**%1$s** already joined this call.</string>
     <string name="GroupCallLinkText2Two">**%1$s** and **%2$s** already joined this call.</string>
     <string name="GroupCallLinkText2Many_one">**%2$s**, **%3$s** and **%1$d** more person already joined this call.</string>
@@ -10036,7 +10041,7 @@
     <string name="GroupCallCreateInfo_other">You can add up to %d participants to a call.</string>
     <string name="GroupCallCreateLink">Create Call Link</string>
     <string name="GroupCallCreatedLinkTitle">Call Link</string>
-    <string name="GroupCallCreatedLinkText">Anyone on Telegram can join your call by following the link below.</string>
+    <string name="GroupCallCreatedLinkText">Anyone on SilentGram can join your call by following the link below.</string>
     <string name="GroupCallCreatedLinkCopy">Copy</string>
     <string name="GroupCallCreatedLinkShare">Share</string>
     <string name="GroupCallCreatedLinkJoinOr">or</string>
@@ -10376,7 +10381,7 @@
     <string name="AgeVerificationFailedTitle">Age Check Failed</string>
     <string name="AgeVerificationFailedText">Sorry, you can\'t view 18+ content.</string>
     <string name="AgeVerificationPassedTitle">Age Check Passed</string>
-    <string name="AgeVerificationNeedCameraPermission">Telegram needs access to your camera so that you can confirm your age.</string>
+    <string name="AgeVerificationNeedCameraPermission">SilentGram needs access to your camera so that you can confirm your age.</string>
     <string name="StoriesForwardTitle">Your Stories</string>
     <string name="StoriesForwardText">Forward to stories</string>
     <string name="Gift2CollectionEmptyTitle">Organize Your Gifts</string>
@@ -11273,7 +11278,7 @@
 
     <string name="GuestBotFor"> for </string>
 
-    <string name="WearAuthTitle">Use Telegram with WearOS</string>
+    <string name="WearAuthTitle">Use SilentGram with WearOS</string>
     <string name="WearAuthText">Connect your account to WatchOS device\nto use it separately from your watch.</string>
     <string name="WearAuthEmojis">Compare emojis on your watch</string>
     <string name="WearAuthEmojisLogIn">Log In</string>
@@ -11527,9 +11532,9 @@
     <string name="GiftMessageAddDescription">You can add a message for **%1$s** or send **%2$s** right away.</string>
 
     <string name="UnsupportedBlockTitle">Unsupported Block</string>
-    <string name="UnsupportedBlockMessage">Update Telegram to view this part of the message</string>
+    <string name="UnsupportedBlockMessage">Update SilentGram to view this part of the message</string>
     <string name="UnsupportedMessageTitle">Unsupported Message</string>
-    <string name="UnsupportedMessageMessage">Update Telegram to view this message</string>
+    <string name="UnsupportedMessageMessage">Update SilentGram to view this message</string>
     <string name="UnsupportedUpdate">Update</string>
 
     <string name="RoundVideoSettings">Round Video</string>
@@ -11545,7 +11550,7 @@
     <string name="RoundVideoGeneralInfo">60 FPS is used only when both front and rear cameras support it. Otherwise recording falls back to 30 FPS.</string>
     <string name="RoundVideoComposition">Composition</string>
     <string name="RoundVideoCompositionEnabled">Round video styling</string>
-    <string name="RoundVideoCompositionInfo">Disable styling to record a plain square without outside-circle blur, dimming or Telegram overlays.</string>
+    <string name="RoundVideoCompositionInfo">Disable styling to record a plain square without outside-circle blur, dimming or SilentGram overlays.</string>
 
     <string name="HeaderSettings">Header</string>
     <string name="HeaderDoneButtonColor">Done button color</string>
@@ -11593,7 +11598,7 @@
     <string name="WalletSendGrams">Send Grams</string>
     <string name="WalletInsufficientFunds">Insufficient Funds.</string>
     <string name="WalletTitle">Wallet</string>
-    <string name="WalletAuthorizeTransactionPasscode">Enter your current Telegram passcode to authorize transaction.</string>
+    <string name="WalletAuthorizeTransactionPasscode">Enter your current SilentGram passcode to authorize transaction.</string>
     <string name="WalletConfirmWithFingerprint">Confirm with Fingerprint</string>
     <string name="WalletConfirmWithPasscode">Confirm with Passcode</string>
     <string name="WalletLock">Lock Wallet</string>
@@ -11690,10 +11695,10 @@
     <string name="WalletSecretPhrase">Secret Phrase</string>
     <string name="WalletImport">Import Wallet</string>
     <string name="WalletEnterSecretPhrase">Enter your wallet\'s Secret Phrase\nto continue. **Why?**</string>
-    <string name="WalletEnterSecretPhraseInfo">Since you disabled backups for your wallet, you have to manually enter your Secret Phrase in every new Telegram session.</string>
+    <string name="WalletEnterSecretPhraseInfo">Since you disabled backups for your wallet, you have to manually enter your Secret Phrase in every new SilentGram session.</string>
     <string name="WalletImportButton">Import</string>
     <string name="WalletInvalidRecoveryPhrase">Invalid Recovery Phrase</string>
-    <string name="WalletInvalidRecoveryPhraseInfo">Check the word order.\n\nOnly a recovery phrase created in Telegram can be imported here.</string>
+    <string name="WalletInvalidRecoveryPhraseInfo">Check the word order.\n\nOnly a recovery phrase created in SilentGram can be imported here.</string>
     <string name="WalletWrongSecretPhrase">Wrong Secret Phrase</string>
     <string name="WalletWrongSecretPhraseInfo">The words you entered don\'t match the wallet.</string>
     <string name="WalletImported">Wallet Imported</string>
@@ -11897,9 +11902,9 @@
     <string name="WidgetOpenLinkTitle">Open link</string>
     <string name="WidgetOpenLinkText">This widget wants to open:\n%1$s</string>
     <string name="WidgetTextCopied">Copied: %1$s</string>
-    <string name="NewContactPhoneNotOnTelegram">This phone number is not on Telegram. **Invite >**</string>
+    <string name="NewContactPhoneNotOnTelegram">This phone number is not on SilentGram. **Invite >**</string>
     <string name="NewContactPhoneInContacts">This phone number is already in your contacts. **View >**</string>
-    <string name="NewContactPhoneOnTelegram">This phone number is on Telegram.</string>
+    <string name="NewContactPhoneOnTelegram">This phone number is on SilentGram.</string>
     <string name="StoryPrivacyGroupNoContacts">All group members are not in your contact list.</string>
     <string name="StoryPrivacyGroupNonContacts_one">%1$d member is not in your contact list</string>
     <string name="StoryPrivacyGroupNonContacts_other">%1$d members are not in your contact list</string>
@@ -11911,7 +11916,7 @@
     <string name="LocationPoweredBy">Powered by</string>
     <string name="SettingsExperimental">Experimental</string>
     <string name="FpnvConsentTitle">Log In with SIM Card</string>
-    <string name="FpnvConsentText">Telegram can confirm the phone number of this SIM card with your carrier and log you in without a code.</string>
+    <string name="FpnvConsentText">SilentGram can confirm the phone number of this SIM card with your carrier and log you in without a code.</string>
     <string name="FpnvConsentContinue">Continue</string>
     <string name="FpnvConsentCarrier">Carrier</string>
     <string name="FpnvConsentSimSlot">SIM Slot</string>

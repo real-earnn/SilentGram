@@ -570,7 +570,7 @@ public class ContentPreviewViewer {
                     } else {
                         if (delegate.canSendSticker()) {
                             items.add(LocaleController.getString(R.string.SendStickerPreview));
-                            icons.add(R.drawable.icon_plane_24);
+                            icons.add(R.drawable.icon_plane_crescent_24);
                             actions.add(0);
                         }
 
@@ -728,7 +728,7 @@ public class ContentPreviewViewer {
                 if (delegate != null) {
                     if (delegate.needSend(currentContentType) && !delegate.isInScheduleMode()) {
                         items.add(LocaleController.getString(R.string.SendStickerPreview));
-                        icons.add(R.drawable.icon_plane_24);
+                        icons.add(R.drawable.icon_plane_crescent_24);
                         actions.add(0);
                     }
                     if (delegate.needSend(currentContentType) && !delegate.isInScheduleMode()) {
@@ -901,7 +901,7 @@ public class ContentPreviewViewer {
 
                 if (delegate.needSend(currentContentType)) {
                     items.add(LocaleController.getString(R.string.SendEmojiPreview));
-                    icons.add(R.drawable.icon_plane_24);
+                    icons.add(R.drawable.icon_plane_crescent_24);
                     actions.add(0);
                 }
                 Boolean canSetAsStatus = delegate.canSetAsStatus(currentDocument);
@@ -1031,7 +1031,7 @@ public class ContentPreviewViewer {
 
                 if (delegate.needSend(currentContentType) && !delegate.isInScheduleMode()) {
                     items.add(LocaleController.getString(R.string.SendGifPreview));
-                    icons.add(R.drawable.icon_plane_24);
+                    icons.add(R.drawable.icon_plane_crescent_24);
                     actions.add(0);
                 }
                 if (delegate.needSend(currentContentType) && !delegate.isInScheduleMode()) {

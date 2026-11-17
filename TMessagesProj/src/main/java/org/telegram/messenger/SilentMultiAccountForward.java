@@ -99,7 +99,15 @@ public class SilentMultiAccountForward {
         launchActivity.switchToAccount(targetAccount, true);
 
         // Open the chat picker for the new account; on pick, send the pending items.
-        DialogsActivity dialogsActivity = new DialogsActivity(new Bundle());
+        // SilentGram H19 fix: the picker MUST be a forward picker (onlySelect +
+        // DIALOGS_TYPE_FORWARD, exactly like upstream's forward flow). With a plain
+        // DialogsActivity, onlySelect is false, so tapping a chat just OPENS it and
+        // the delegate is never consulted — the forward never lands anywhere.
+        Bundle pickerArgs = new Bundle();
+        pickerArgs.putBoolean("onlySelect", true);
+        pickerArgs.putInt("dialogsType", DialogsActivity.DIALOGS_TYPE_FORWARD);
+        pickerArgs.putBoolean("canSelectTopics", true);
+        DialogsActivity dialogsActivity = new DialogsActivity(pickerArgs);
         dialogsActivity.setDelegate(new DialogsActivity.DialogsActivityDelegate() {
             @Override
             public boolean didSelectDialogs(DialogsActivity dlg, ArrayList<MessagesStorage.TopicKey> dids, CharSequence message, boolean param, boolean notify, int scheduleDate, int scheduleRepeatPeriod, org.telegram.ui.TopicsFragment topicsFragment) {

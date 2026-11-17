@@ -5016,7 +5016,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                 }
             });
 
-            writeButton = new ChatActivityEnterView.SendButton(context, R.drawable.icon_plane_24, resourceProvider) {
+            writeButton = new ChatActivityEnterView.SendButton(context, R.drawable.icon_plane_crescent_24, resourceProvider) {
                 @Override
                 public boolean isOpen() {
                     return true;
@@ -12621,6 +12621,9 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             return;
         }
         animateToHasStories = newVisibility;
+        // SilentGram H3 reassigns newVisibility above, so it is no longer
+        // effectively final — inner classes below must use this final copy.
+        final boolean targetVisibility = newVisibility;
 
         if (newVisibility) {
             dialogStoriesCell.setProgressToCollapse(1f, false);
@@ -12642,7 +12645,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                 @Override
                 public void onAnimationUpdate(@NonNull ValueAnimator animation) {
                     progressToShowStories = (float) animation.getAnimatedValue();
-                    if (!newVisibility) {
+                    if (!targetVisibility) {
                         progressToShowStories = 1f - progressToShowStories;
                     }
                     int newValue = (int) AndroidUtilities.lerp(fromScrollY, toScrollY, (float) animation.getAnimatedValue());
@@ -12658,11 +12661,11 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                 @Override
                 public void onAnimationEnd(Animator animation) {
                     storiesVisibilityAnimator = null;
-                    hasStories = newVisibility;
+                    hasStories = targetVisibility;
                     if (!hasStories && !hasOnlySlefStories) {
                         dialogStoriesCell.setVisibility(View.GONE);
                     }
-                    if (!newVisibility) {
+                    if (!targetVisibility) {
                         setScrollY(0);
                         scrollAdditionalOffset = dp(DialogStoriesCell.HEIGHT_IN_DP);
                     } else {

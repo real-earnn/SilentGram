@@ -45,6 +45,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.text.Editable;
+import android.text.InputType;
 import android.text.Spannable;
 import android.text.SpannableStringBuilder;
 import android.text.Spanned;
@@ -65,6 +66,7 @@ import android.view.ViewOutlineProvider;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.animation.OvershootInterpolator;
 import android.view.inputmethod.EditorInfo;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -268,12 +270,6 @@ public class EmojiView extends FrameLayout implements
     private FavoritePacksAdapter favoritePacksAdapter;
     private RecyclerListView.OnItemClickListener favoritesOnItemClickListener;
     private ArrayList<TLRPC.TL_messages_stickerSet> favoritePacks = new ArrayList<>();
-    private boolean packLongPressConsumed;
-    private View packLongPressView;
-    private String packLongPressShortName;
-    private float packLongPressDownX;
-    private float packLongPressDownY;
-    private Runnable packLongPressRunnable;
     private ScrollSlidingTabStrip stickersTab;
     private FrameLayout stickersTabContainer;
     private RecyclerListView stickersGridView;
@@ -1946,6 +1942,31 @@ public class EmojiView extends FrameLayout implements
             }
 
             @Override
+            protected boolean onTabLongClick(int index) {
+                // SilentGram (H20): long-press an emoji-pack icon to
+                // (un)favorite it. Same tab-index math as onTabClick above:
+                // index 0 is Recent, the next EmojiData.dataColored.length
+                // are the built-in categories, the rest are installed packs.
+                // (Batch G only wired the sticker-pack strip, so long-press
+                // on this strip did nothing at all.)
+                if (index == 0) {
+                    return false;
+                }
+                int packIndex = index - 1 - EmojiData.dataColored.length;
+                ArrayList<EmojiPack> packs = getEmojipacks();
+                if (packs == null || packIndex < 0 || packIndex >= packs.size()) {
+                    return false;
+                }
+                EmojiPack pack = packs.get(packIndex);
+                String shortName = pack != null && pack.set != null ? pack.set.short_name : null;
+                if (shortName == null || shortName.isEmpty()) {
+                    return false;
+                }
+                showPackFavoriteMenu(shortName);
+                return true;
+            }
+
+            @Override
             protected ColorFilter getEmojiColorFilter() {
                 return animatedEmojiTextColorFilter;
             }
@@ -2645,6 +2666,19 @@ public class EmojiView extends FrameLayout implements
             favoritesGridView.setOnTouchListener((v, event) -> ContentPreviewViewer.getInstance().onTouch(event, favoritesGridView, EmojiView.this.getMeasuredHeight(), favoritesOnItemClickListener, contentPreviewViewerDelegate, resourcesProvider));
             favoritesGridView.setAdapter(favoritePacksAdapter = new FavoritePacksAdapter(context));
             favoritesContainer.addView(favoritesGridView);
+            // SilentGram (H20b): "+" in the top-right corner of the
+            // Favorites tab — add a pack by pasting its link, without
+            // needing the long-press. Same icon/tint/press treatment as
+            // the other panel icon buttons (backspaceButton below).
+            ImageView addFavoritePackButton = new ImageView(context);
+            addFavoritePackButton.setImageResource(R.drawable.msg_add);
+            addFavoritePackButton.setColorFilter(new PorterDuffColorFilter(getThemedColor(Theme.key_chat_emojiPanelIcon), PorterDuff.Mode.MULTIPLY));
+            addFavoritePackButton.setScaleType(ImageView.ScaleType.CENTER);
+            addFavoritePackButton.setBackground(Theme.createRoundRectDrawable(dp(18), getThemedColor(Theme.key_chat_emojiPanelBackground)));
+            addFavoritePackButton.setContentDescription(getString(R.string.SilentAddPackToFavorites));
+            addFavoritePackButton.setOnClickListener(v -> showAddPackByLinkDialog());
+            ScaleStateListAnimator.apply(addFavoritePackButton);
+            favoritesContainer.addView(addFavoritePackButton, LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.END, 0, 8, 8, 0));
             Tab favoritesTab = new Tab();
             favoritesTab.type = TAB_FAVORITES;
             favoritesTab.view = favoritesContainer;
@@ -5966,62 +6000,33 @@ public class EmojiView extends FrameLayout implements
     }
 
     // SilentGram: long-press a pack icon to (un)favorite the pack.
-    // The pack strip uses long-press for drag-to-reorder (its own 500 ms
-    // runnable), so this pre-empts it with a shorter 350 ms timer and cancels
-    // the strip's pending drag before it can start. Taps are untouched:
-    // the listener returns false until the long-press has fired.
+    // Uses the framework long-press (setOnLongClickListener) instead of a
+    // hand-rolled timer: the 350 ms OnTouchListener timer batch G added
+    // never fired in practice — the strip's drag-to-reorder handling
+    // (ScrollSlidingTabStrip's 500 ms longClickRunnable, plus the strip
+    // intercepting the touch stream) swallows the gesture before the
+    // timer can fire, so holding a pack icon did nothing. The framework
+    // schedules the long-press on the tab view itself, so it fires on a
+    // genuine hold; the handler cancels the strip's pending drag first so
+    // no drag starts behind the menu. Taps are untouched, and a long-press
+    // never also triggers the tap (the framework suppresses the click
+    // once the long-click is consumed). Haptics come from the framework
+    // (performLongClick vibrates when the listener returns true).
     private void attachPackFavoriteLongPress(View tabView, TLRPC.TL_messages_stickerSet stickerSet) {
         String shortName = stickerSet != null && stickerSet.set != null ? stickerSet.set.short_name : null;
         if (shortName == null || shortName.isEmpty()) {
             return;
         }
-        tabView.setOnTouchListener((v, event) -> {
-            int action = event.getActionMasked();
-            if (action == MotionEvent.ACTION_DOWN) {
-                packLongPressConsumed = false;
-                packLongPressView = v;
-                packLongPressShortName = shortName;
-                packLongPressDownX = event.getX();
-                packLongPressDownY = event.getY();
-                if (packLongPressRunnable == null) {
-                    packLongPressRunnable = () -> {
-                        if (packLongPressView == null || packLongPressShortName == null) {
-                            return;
-                        }
-                        if (stickersTab != null) {
-                            AndroidUtilities.cancelRunOnUIThread(stickersTab.longClickRunnable);
-                            stickersTab.longClickRunning = false;
-                        }
-                        packLongPressConsumed = true;
-                        try {
-                            packLongPressView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-                        } catch (Exception ignored) {
-                        }
-                        showPackFavoriteMenu(packLongPressShortName);
-                    };
-                }
-                AndroidUtilities.cancelRunOnUIThread(packLongPressRunnable);
-                AndroidUtilities.runOnUIThread(packLongPressRunnable, 350);
-                return false;
+        tabView.setOnLongClickListener(v -> {
+            if (stickersTab != null) {
+                // Stop the strip's drag-to-reorder before it starts (or undo
+                // it if its 500 ms runnable already ran first).
+                AndroidUtilities.cancelRunOnUIThread(stickersTab.longClickRunnable);
+                stickersTab.longClickRunning = false;
+                stickersTab.draggingView = null;
             }
-            if (action == MotionEvent.ACTION_MOVE) {
-                if (packLongPressConsumed) {
-                    return true;
-                }
-                float slop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
-                if (Math.abs(event.getX() - packLongPressDownX) > slop || Math.abs(event.getY() - packLongPressDownY) > slop) {
-                    AndroidUtilities.cancelRunOnUIThread(packLongPressRunnable);
-                }
-                return false;
-            }
-            AndroidUtilities.cancelRunOnUIThread(packLongPressRunnable);
-            if (packLongPressConsumed) {
-                packLongPressConsumed = false;
-                packLongPressView = null;
-                packLongPressShortName = null;
-                return true;
-            }
-            return false;
+            showPackFavoriteMenu(shortName);
+            return true;
         });
     }
 
@@ -6037,6 +6042,116 @@ public class EmojiView extends FrameLayout implements
             updateStickerTabs(true);
         });
         builder.create().show();
+    }
+
+    // SilentGram (H20b): "+" on the Favorites tab — paste a pack link and
+    // add that pack to Favorites. The pack does not have to be installed:
+    // its short_name is stored and it shows up in Favorites once installed.
+    // Same native dialog pattern as AlertsCreator.createChangeNameAlert
+    // (AlertDialog.Builder + EditText with the dialog input background).
+    private void showAddPackByLinkDialog() {
+        AlertDialog.Builder builder = new AlertDialog.Builder(getContext());
+        builder.setTitle(getString(R.string.SilentAddPackLinkTitle));
+        LinearLayout dialogView = new LinearLayout(getContext());
+        dialogView.setOrientation(LinearLayout.VERTICAL);
+        final EditText editText = new EditText(getContext());
+        editText.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 16);
+        editText.setMaxLines(1);
+        editText.setLines(1);
+        editText.setSingleLine(true);
+        editText.setGravity(LocaleController.isRTL ? Gravity.RIGHT : Gravity.LEFT);
+        editText.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        editText.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        editText.setHint(getString(R.string.SilentAddPackLinkHint));
+        editText.setBackground(Theme.createEditTextDrawable(getContext(), true));
+        editText.setPadding(0, AndroidUtilities.dp(8), 0, AndroidUtilities.dp(8));
+        dialogView.addView(editText, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, 23, 12, 23, 21));
+        builder.setView(dialogView);
+        AlertDialog.OnButtonClickListener onAdd = (dialog, which) -> {
+            if (editText.getText() == null) {
+                return;
+            }
+            String shortName = parsePackShortName(editText.getText().toString());
+            BulletinFactory factory = fragment != null ? BulletinFactory.of(fragment) : BulletinFactory.of(bulletinContainer, resourcesProvider);
+            if (shortName == null) {
+                factory.createSimpleBulletin(R.drawable.msg_fave, getString(R.string.SilentInvalidPackLink)).show();
+                return;
+            }
+            org.telegram.messenger.SilentPackFavorites.setFavorite(shortName, true);
+            MediaDataController mediaDataController = MediaDataController.getInstance(currentAccount);
+            boolean known = mediaDataController.getStickerSetByName(shortName) != null || findInstalledPackByShortName(mediaDataController, shortName) != null;
+            factory.createSimpleBulletin(R.drawable.msg_fave, getString(known ? R.string.SilentAddedToFavorites : R.string.SilentPackAddedNotInstalled)).show();
+            reloadFavoritePacks();
+            updateStickerTabs(true);
+        };
+        builder.setPositiveButton(getString(R.string.Add), onAdd);
+        builder.setNegativeButton(getString(R.string.Cancel), null);
+        AlertDialog dialog = builder.create();
+        editText.setOnEditorActionListener((textView, actionId, keyEvent) -> {
+            if (actionId == EditorInfo.IME_ACTION_DONE && dialog.isShowing()) {
+                onAdd.onClick(dialog, 0);
+                dialog.dismiss();
+                return true;
+            }
+            return false;
+        });
+        dialog.show();
+        editText.requestFocus();
+        AndroidUtilities.showKeyboard(editText);
+    }
+
+    // SilentGram (H20b): parse a pack short_name out of a link the user
+    // pasted — https://t.me/addemoji/<name>, https://t.me/addstickers/<name>,
+    // the same without a scheme, addemoji/<name> / addstickers/<name>, or a
+    // bare short_name. Returns null when no valid short_name is in there.
+    private static String parsePackShortName(String link) {
+        if (link == null) {
+            return null;
+        }
+        String s = link.trim();
+        if (s.isEmpty()) {
+            return null;
+        }
+        if (s.regionMatches(true, 0, "https://", 0, 8)) {
+            s = s.substring(8);
+        } else if (s.regionMatches(true, 0, "http://", 0, 7)) {
+            s = s.substring(7);
+        }
+        if (s.regionMatches(true, 0, "t.me/", 0, 5)) {
+            s = s.substring(5);
+        } else if (s.regionMatches(true, 0, "telegram.me/", 0, 12)) {
+            s = s.substring(12);
+        }
+        if (s.regionMatches(true, 0, "addemoji/", 0, 9)) {
+            s = s.substring(9);
+        } else if (s.regionMatches(true, 0, "addstickers/", 0, 12)) {
+            s = s.substring(12);
+        } else if (s.equalsIgnoreCase("addemoji") || s.equalsIgnoreCase("addstickers")) {
+            // Bare "https://t.me/addstickers" — a link with no pack in it.
+            return null;
+        }
+        int cut = s.indexOf('?');
+        if (cut >= 0) {
+            s = s.substring(0, cut);
+        }
+        cut = s.indexOf('#');
+        if (cut >= 0) {
+            s = s.substring(0, cut);
+        }
+        while (s.endsWith("/")) {
+            s = s.substring(0, s.length() - 1);
+        }
+        s = s.trim();
+        if (s.isEmpty()) {
+            return null;
+        }
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (!(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_')) {
+                return null;
+            }
+        }
+        return s;
     }
 
     private static class FavItem {
