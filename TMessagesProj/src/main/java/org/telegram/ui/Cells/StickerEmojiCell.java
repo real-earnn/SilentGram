@@ -75,6 +75,20 @@ public class StickerEmojiCell extends FrameLayout implements NotificationCenter.
     private int editModeIconColor;
 
     private final static int STICKER_SIZE = 66;
+    // SilentGram (J1): per-cell draw-size override + premium-lock hide.
+    // Defaults keep every existing caller exactly as before (66dp draw,
+    // lock shown); only the Favorites tab sets a small size and hides
+    // the lock, matching the Emoji tab (no per-emoji lock there either).
+    private int stickerSizeDp = STICKER_SIZE;
+    private boolean hidePremiumLock;
+
+    public void setStickerSizeDp(int dp) {
+        stickerSizeDp = dp;
+    }
+
+    public void setHidePremiumLock(boolean hide) {
+        hidePremiumLock = hide;
+    }
     private boolean drawInParentView;
     private final Theme.ResourcesProvider resourceProvider;
 
@@ -318,7 +332,7 @@ public class StickerEmojiCell extends FrameLayout implements NotificationCenter.
             premiumIconView.setPadding(AndroidUtilities.dp(1), AndroidUtilities.dp(1), AndroidUtilities.dp(1), AndroidUtilities.dp(1));
         }
         premiumIconView.setLocked(!UserConfig.getInstance(currentAccount).isPremium());
-        AndroidUtilities.updateViewVisibilityAnimated(premiumIconView, showPremiumLock, 0.9f, animated);
+        AndroidUtilities.updateViewVisibilityAnimated(premiumIconView, showPremiumLock && !hidePremiumLock, 0.9f, animated);
         invalidate();
     }
 
@@ -461,7 +475,7 @@ public class StickerEmojiCell extends FrameLayout implements NotificationCenter.
             }
             view.invalidate();
         }
-        int size = Math.min(AndroidUtilities.dp(STICKER_SIZE), Math.min(getMeasuredHeight(), getMeasuredWidth()));
+        int size = Math.min(AndroidUtilities.dp(stickerSizeDp), Math.min(getMeasuredHeight(), getMeasuredWidth()));
         int cX = getMeasuredWidth() >> 1;
         int cY = getMeasuredHeight() >> 1;
         imageView.setImageCoords(cX - size / 2f, cY - size / 2f, size, size);

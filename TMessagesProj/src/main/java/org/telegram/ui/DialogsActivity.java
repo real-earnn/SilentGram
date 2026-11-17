@@ -10060,7 +10060,14 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             }
         }
         if (addToFolderItem != null) {
-            if (folderId == 1 || filterTabsView != null && getFilterTabsVisibilityFactor(false) > 0.5f && filterTabsView.currentTabIsDefault() && !FiltersListBottomSheet.getCanAddDialogFilters(this, selectedDialogs).isEmpty()) {
+            // SilentGram K3: also offer "Add to Folder" while standing
+            // inside a folder, so a chat can join another folder without
+            // leaving this one (a chat can live in several folders).
+            // getCanAddDialogFilters already excludes every folder the
+            // chat is already in, so the item only shows when there is
+            // somewhere left to add it to. "Remove from Folder" above is
+            // untouched.
+            if (folderId == 1 || filterTabsView != null && getFilterTabsVisibilityFactor(false) > 0.5f && !FiltersListBottomSheet.getCanAddDialogFilters(this, selectedDialogs).isEmpty()) {
                 addToFolderItem.setVisibility(View.VISIBLE);
             } else {
                 addToFolderItem.setVisibility(View.GONE);
@@ -14295,6 +14302,26 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         });
     }
 
+    // SilentGram K5: after switchToAccount() the home screen is already
+    // rebuilt — a fresh MainTabsActivity whose ViewPager holds a
+    // DialogsActivity with the bottom tabs (LaunchActivity.switchToAccount
+    // removes all fragments, adds the MainTabsActivity and rebuilds; the
+    // ViewPager binds POSITION_CHATS synchronously in setAdapter, so the
+    // internal DialogsActivity exists right after the call returns). A
+    // second standalone DialogsActivity presented on top of it is a
+    // full-screen opaque fragment (ActionBarLayout gives it a
+    // key_windowBackgroundWhite background), so it COVERS the tab bar — and
+    // the tabs only come back when Back pops it. That is the K5 bug.
+    // Only present a standalone fragment when this list is a share/forward
+    // picker (or carries share state) that must survive the switch; in that
+    // modal case covering the tabs is intended.
+    private boolean silentNeedsPickerFragment(ArrayList<MediaController.PhotoEntry> carryEntries, String carryLink, CharSequence carrySeed) {
+        if (delegate != null || onlySelect || initialDialogsType != DIALOGS_TYPE_DEFAULT || folderId != 0 || communityId != 0) {
+            return true;
+        }
+        return (carryEntries != null && !carryEntries.isEmpty()) || carryLink != null || carrySeed != null;
+    }
+
     // SilentGram H3: tap an account circle in the "My Accounts" strip to
     // switch to that account. Same switch as the account selector popup
     // (openAccountSelector below), minus the share-carry, which only the
@@ -14305,8 +14332,18 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         }
         final LaunchActivity launchActivity = (LaunchActivity) getParentActivity();
         final DialogsActivityDelegate oldDelegate = delegate;
+        // SilentGram K5: capture the picker decision BEFORE switchToAccount —
+        // the switch destroys this fragment and onFragmentDestroy() nulls
+        // delegate, so reading it afterwards would always say "no picker".
+        final boolean needsPicker = silentNeedsPickerFragment(null, null, null);
         launchActivity.switchToAccount(account, true);
 
+        // SilentGram K5: plain browsing switch — the fresh MainTabsActivity
+        // IS the home screen with the tabs. Do not stack a second
+        // DialogsActivity on top of it (it would cover the tab bar).
+        if (!needsPicker) {
+            return;
+        }
         final DialogsActivity dialogsActivity = new DialogsActivity(arguments);
         dialogsActivity.setDelegate(oldDelegate);
         launchActivity.presentFragment(dialogsActivity, false, true);
@@ -14373,8 +14410,20 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                     final String carryLink = sharedLink;
                     final CharSequence carrySeed = sharedTextSeed;
                     final CharSequence carryCaption = commentView != null ? commentView.getFieldText() : null;
+                    // SilentGram K5: capture the picker decision BEFORE
+                    // switchToAccount — the switch destroys this fragment and
+                    // onFragmentDestroy() nulls delegate, so reading it
+                    // afterwards would always say "no picker".
+                    final boolean needsPicker = silentNeedsPickerFragment(carryEntries, carryLink, carrySeed);
                     launchActivity.switchToAccount(account, true);
 
+                    // SilentGram K5: plain browsing switch — the fresh
+                    // MainTabsActivity IS the home screen with the tabs. Only
+                    // stack a picker DialogsActivity on top when this list
+                    // is a share/forward picker or carries share state.
+                    if (!needsPicker) {
+                        return;
+                    }
                     final DialogsActivity dialogsActivity = new DialogsActivity(arguments);
                     dialogsActivity.setDelegate(oldDelegate);
                     if (carryEntries != null && !carryEntries.isEmpty()) {

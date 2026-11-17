@@ -13,6 +13,7 @@ import org.telegram.messenger.FileLoader;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MessageObject;
 import org.telegram.messenger.MessagesController;
+import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SilentMessageHistory;
 import org.telegram.messenger.UserObject;
@@ -36,12 +37,34 @@ import java.util.ArrayList;
  * "Boost" action per file — tapping it raises that file to the highest
  * download priority so it finishes first (IDM-style boost).
  */
-public class SilentDownloadManagerActivity extends BaseFragment {
+public class SilentDownloadManagerActivity extends BaseFragment implements NotificationCenter.NotificationCenterDelegate {
 
     private RecyclerListView listView;
     private ListAdapter adapter;
     private ArrayList<MessageObject> files = new ArrayList<>();
     private TextView emptyView;
+
+    @Override
+    public boolean onFragmentCreate() {
+        // SilentGram K4: refresh live while open — a finished/failed
+        // download disappears and a newly started one appears, instead
+        // of the list only refreshing when the screen is re-opened.
+        getNotificationCenter().addObserver(this, NotificationCenter.onDownloadingFilesChanged);
+        return super.onFragmentCreate();
+    }
+
+    @Override
+    public void onFragmentDestroy() {
+        getNotificationCenter().removeObserver(this, NotificationCenter.onDownloadingFilesChanged);
+        super.onFragmentDestroy();
+    }
+
+    @Override
+    public void didReceivedNotification(int id, int account, Object... args) {
+        if (id == NotificationCenter.onDownloadingFilesChanged) {
+            reload();
+        }
+    }
 
     @Override
     public View createView(Context context) {
@@ -155,7 +178,7 @@ public class SilentDownloadManagerActivity extends BaseFragment {
             } else {
                 chatName = LocaleController.getString(R.string.SilentDownloadUnknown);
             }
-            cell.setData(obj, null, chatName, name, 0, position != files.size() - 1);
+            cell.setData(obj, null, chatName, name + (msg.getDocument() != null ? "  •  " + AndroidUtilities.formatFileSize(msg.getDocument().size) : ""), 0, position != files.size() - 1);
             cell.setOnClickListener(v -> {
                 boostFile(currentAccount, msg);
                 android.widget.Toast.makeText(getParentActivity(), LocaleController.getString(R.string.SilentDownloadBoosted), android.widget.Toast.LENGTH_SHORT).show();

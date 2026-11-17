@@ -429,12 +429,12 @@
     <string name="Checking">Checking...</string>
     <string name="Available">Available</string>
     <string name="Unavailable">Unavailable</string>
-    <string name="ConnectingToProxy">Connecting to proxy</string>
-    <string name="ConnectingToProxyWithDots">Connecting to proxy...</string>
+    <string name="ConnectingToProxy">Connecting to SilentGram</string>
+    <string name="ConnectingToProxyWithDots">Connecting to SilentGram...</string>
     <string name="MenuProxyTitle">Proxy</string>
     <string name="MenuProxyDisabled">Disabled</string>
-    <string name="MenuProxyConnecting">Connecting</string>
-    <string name="MenuProxyConnected">Connected</string>
+    <string name="MenuProxyConnecting">Connecting to SilentGram</string>
+    <string name="MenuProxyConnected">Connected to SilentGram</string>
     <string name="ConnectingConnectProxy">Connect Proxy</string>
     <string name="Updating">Updating...</string>
     <string name="NewSecretChat">New Secret Chat</string>

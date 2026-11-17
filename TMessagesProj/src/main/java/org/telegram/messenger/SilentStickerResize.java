@@ -3,13 +3,18 @@ package org.telegram.messenger;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.view.Gravity;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
+import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.Theme;
+import org.telegram.ui.Components.BackupImageView;
 import org.telegram.ui.Components.LayoutHelper;
+
+import java.util.Locale;
 
 /**
  * SilentGram sticker resize (1–20), like Plus Messenger.
@@ -80,15 +85,47 @@ public class SilentStickerResize {
         seekBar.setProgress(current - MIN_LEVEL);
         layout.addView(seekBar, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, AndroidUtilities.dp(12), 0, 0));
 
+        // SilentGram K2: live preview — the sticker itself, drawn at the
+        // chosen size, so the user can see how big it will look in chat
+        // before confirming. Base size is dp(72) at 1.0x (level 5), capped
+        // at dp(260) so the biggest levels still fit on screen.
+        final BackupImageView previewView;
+        final TLRPC.Document document = messageObject.getDocument();
+        if (document != null) {
+            FrameLayout previewBox = new FrameLayout(context);
+            previewView = new BackupImageView(context);
+            String ext = messageObject.isAnimatedSticker() ? "tgs" : null;
+            previewView.setImage(ImageLocation.getForDocument(document), "512_512", ext, null, null);
+            previewBox.addView(previewView, LayoutHelper.createFrame(AndroidUtilities.dp(72), AndroidUtilities.dp(72), Gravity.CENTER));
+            layout.addView(previewBox, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, AndroidUtilities.dp(280)));
+        } else {
+            previewView = null;
+        }
+
+        Runnable updatePreview = () -> {
+            if (previewView == null) {
+                return;
+            }
+            int level = seekBar.getProgress() + MIN_LEVEL;
+            int size = Math.min(AndroidUtilities.dp(260), Math.round(AndroidUtilities.dp(72) * scaleForLevel(level)));
+            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) previewView.getLayoutParams();
+            lp.width = size;
+            lp.height = size;
+            previewView.setLayoutParams(lp);
+        };
+
         Runnable updateLabel = () -> {
             int level = seekBar.getProgress() + MIN_LEVEL;
-            label.setText(LocaleController.getString(R.string.SilentStickerResize) + ": " + level + (level == NORMAL_LEVEL ? " (normal)" : ""));
+            String scaleText = String.format(Locale.US, "%.1fx", scaleForLevel(level));
+            label.setText(LocaleController.getString(R.string.SilentStickerResize) + ": " + level + (level == NORMAL_LEVEL ? " (normal, " + scaleText + ")" : " (" + scaleText + ")"));
         };
         updateLabel.run();
+        updatePreview.run();
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 updateLabel.run();
+                updatePreview.run();
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
             @Override public void onStopTrackingTouch(SeekBar seekBar) {}

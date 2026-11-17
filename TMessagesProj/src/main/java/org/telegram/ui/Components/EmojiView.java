@@ -2619,7 +2619,24 @@ public class EmojiView extends FrameLayout implements
             // SilentGram: Favorites tab — the packs favorited via SilentPackFavorites
             // (pack icon long-press, or StickersAlert menu), shown as one grid.
             favoritesContainer = new FrameLayout(context);
-            favoritesGridView = new RecyclerListView(context);
+            // SilentGram (J2): MUST be RecyclerListViewWithOverlayDraw,
+            // like the Stickers tab — NOT a plain RecyclerListView.
+            // StickerEmojiCell with fromEmojiPanel=true sets
+            // drawInParentView=true for every animated/video document
+            // whose autoplay is on (MessageObject
+            // .canAutoplayAnimatedSticker: animated/video + LiteMode
+            // FLAG_ANIMATED_STICKERS_KEYBOARD), and then its dispatchDraw
+            // draws NOTHING — the image is only drawn when the parent
+            // calls OverlayView.preDraw(). Only
+            // RecyclerListViewWithOverlayDraw.dispatchDraw does that.
+            // With a plain list the file downloaded fine (ImageReceiver
+            // still requests it) but no canvas ever drew it, so every
+            // autoplay-able premium emoji was invisible in Favorites
+            // while the same emoji showed in the Emoji tab (which draws
+            // via AnimatedEmojiDrawable, not via the cell). Static
+            // stickers and LiteMode-off animated ones drew normally,
+            // which is why only some favorites ever appeared.
+            favoritesGridView = new RecyclerListViewWithOverlayDraw(context);
             favoritesGridView.setLayoutManager(favoritesLayoutManager = new GridLayoutManager(context, 5));
             favoritesLayoutManager.setSpanSizeLookup(new GridLayoutManager.SpanSizeLookup() {
                 @Override
@@ -2627,9 +2644,10 @@ public class EmojiView extends FrameLayout implements
                     if (favoritePacksAdapter == null) {
                         return 1;
                     }
-                    // SilentGram (I3): header/empty rows span the whole grid —
-                    // the span count is dynamic (width / dp(72), like the
-                    // Stickers tab), so it must be read live, not hardcoded.
+                    // SilentGram (I3/J1): header/empty rows span the whole
+                    // grid — the span count is dynamic (width / dp(45),
+                    // like the Emoji tab), so it must be read live, not
+                    // hardcoded.
                     return favoritePacksAdapter.getItemViewType(position) == 0 ? 1 : favoritesLayoutManager.getSpanCount();
                 }
             });
@@ -6304,19 +6322,21 @@ public class EmojiView extends FrameLayout implements
         }
 
         void reload() {
-            // SilentGram (I3): same per-row math as the Stickers tab
-            // (StickersGridAdapter.updateItems()): perRow =
-            // width / dp(72), and the layout manager's span count
-            // follows it. Cell height stays dp(82) — the same
-            // StickerEmojiCell override the Stickers tab uses — so a
-            // Favorites cell is exactly a Stickers-tab cell on any
-            // width: a 360dp phone -> 5/row, a ~504dp panel -> 7/row.
+            // SilentGram (J1): the Emoji tab's exact column math
+            // (EmojiGridView.onMeasure): perRow = width / dp(45)
+            // (dp(60) on tablets). A 360dp phone -> 8/row, a ~504dp
+            // panel -> 11/row — the same density as the Emoji tab.
+            // Batch I used the Stickers tab's dp(72) cells (5/row on a
+            // phone); the user rejected that size — Favorites must look
+            // like the Emoji tab. The draw size itself is set per cell
+            // in onCreateViewHolder (Emoji tab emojiSize: dp(32) on
+            // phones, dp(40) on tablets).
             if (favoritesLayoutManager != null && favoritesGridView != null) {
                 int width = favoritesGridView.getMeasuredWidth();
                 if (width == 0) {
                     width = AndroidUtilities.displaySize.x;
                 }
-                favoritesLayoutManager.setSpanCount(Math.max(1, width / AndroidUtilities.dp(72)));
+                favoritesLayoutManager.setSpanCount(Math.max(1, width / AndroidUtilities.dp(AndroidUtilities.isTablet() ? 60 : 45)));
             }
             items.clear();
             packHeaderPositions.clear();
@@ -6409,11 +6429,26 @@ public class EmojiView extends FrameLayout implements
         public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
             View view;
             if (viewType == 0) {
-                view = new StickerEmojiCell(context, true, resourcesProvider) {
+                // SilentGram (J1): Emoji-tab geometry. Square cell like
+                // the Emoji tab's ImageViewEmoji (height = column width)
+                // and the Emoji tab's glyph size (EmojiView.emojiSize:
+                // dp(32) on phones, dp(40) on tablets) via
+                // StickerEmojiCell.setStickerSizeDp — the cell's
+                // hardcoded 66dp draw size is why shrinking the cell
+                // alone (batch I) could never give emoji size. The
+                // premium lock is hidden at this size: it would cover
+                // the emoji, and the Emoji tab shows no per-emoji lock
+                // either — the tap-time premium gate in
+                // favoritesOnItemClickListener still applies.
+                StickerEmojiCell cell = new StickerEmojiCell(context, true, resourcesProvider) {
+                    @Override
                     public void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-                        super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(AndroidUtilities.dp(82), MeasureSpec.EXACTLY));
+                        super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.EXACTLY));
                     }
                 };
+                cell.setStickerSizeDp(AndroidUtilities.isTablet() ? 40 : 32);
+                cell.setHidePremiumLock(true);
+                view = cell;
             } else if (viewType == 1) {
                 view = new StickerSetNameCell(context, false, resourcesProvider, glassDesign);
             } else {
@@ -6458,7 +6493,7 @@ public class EmojiView extends FrameLayout implements
         // MessageObject.canAutoplayAnimatedSticker() is true. Otherwise
         // (LiteMode animated-stickers-keyboard off) it falls back to the
         // 90px thumb as the main image, and the full file is never
-        // requested — the thumb is upscaled to the 66dp draw size and
+        // requested — the thumb is upscaled to the 32dp draw size and
         // looks blurred, while the same emoji in the Emoji tab stays
         // sharp because AnimatedEmojiDrawable draws the full vector
         // file. Only documents whose full file happened to be cached
@@ -6473,6 +6508,10 @@ public class EmojiView extends FrameLayout implements
         // overload, same thumb + svgThumb placeholders), only the
         // filter differs. Static stickers are untouched: their thumb
         // path is upstream behaviour, identical in the Stickers tab.
+        // SilentGram (J1): the first frame is decoded at the Favorites
+        // draw size (Emoji tab emojiSize: 32dp phones, 40dp tablets),
+        // following the same "<w>_<h>_firstframe" pattern ImageLoader
+        // parses — not the old 66dp sticker size.
         private void loadFavoritesFullFrame(StickerEmojiCell cell, FavItem item) {
             TLRPC.Document document = item.document;
             if (document == null) {
@@ -6484,14 +6523,16 @@ public class EmojiView extends FrameLayout implements
             if (!MessageObject.isAnimatedStickerDocument(document, true) && !MessageObject.isVideoStickerDocument(document)) {
                 return;
             }
+            int drawDp = AndroidUtilities.isTablet() ? 40 : 32;
+            String firstFrameFilter = drawDp + "_" + drawDp + "_firstframe";
             TLRPC.PhotoSize thumb = FileLoader.getClosestPhotoSizeWithSize(document.thumbs, 90);
             SvgHelper.SvgDrawable svgThumb = DocumentObject.getSvgThumb(document, Theme.key_emptyListPlaceholder, 0.2f, 1f, resourcesProvider);
             if (svgThumb != null) {
-                cell.getImageView().setImage(ImageLocation.getForDocument(document), "66_66_firstframe", ImageLocation.getForDocument(thumb, document), null, svgThumb, 0, null, item.pack, 1);
+                cell.getImageView().setImage(ImageLocation.getForDocument(document), firstFrameFilter, ImageLocation.getForDocument(thumb, document), null, svgThumb, 0, null, item.pack, 1);
             } else if (thumb != null) {
-                cell.getImageView().setImage(ImageLocation.getForDocument(document), "66_66_firstframe", ImageLocation.getForDocument(thumb, document), null, (String) null, item.pack, 1);
+                cell.getImageView().setImage(ImageLocation.getForDocument(document), firstFrameFilter, ImageLocation.getForDocument(thumb, document), null, (String) null, item.pack, 1);
             } else {
-                cell.getImageView().setImage(ImageLocation.getForDocument(document), "66_66_firstframe", (Drawable) null, (String) null, item.pack, 1);
+                cell.getImageView().setImage(ImageLocation.getForDocument(document), firstFrameFilter, (Drawable) null, (String) null, item.pack, 1);
             }
         }
     }

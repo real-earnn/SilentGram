@@ -1359,8 +1359,11 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     int videoButtonPressed;
     int miniButtonPressed;
     int silentBoostPressed;
-    private Drawable silentBoostDrawable;
-    private Paint silentBoostPaint;
+    // SilentGram K1: literal "BOOST" text drawn right after the file-size
+    // text on a downloading document row (replaces the old icon badge next
+    // to the download icon). Its view-space bounds, for tap detection.
+    private final RectF silentBoostTextRect = new RectF();
+    private boolean silentBoostTextVisible;
     int otherX;
     int otherY;
     private int lastWidth;
@@ -13592,10 +13595,29 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 if (infoLayout != null) {
                     canvas.save();
                     canvas.translate(x, subtitleY);
+                    StaticLayout silentBoostAnchorLayout;
                     if (buttonState == 1 && loadingProgressLayout != null) {
                         loadingProgressLayout.draw(canvas);
+                        silentBoostAnchorLayout = loadingProgressLayout;
                     } else {
                         infoLayout.draw(canvas);
+                        silentBoostAnchorLayout = infoLayout;
+                    }
+                    // SilentGram K1: literal "BOOST" right after the
+                    // file-size text (e.g. "14 MB", or "3.2 MB / 14 MB"
+                    // while downloading). Tapping it boost-downloads
+                    // this file (see isInSilentBoostArea).
+                    silentBoostTextVisible = false;
+                    if (isSilentBoostVisible() && silentBoostAnchorLayout.getLineCount() > 0) {
+                        float anchorWidth = silentBoostAnchorLayout.getLineLeft(0) + silentBoostAnchorLayout.getLineWidth(0);
+                        float boostX = anchorWidth + dp(8);
+                        Theme.chat_infoBoldPaint.setColor(getThemedColor(currentMessageObject.isOutOwner() ? Theme.key_chat_outLoader : Theme.key_chat_inLoader));
+                        Theme.chat_infoBoldPaint.setAlpha((int) (255 * controlsAlpha));
+                        canvas.drawText("BOOST", boostX, silentBoostAnchorLayout.getLineBaseline(0), Theme.chat_infoBoldPaint);
+                        float boostW = Theme.chat_infoBoldPaint.measureText("BOOST");
+                        silentBoostTextRect.set(x + boostX - dp(2), subtitleY, x + boostX + boostW + dp(4), subtitleY + dp(16));
+                        silentBoostTextVisible = true;
+                        Theme.chat_infoBoldPaint.setAlpha(255);
                     }
                     canvas.restore();
                 }
@@ -15276,12 +15298,14 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         }
     }
 
-    // SilentGram H12: inline boost — a small boost badge on a file that is
-    // downloading right now, so the user can boost it without opening the
-    // Download Manager. Shown only while FileLoader is actually loading
-    // this message's document, and only when Telegram's own mini button is
-    // not using that corner (miniButtonState >= 0), so native behaviour is
-    // never disturbed. Photos have no document to prioritise, so no badge.
+    // SilentGram K1 (replaces the H12 icon badge): the literal word
+    // "BOOST" drawn right after the file-size text ("14 MB") on a file
+    // that is downloading right now, so the user can boost it without
+    // opening the Download Manager. Shown only while FileLoader is
+    // actually loading this message's document, and only when Telegram's
+    // own mini button is not in use (miniButtonState >= 0), so native
+    // behaviour is never disturbed. Photos have no document to
+    // prioritise, so no BOOST text.
     private boolean isSilentBoostVisible() {
         if (currentMessageObject == null || currentMessageObject.getDocument() == null || buttonState == -1 || miniButtonState >= 0) {
             return false;
@@ -15294,38 +15318,10 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
     }
 
     private boolean isInSilentBoostArea(int x, int y) {
-        if (!isSilentBoostVisible()) {
+        if (!isSilentBoostVisible() || !silentBoostTextVisible) {
             return false;
         }
-        RectF pr = radialProgress.getProgressRect();
-        float cx = pr.centerX() + dp(18);
-        float cy = pr.centerY() + dp(18);
-        float r = dp(12);
-        return x >= cx - r && x <= cx + r && y >= cy - r && y <= cy + r;
-    }
-
-    private void drawSilentBoostIcon(Canvas canvas) {
-        RectF pr = radialProgress.getProgressRect();
-        float cx = pr.centerX() + dp(18);
-        float cy = pr.centerY() + dp(18);
-        if (silentBoostPaint == null) {
-            silentBoostPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        }
-        silentBoostPaint.setColor(Theme.getColor(currentMessageObject.isOutOwner() ? Theme.key_chat_outLoader : Theme.key_chat_inLoader));
-        silentBoostPaint.setAlpha((int) (255 * controlsAlpha));
-        canvas.drawCircle(cx, cy, dp(11), silentBoostPaint);
-        if (silentBoostDrawable == null) {
-            silentBoostDrawable = ContextCompat.getDrawable(getContext(), R.drawable.mini_boost_badge);
-            if (silentBoostDrawable != null) {
-                silentBoostDrawable = silentBoostDrawable.mutate();
-                silentBoostDrawable.setColorFilter(new PorterDuffColorFilter(Color.WHITE, PorterDuff.Mode.SRC_IN));
-            }
-        }
-        if (silentBoostDrawable != null) {
-            int s = dp(15);
-            silentBoostDrawable.setBounds((int) (cx - s / 2), (int) (cy - s / 2), (int) (cx + s / 2), (int) (cy + s / 2));
-            silentBoostDrawable.draw(canvas);
-        }
+        return silentBoostTextRect.contains(x, y);
     }
 
     void didPressSilentBoost() {
@@ -23424,11 +23420,6 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             radialProgress.iconScale *= mediaSpoilerRevealProgress;
         }
         radialProgress.draw(canvas);
-
-        // SilentGram H12: inline boost badge on the downloading file.
-        if (isSilentBoostVisible()) {
-            drawSilentBoostIcon(canvas);
-        }
 
         if (withPeriod) {
             canvas.save();
