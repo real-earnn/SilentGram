@@ -8304,7 +8304,11 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                                         width /= scale;
                                         height /= scale;
                                     }
-                                    if (height < dp(60)) {
+                                    // SilentGram: a resized sticker must take exactly the
+                                    // space its scale says — small stickers stay small.
+                                    // The 60dp floor is for photos; it would stretch a
+                                    // tiny sticker tall and waste a 60dp row.
+                                    if (height < dp(60) && documentAttachType != DOCUMENT_ATTACH_TYPE_STICKER) {
                                         height = dp(60);
                                     }
                                 }

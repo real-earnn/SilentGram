@@ -619,7 +619,7 @@ public class SilentQuickActions {
                     SendMessagesHelper.getInstance(account).sendMessage(params);
                 });
             } else {
-                AndroidUtilities.runOnUIThread(() -> SilentToast.show(fragment.getParentActivity(), LocaleController.getString(R.string.SilentQuickShareFailed), android.widget.Toast.LENGTH_SHORT).show());
+                AndroidUtilities.runOnUIThread(() -> SilentToast.show(fragment.getParentActivity(), LocaleController.getString(R.string.SilentQuickShareFailed), android.widget.Toast.LENGTH_SHORT));
             }
         });
     }

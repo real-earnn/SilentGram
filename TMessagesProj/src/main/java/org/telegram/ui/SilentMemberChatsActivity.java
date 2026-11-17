@@ -248,7 +248,7 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
             req.banned_rights = rights;
             ConnectionsManager.getInstance(currentAccount).sendRequest(req, (res, err) -> {
                 if (err != null) {
-                    AndroidUtilities.runOnUIThread(() -> SilentToast.show(getParentActivity(), err.text, android.widget.Toast.LENGTH_SHORT).show());
+                    AndroidUtilities.runOnUIThread(() -> SilentToast.show(getParentActivity(), err.text, android.widget.Toast.LENGTH_SHORT));
                 }
             });
         } else {
@@ -258,7 +258,7 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
             req.user_id = mc.getInputUser(userId);
             ConnectionsManager.getInstance(currentAccount).sendRequest(req, (res, err) -> {
                 if (err != null) {
-                    AndroidUtilities.runOnUIThread(() -> SilentToast.show(getParentActivity(), err.text, android.widget.Toast.LENGTH_SHORT).show());
+                    AndroidUtilities.runOnUIThread(() -> SilentToast.show(getParentActivity(), err.text, android.widget.Toast.LENGTH_SHORT));
                 }
             });
         }
