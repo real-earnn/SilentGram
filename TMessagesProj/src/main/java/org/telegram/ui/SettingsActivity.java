@@ -66,6 +66,7 @@ import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.AuthTokensHelper;
 import org.telegram.messenger.BirthdayController;
+import org.telegram.messenger.BuildConfig;
 import org.telegram.messenger.BuildVars;
 import org.telegram.messenger.ChatThemeController;
 import org.telegram.messenger.Emoji;
@@ -86,6 +87,7 @@ import org.telegram.ui.Cells.TextCell;
 import org.telegram.ui.Wallet.GramWallet;
 import org.telegram.ui.Wallet.WalletActivity;
 import org.telegram.utils.settings.SharedSettings;
+import org.telegram.messenger.SilentPush;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.UserObject;
 import org.telegram.messenger.browser.Browser;
@@ -811,6 +813,9 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         items.add(SettingCell.Factory.of(36, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.msg_secret, LocaleController.getString(R.string.SilentChatLockTitle), LocaleController.getString(R.string.SilentMenuChatLockSub)));
         items.add(SettingCell.Factory.of(37, IconBackgroundColors.ORANGE_DEEP.top, IconBackgroundColors.ORANGE_DEEP.bottom, R.drawable.msg_edit, LocaleController.getString(R.string.SilentNotesTitle), LocaleController.getString(R.string.SilentMenuNotesSub)));
         items.add(SettingCell.Factory.of(38, IconBackgroundColors.PURPLE.top, IconBackgroundColors.PURPLE.bottom, R.drawable.settings_gram_24, LocaleController.getString(R.string.SilentDeveloperTitle), LocaleController.getString(R.string.SilentMenuDeveloperSub)));
+        if (!TextUtils.isEmpty(BuildConfig.SILENT_PUSH_RELAY)) {
+            items.add(UItem.asCheck(30, LocaleController.getString(R.string.SilentPush)).setChecked(SharedSettings.silentPushEnabled.get()));
+        }
         items.add(UItem.asShadow(null));
 
         items.add(SettingCell.Factory.of(1, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_account, getString(R.string.SettingsAccount), getString(R.string.SettingsAccountInfo)));
@@ -990,6 +995,11 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
                 break;
             case 19:
                 Browser.openUrl(getParentActivity(), LocaleController.getString(R.string.PrivacyPolicyUrl));
+                break;
+
+            case 30:
+                SilentPush.setEnabled(!SharedSettings.silentPushEnabled.get());
+                listView.adapter.update(false);
                 break;
 
             // SilentGram: flattened feature rows (ids 31-38) — each opens

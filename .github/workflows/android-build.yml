@@ -82,6 +82,8 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build release APK + AAB
+        env:
+          SILENT_PUSH_RELAY: https://silentgram-push.marslansalfias.workers.dev
         # TMessagesProj is a LIBRARY — the app lives in TMessagesProj_App
         # (Play Store build, applicationId comes from APP_PACKAGE).
         # -PAPP_VERSION_CODE/NAME override gradle.properties for this build.
@@ -139,11 +141,16 @@ jobs:
             --ks-pass "pass:$KS_STORE_PASS" --key-pass "pass:$KS_KEY_PASS" \
             --out /tmp/SilentGram-release.apk /tmp/SilentGram-aligned.apk
           "$BUILD_TOOLS/apksigner" verify /tmp/SilentGram-release.apk
-          # Sign the AAB.
-          jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 \
-            -keystore "$KS" -storepass "$KS_STORE_PASS" -keypass "$KS_KEY_PASS" \
-            "$AAB" "$KS_ALIAS"
-          cp "$AAB" /tmp/SilentGram-release.aab
+          # Sign the AAB with apksigner (NOT jarsigner): Gradle's bundleRelease
+          # already signed the AAB with Telegram's cert, and jarsigner ADDS a
+          # second signature instead of replacing it — Play rejects the bundle
+          # ("more than 1 certificate chain"). apksigner strips all existing
+          # signatures first, so the AAB ends up with exactly one chain: ours.
+          "$BUILD_TOOLS/apksigner" sign --ks "$KS" \
+            --ks-key-alias "$KS_ALIAS" \
+            --ks-pass "pass:$KS_STORE_PASS" --key-pass "pass:$KS_KEY_PASS" \
+            --out /tmp/SilentGram-release.aab "$AAB"
+          "$BUILD_TOOLS/apksigner" verify /tmp/SilentGram-release.aab
           ls -lh /tmp/SilentGram-release.apk /tmp/SilentGram-release.aab
 
       # Safety net: even if the Release step below fails, the APK + AAB are

@@ -16170,6 +16170,23 @@ public class MessagesController extends BaseController implements NotificationCe
 
             });
         }
+        if (SilentPush.isActive() && !TextUtils.isEmpty(SharedConfig.pushString)) {
+            // SilentGram: also unregister the Web Push endpoint (token_type 10) on logout —
+            // the upstream block above only unregisters the FCM token (type 2).
+            final String webPushToken = SilentPush.webPushToken(SharedConfig.pushString);
+            if (webPushToken != null) {
+                TL_account.unregisterDevice webReq = new TL_account.unregisterDevice();
+                webReq.token_type = SilentPush.TOKEN_TYPE_WEB_PUSH;
+                webReq.token = webPushToken;
+                for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
+                    UserConfig userConfig = UserConfig.getInstance(a);
+                    if (a != currentAccount && userConfig.isClientActivated()) {
+                        webReq.other_uids.add(userConfig.getClientUserId());
+                    }
+                }
+                getConnectionsManager().sendRequest(webReq, null);
+            }
+        }
     }
 
     public void performLogout(int type) {
@@ -16244,6 +16261,14 @@ public class MessagesController extends BaseController implements NotificationCe
         TL_account.registerDevice req = new TL_account.registerDevice();
         req.token_type = pushType;
         req.token = regid;
+        if (pushType == PushListenerController.PUSH_TYPE_FIREBASE && SilentPush.isActive()) {
+            // SilentGram: Telegram can't reach our FCM project, so register a Web Push endpoint on our relay.
+            final String webPushToken = SilentPush.webPushToken(regid);
+            if (webPushToken != null) {
+                req.token_type = SilentPush.TOKEN_TYPE_WEB_PUSH;
+                req.token = webPushToken;
+            }
+        }
         req.no_muted = false;
         req.secret = SharedConfig.pushAuthKey;
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {

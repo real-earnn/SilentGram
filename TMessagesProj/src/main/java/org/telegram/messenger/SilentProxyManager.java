@@ -6,6 +6,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.TLRPC;
+import org.telegram.ui.Components.ForegroundDetector;
 import org.telegram.utils.proxy.ProxySettings;
 
 import java.io.BufferedReader;
@@ -1195,6 +1196,12 @@ public class SilentProxyManager {
     /** One watcher round: re-probe the fastest saved candidates (no API fetch) and let the gate switch if a faster verified proxy exists. */
     private static void runWatcherRound() {
         try {
+            if (ForegroundDetector.getInstance().isBackground()) {
+                // App is in the background: do not probe or switch proxies.
+                // A live session in the background makes Telegram's server
+                // think we are online, which suppresses push notifications.
+                return;
+            }
             if (SharedConfig.currentProxy == null) {
                 // Nothing connected yet — the startup fetch owns the
                 // first connect; the watcher only switches while open.

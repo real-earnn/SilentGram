@@ -115,6 +115,7 @@ dependencies {
 }
 
 android {
+    def pushRelay = System.getenv("SILENT_PUSH_RELAY") ?: getProps("SILENT_PUSH_RELAY") ?: ""
     compileSdkVersion 36
     buildToolsVersion '36.0.0'
     ndkVersion "27.2.12479018"
@@ -151,6 +152,8 @@ android {
         vectorDrawables.generatedDensities = ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi']
 
         multiDexEnabled true
+
+        buildConfigField "String", "SILENT_PUSH_RELAY", "\"" + pushRelay + "\""
 
         externalNativeBuild {
             cmake {
