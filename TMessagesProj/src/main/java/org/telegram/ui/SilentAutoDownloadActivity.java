@@ -154,6 +154,12 @@ public class SilentAutoDownloadActivity extends BaseFragment {
             }
             UserCell cell = (UserCell) holder.itemView;
             cell.setData(obj, null, name, ruleLabel(rule), 0, position != dialogs.size() - 1);
+            // `name` is reassigned above (User/Chat title override), so it is
+            // NOT effectively final and cannot be captured by the lambdas
+            // below (javac: "local variables referenced from a lambda
+            // expression must be final or effectively final" — this killed
+            // the H3 build at lines 168/171). Capture a final copy instead.
+            final String dialogName = name;
             cell.setOnClickListener(v -> {
                 // Popup with the three rules; the current one is marked
                 // with a check icon. Tapping one applies it.
@@ -165,10 +171,10 @@ public class SilentAutoDownloadActivity extends BaseFragment {
                 int[] icons = new int[3];
                 icons[rule] = R.drawable.msg_check_s;
                 AlertDialog.Builder builder = new AlertDialog.Builder(getParentActivity());
-                builder.setTitle(name);
+                builder.setTitle(dialogName);
                 builder.setItems(items, icons, (dialog, which) -> {
                     SilentAutoDownload.setRule(did, which);
-                    android.widget.Toast.makeText(getParentActivity(), name + ": " + ruleLabel(which), android.widget.Toast.LENGTH_SHORT).show();
+                    android.widget.Toast.makeText(getParentActivity(), dialogName + ": " + ruleLabel(which), android.widget.Toast.LENGTH_SHORT).show();
                     notifyDataSetChanged();
                 });
                 builder.show();
