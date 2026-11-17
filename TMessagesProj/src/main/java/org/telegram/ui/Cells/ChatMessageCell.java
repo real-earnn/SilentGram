@@ -3289,19 +3289,19 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         }
     }
 
-    // SilentGram H4: tap the small "View edit history" link below the
+    // SilentGram H4/I13: tap the small "View edit history" link below the
     // bubble to expand THE SAME message (original → edit 1 → edit 2 …
     // → current text, inside the bubble); tap "Hide edit history" to
-    // collapse it back. The link sits flush with the bubble's bottom
-    // edge: right-aligned for outgoing, left-aligned for incoming.
+    // collapse it back. The link sits in its own strip below the bubble:
+    // right-aligned for outgoing, left-aligned for incoming.
     private boolean checkSilentEditHistoryMotionEvent(MotionEvent event) {
         if (silentEditHistoryText == null || currentMessageObject == null) {
             return false;
         }
         float x = getEventX(event);
         float y = getEventY(event);
-        // Same y as the link is drawn at (drawOutboundsContent).
-        float top = getHeight() - getPaddingTop() - transitionParams.deltaTop + transitionParams.deltaBottom - getBottomActionPadding() - silentEditHistoryPadding - dp(9);
+        // Same strip as the link is drawn in (drawOutboundsContent).
+        float top = layoutHeight - transitionParams.deltaTop + transitionParams.deltaBottom - dp(1);
         float left;
         float right;
         if (currentMessageObject.isOutOwner()) {
@@ -12468,6 +12468,19 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         int currentSize = getMeasuredHeight() + (getMeasuredWidth() << 16);
         if (lastSize != currentSize || !wasLayout || forcedLayout) {
             layoutWidth = getMeasuredWidth();
+            // SilentGram I13: the "View edit history" link lives in its own
+            // strip BELOW the bubble. The bubble background, and everything
+            // anchored to its bottom (time, reactions, side buttons), must
+            // therefore end where the bubble content ends — exactly like the
+            // inline keyboard below the bubble, which is excluded via
+            // substractBackgroundHeight = keyboardHeight (see
+            // ChatMessageBotButtons). Without this, layoutHeight (and the
+            // bubble drawn from it) still included the strip, so the link
+            // drawn at the strip's top sat ON the rounded card, overlapping
+            // the time. The strip height is already part of the measured
+            // height (onMeasure adds silentEditHistoryPadding), so excluding
+            // it here only moves the bubble's bottom edge up to the strip.
+            substractBackgroundHeight = keyboardHeight + silentEditHistoryPadding;
             layoutHeight = getMeasuredHeight() - substractBackgroundHeight - getPaddingTop() - getPaddingBottom() - additionalPaddingHeight;
             if (timeTextWidth < 0) {
                 timeTextWidth = dp(10);
@@ -18778,15 +18791,23 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             canvas.restore();
         }
 
-        // SilentGram H4: small plain "View/Hide edit history" link exactly
-        // below the bubble, flush with the bubble's bottom edge — no pill,
-        // no background. Outgoing: right-aligned to the bubble's right
-        // edge; incoming: left-aligned to the bubble's left edge (same
-        // insets as the message text). Colour is Telegram's own message
-        // link colour (in/out), which stays readable on any wallpaper.
-        // Vertical placement reuses the proven pill formula (same y).
+        // SilentGram H4/I13: small plain "View/Hide edit history" link
+        // strictly BELOW the bubble, in the strip reserved for it
+        // (silentEditHistoryPadding, added to the measured height in
+        // onMeasure and excluded from the bubble via
+        // substractBackgroundHeight in onLayout). No pill, no background.
+        // Outgoing: right-aligned to the bubble's right edge; incoming:
+        // left-aligned to the bubble's left edge (same insets as the
+        // message text). Colour is Telegram's own message link colour
+        // (in/out), which stays readable on any wallpaper.
+        // I13 fix: the old formula centred the link at (bubble content
+        // bottom - 2dp) — i.e. ON the rounded card, overlapping the time
+        // — because the bubble then still extended through the strip.
+        // It is now centred in the strip itself: the strip starts at the
+        // bubble's bottom edge (layoutHeight, less 1dp for the bubble's
+        // bottom inset) and is silentEditHistoryPadding tall.
         if (silentEditHistoryText != null && (currentPosition == null || (currentPosition.flags & MessageObject.POSITION_FLAG_BOTTOM) != 0 && (currentPosition.flags & MessageObject.POSITION_FLAG_LEFT) != 0)) {
-            final float y = getHeight() - getPaddingTop() - transitionParams.deltaTop + transitionParams.deltaBottom - getBottomActionPadding() - silentEditHistoryPadding - dp(9);
+            final float stripTop = layoutHeight - transitionParams.deltaTop + transitionParams.deltaBottom - dp(1);
             final float alpha = transitionParams.ignoreAlpha ? timeAlpha : getAlpha();
             final float linkX;
             if (currentMessageObject.isOutOwner()) {
@@ -18794,7 +18815,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             } else {
                 linkX = getCurrentBackgroundLeft() + dp(!mediaBackground && drawPinnedBottom ? 11 : 17);
             }
-            silentEditHistoryText.draw(canvas, linkX, y + dp(6.83f), getThemedColor(currentMessageObject.isOutOwner() ? Theme.key_chat_messageLinkOut : Theme.key_chat_messageLinkIn), alpha);
+            silentEditHistoryText.draw(canvas, linkX, stripTop + silentEditHistoryPadding / 2f, getThemedColor(currentMessageObject.isOutOwner() ? Theme.key_chat_messageLinkOut : Theme.key_chat_messageLinkIn), alpha);
         }
 
         if (topicSeparator != null && (currentPosition == null || (currentPosition.flags & MessageObject.POSITION_FLAG_TOP) != 0 && (currentPosition.flags & MessageObject.POSITION_FLAG_LEFT) != 0)) {

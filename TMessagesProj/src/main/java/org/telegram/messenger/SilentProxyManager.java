@@ -381,7 +381,9 @@ public class SilentProxyManager {
             }
         });
         final int n = ranked.size();
-        // Probe outcome per slot, in ranked order: 0 = pending, 1 = live, 2 = dead/failed.
+        // Probe outcome per slot, in ranked order: 0 = pending, 1 = live
+        // (verified by a real MTProto handshake), 2 = dead/failed,
+        // 3 = live by TCP only (handshake failed/timed out, fallback only).
         final int[] state = new int[n];
         final Object gateLock = new Object();
         final AtomicBoolean decisionMade = new AtomicBoolean(false);
@@ -397,9 +399,27 @@ public class SilentProxyManager {
             pool.execute(() -> {
                 try {
                     String key = proxyKey(info);
-                    long ms = probeLatency(info.settings.getAddress(), info.settings.getPort());
+                    long tcpMs = probeLatency(info.settings.getAddress(), info.settings.getPort());
+                    long ms = tcpMs;
+                    boolean verified = false;
+                    if (tcpMs >= 0) {
+                        // SilentGram I6: a bare TCP connect only proves the
+                        // proxy accepts connections — some proxies do that
+                        // and then never deliver MTProto data (premium emoji
+                        // and files just never arrive). Verify with a real
+                        // MTProto handshake before trusting the proxy.
+                        long checkMs = verifyProxyWithHandshake(info.settings);
+                        if (checkMs == -2) {
+                            // No account signed in yet — nothing to check
+                            // against; trust the TCP probe (as before).
+                            verified = true;
+                        } else if (checkMs >= 0) {
+                            verified = true;
+                            ms = checkMs;
+                        }
+                    }
                     synchronized (gateLock) {
-                        if (ms >= 0) {
+                        if (tcpMs >= 0) {
                             probeLatencyByKey.put(key, ms);
                             // Feed Telegram's own rotation too: its list is
                             // sorted by ping, so a real probe time here makes
@@ -408,7 +428,13 @@ public class SilentProxyManager {
                             // measures it with elapsedRealtime, not wall time.)
                             info.ping = ms;
                             info.available = true;
-                            state[index] = 1;
+                            // Live: 1 = verified by a real MTProto handshake,
+                            // 3 = TCP only (handshake failed or timed out).
+                            // The gate prefers verified proxies and only
+                            // falls back to unverified ones when no verified
+                            // proxy exists, so behaviour can never get worse
+                            // than the old TCP-only probe.
+                            state[index] = verified ? 1 : 3;
                             // Track the fastest by own probe RTT (log only).
                             while (true) {
                                 long best = bestLatencyMs.get();
@@ -459,6 +485,10 @@ public class SilentProxyManager {
      * or failed proxies are skipped (fall through to the next-fastest).
      * If a proxy is already active, only switch when the fastest live one
      * beats it by SWITCH_FASTER_BY_MS (or the current latency is unknown).
+     * SilentGram I6: state 3 means TCP-live but the MTProto handshake
+     * failed — only a fallback. The gate remembers the first such
+     * candidate, keeps scanning for a verified (state 1) proxy, and only
+     * uses the fallback if no verified proxy is available.
      */
     private static void tryConnectFastest(List<SharedConfig.ProxyInfo> ranked, int[] state, Object gateLock,
             AtomicBoolean decisionMade, AtomicBoolean connectedOnce, long activeLatency) {
@@ -466,12 +496,13 @@ public class SilentProxyManager {
             if (decisionMade.get()) {
                 return;
             }
+            int firstUnverified = -1;
             for (int i = 0; i < ranked.size(); i++) {
                 if (state[i] == 0) {
                     // A faster proxy is still probing — wait for it.
                     return;
                 }
-                if (state[i] != 1) {
+                if (state[i] != 1 && state[i] != 3) {
                     // Dead or failed — fall through to the next-fastest.
                     continue;
                 }
@@ -481,42 +512,71 @@ public class SilentProxyManager {
                     // Watchdog-blocked — fall through to the next-fastest.
                     continue;
                 }
-                long ms = knownLatencyMs(key);
-                if (connectedOnce.get()) {
-                    SharedConfig.ProxyInfo curProxy = SharedConfig.currentProxy;
-                    if (curProxy != null && sameProxy(curProxy, info)) {
-                        // Already on the fastest live proxy — nothing to do.
-                        decisionMade.set(true);
-                        return;
+                if (state[i] == 3) {
+                    if (firstUnverified < 0) {
+                        firstUnverified = i;
                     }
-                    long current = currentLatencyMs.get();
-                    long bar = current >= 0 ? current : activeLatency;
-                    if (bar >= 0 && ms + SWITCH_FASTER_BY_MS >= bar) {
-                        // Fastest live proxy is not clearly faster than the
-                        // active one — and every later candidate is slower —
-                        // so keep the current proxy.
-                        decisionMade.set(true);
-                        return;
-                    }
-                    // Clearly faster (or current latency unknown): switch.
-                    FileLog.d("SilentProxy: switching to faster proxy " + info.settings.getAddress() + ":" + info.settings.getPort() + " (" + ms + "ms, was " + bar + "ms)");
-                }
-                try {
-                    enableProxy(info, ms);
-                } catch (Throwable e) {
-                    // Connecting to this one failed — do not stop here, fall
-                    // through to the next-fastest live proxy.
-                    FileLog.e("SilentProxy: failed to enable " + key + ", trying next-fastest", e);
-                    state[i] = 2;
                     continue;
                 }
-                connectedOnce.set(true);
-                decisionMade.set(true);
-                return;
+                if (tryConnectCandidate(ranked, state, i, decisionMade, connectedOnce, activeLatency)) {
+                    return;
+                }
             }
-            // Every candidate resolved and none was a live, unblocked proxy
-            // better than the current one — nothing to connect to this round.
+            // Every candidate resolved and none was a live, unblocked,
+            // VERIFIED proxy better than the current one — fall back to the
+            // fastest unverified one rather than staying disconnected.
+            if (firstUnverified >= 0) {
+                tryConnectCandidate(ranked, state, firstUnverified, decisionMade, connectedOnce, activeLatency);
+            }
+            // Otherwise every candidate resolved and none was a live,
+            // unblocked proxy better than the current one — nothing to
+            // connect to this round.
         }
+    }
+
+    /**
+     * Try to make ranked[index] the active proxy: keep the current proxy
+     * unless this one is clearly faster (or the current latency is
+     * unknown). Returns true if a decision was made (connected, or kept
+     * the current proxy); false if this candidate failed and the next one
+     * should be tried.
+     */
+    private static boolean tryConnectCandidate(List<SharedConfig.ProxyInfo> ranked, int[] state, int index,
+            AtomicBoolean decisionMade, AtomicBoolean connectedOnce, long activeLatency) {
+        SharedConfig.ProxyInfo info = ranked.get(index);
+        String key = proxyKey(info);
+        long ms = knownLatencyMs(key);
+        if (connectedOnce.get()) {
+            SharedConfig.ProxyInfo curProxy = SharedConfig.currentProxy;
+            if (curProxy != null && sameProxy(curProxy, info)) {
+                // Already on the fastest live proxy — nothing to do.
+                decisionMade.set(true);
+                return true;
+            }
+            long current = currentLatencyMs.get();
+            long bar = current >= 0 ? current : activeLatency;
+            if (bar >= 0 && ms + SWITCH_FASTER_BY_MS >= bar) {
+                // Fastest live proxy is not clearly faster than the
+                // active one — and every later candidate is slower — so
+                // keep the current proxy.
+                decisionMade.set(true);
+                return true;
+            }
+            // Clearly faster (or current latency unknown): switch.
+            FileLog.d("SilentProxy: switching to faster proxy " + info.settings.getAddress() + ":" + info.settings.getPort() + " (" + ms + "ms, was " + bar + "ms)");
+        }
+        try {
+            enableProxy(info, ms);
+        } catch (Throwable e) {
+            // Connecting to this one failed — do not stop here, fall
+            // through to the next-fastest live proxy.
+            FileLog.e("SilentProxy: failed to enable " + key + ", trying next-fastest", e);
+            state[index] = 2;
+            return false;
+        }
+        connectedOnce.set(true);
+        decisionMade.set(true);
+        return true;
     }
 
     private static boolean sameProxy(SharedConfig.ProxyInfo a, SharedConfig.ProxyInfo b) {
@@ -539,6 +599,39 @@ public class SilentProxyManager {
             } catch (Throwable ignored) {
             }
         }
+    }
+
+    // SilentGram I6: how long to wait for a proxy's MTProto handshake check.
+    private static final int CHECK_PROXY_TIMEOUT_MS = 8000;
+
+    /**
+     * SilentGram I6: verify a proxy with a real MTProto handshake
+     * (ConnectionsManager.checkProxy — the same check ProxyListActivity
+     * uses), not just a TCP connect. A proxy that accepts TCP but never
+     * delivers data passes the TCP probe yet fails this check. Returns
+     * the handshake round-trip in ms, -1 if the handshake failed or timed
+     * out, or -2 when no account is signed in yet and there is nothing
+     * to check against. Never throws.
+     */
+    private static long verifyProxyWithHandshake(ProxySettings settings) {
+        if (!UserConfig.getInstance(UserConfig.selectedAccount).isClientActivated()) {
+            return -2;
+        }
+        final AtomicLong result = new AtomicLong(-1);
+        final CountDownLatch latch = new CountDownLatch(1);
+        try {
+            ConnectionsManager.getInstance(UserConfig.selectedAccount).checkProxy(settings, time -> {
+                result.set(time);
+                latch.countDown();
+            });
+        } catch (Throwable e) {
+            return -1;
+        }
+        try {
+            latch.await(CHECK_PROXY_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ignored) {
+        }
+        return result.get();
     }
 
     /** Make the given proxy the active one and push it to the connection layer. */
@@ -642,20 +735,45 @@ public class SilentProxyManager {
         if (now - lastWatchdogSwitchMs < WATCHDOG_SWITCH_COOLDOWN_MS) {
             return;
         }
+        switchToNextProxy(true);
+    }
+
+    /**
+     * SilentGram I8: manual proxy switch (the chat-list "Refresh" button).
+     * Marks the current proxy bad for an hour — the same as the download
+     * watchdog does — connects to the next-fastest candidate, then fetches
+     * a fresh list in the background. Unlike the watchdog this is never
+     * throttled by the switch cooldown: the user asked for it.
+     * Returns true if the app switched to a different proxy.
+     */
+    public static boolean rotateProxy() {
+        boolean switched = switchToNextProxy(true);
+        refreshAsync();
+        return switched;
+    }
+
+    /**
+     * Mark the current proxy bad (unless markCurrentBad is false) and
+     * connect to the next-fastest candidate that is neither the bad one
+     * nor blocked. Returns true if the app switched proxies.
+     */
+    private static boolean switchToNextProxy(boolean markCurrentBad) {
         SharedConfig.ProxyInfo current = SharedConfig.currentProxy;
         if (current == null) {
-            return;
+            return false;
         }
         List<SharedConfig.ProxyInfo> candidates = lastCandidates;
         if (candidates == null || candidates.size() < 2) {
-            return;
+            return false;
         }
-        // Mark the bad proxy (blocked for 1 hour, stored in our prefs).
-        String badKey = current.settings.getAddress() + ":" + current.settings.getPort();
-        SharedPreferences prefs = ApplicationLoader.applicationContext
-                .getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
-        prefs.edit().putLong("proxy_bad_" + badKey, now).apply();
-        FileLog.d("SilentProxy: download stalled on " + badKey + " — switching proxy");
+        long now = System.currentTimeMillis();
+        String badKey = proxyKey(current);
+        if (markCurrentBad) {
+            SharedPreferences prefs = ApplicationLoader.applicationContext
+                    .getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
+            prefs.edit().putLong("proxy_bad_" + badKey, now).apply();
+            FileLog.d("SilentProxy: marking " + badKey + " bad — switching proxy");
+        }
         // Pick the next-fastest candidate that is not the bad one and not
         // blocked — fastest-first by effective latency, same ranking as the
         // probe gate above (API latency_ms, else probe RTT).
@@ -676,8 +794,9 @@ public class SilentProxyManager {
             }
             lastWatchdogSwitchMs = now;
             enableProxy(info, knownLatencyMs(key));
-            return;
+            return true;
         }
         FileLog.d("SilentProxy: no other candidate to switch to");
+        return false;
     }
 }

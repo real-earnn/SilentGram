@@ -596,7 +596,8 @@ public class ChatActivityEnterView extends FrameLayout implements
     private Runnable updateSlowModeRunnable;
     private SendButtonBlockedByTypingView sendButtonBlockedByTypingView;
     private SendButton sendButton;
-    // SilentGram G23: small translate icon next to the send button.
+    // SilentGram G23/I12: small translate icon to the left of the attach
+    // button (a child of attachLayout, created next to attachButton).
     private ImageView silentTranslateButton;
     private int sendButtonBackgroundColor;
     public MessageSendPreview messageSendPreview;
@@ -605,6 +606,10 @@ public class ChatActivityEnterView extends FrameLayout implements
     private ActionBarPopupWindow.ActionBarPopupWindowLayout sendPopupLayout;
     private ImageView cancelBotButton;
     private ChatActivityEnterViewAnimatedIconView emojiButton;
+    // SilentGram (I16): true while the emoji button shows the static
+    // Favorites star instead of a morph state — avoids re-setting the
+    // same drawable on every icon refresh.
+    private boolean emojiButtonFavoritesIcon;
     private ImageView deleteRichDraftButton;
     @Nullable
     private ImageView expandStickersButton;
@@ -2882,6 +2887,29 @@ public class ChatActivityEnterView extends FrameLayout implements
             });
             attachButton.setContentDescription(getString(R.string.AccDescrAttachButton));
             updateFieldRight(1);
+
+            // SilentGram G23/I12: small translate icon immediately to the
+            // LEFT of the attach button, as a child of attachLayout (which
+            // sits directly left of attachButton). It used to live inside
+            // sendButtonContainer with a 48dp right margin — x [W-80, W-48]
+            // — which lands on top of the attach button [W-88, W-44]:
+            // sendButtonContainer is drawn above messageEditTextContainer,
+            // so while typing the icon swallowed the attach button's taps.
+            // Inside attachLayout it can never overlap the attach button
+            // (the layout grows leftwards), and updateFieldRight() reserves
+            // its width in the text field's right margin while it is
+            // visible, so typed text never runs underneath it either.
+            // Shows only while the input has text; taps translate the whole
+            // input text in place (same language list as SilentTranslate).
+            silentTranslateButton = new ImageView(context);
+            silentTranslateButton.setImageResource(R.drawable.msg_translate);
+            silentTranslateButton.setScaleType(ImageView.ScaleType.CENTER);
+            silentTranslateButton.setContentDescription(getString(R.string.TranslateMessage));
+            silentTranslateButton.setVisibility(View.GONE);
+            ThemeBind.colorFilter(silentTranslateButton, Theme.key_glass_defaultIcon, resourcesProvider, PorterDuff.Mode.SRC_IN);
+            ThemeBind.selectorBackground(silentTranslateButton, Theme.createSelectorDrawable(getThemedColor(Theme.key_listSelector)), null, ThemeBind.of(Theme.key_listSelector), resourcesProvider);
+            silentTranslateButton.setOnClickListener(v -> translateInputText());
+            attachLayout.addView(silentTranslateButton, 0, LayoutHelper.createLinear(DEFAULT_HEIGHT, DEFAULT_HEIGHT));
         }
 
         aiButton = new ImageView(context);
@@ -3586,20 +3614,6 @@ public class ChatActivityEnterView extends FrameLayout implements
         if (AndroidUtilities.isAccessibilityScreenReaderEnabled()) {
             sendButtonContainer.setOnLongClickListener(this::onSendLongClick);
         }
-
-        // SilentGram G23: small translate icon just left of the send button.
-        // Shows only while the input has text; taps translate the whole
-        // input text in place (same language list as SilentTranslate).
-        // It sits inside the send-button zone (right margin 48dp clears the
-        // 44dp send circle), so no extra text-field padding is needed.
-        silentTranslateButton = new ImageView(context);
-        silentTranslateButton.setImageResource(R.drawable.msg_translate);
-        silentTranslateButton.setScaleType(ImageView.ScaleType.CENTER);
-        silentTranslateButton.setContentDescription(getString(R.string.TranslateMessage));
-        silentTranslateButton.setVisibility(View.GONE);
-        ThemeBind.colorFilter(silentTranslateButton, Theme.key_glass_defaultIcon, resourcesProvider, PorterDuff.Mode.SRC_IN);
-        silentTranslateButton.setOnClickListener(v -> translateInputText());
-        sendButtonContainer.addView(silentTranslateButton, LayoutHelper.createFrame(32, 32, Gravity.RIGHT | Gravity.CENTER_VERTICAL, 0, 0, 48, 0));
 
         sendButtonBlockedByTypingView = new SendButtonBlockedByTypingView(context, resourcesProvider);
         sendButtonBlockedByTypingView.setVisibility(View.INVISIBLE);
@@ -8928,6 +8942,12 @@ public class ChatActivityEnterView extends FrameLayout implements
         if (doneButton != null && doneButton.getVisibility() == VISIBLE) {
             layoutParams.rightMargin = Math.max(layoutParams.rightMargin, Math.max(0, doneButton.width() - dp(DEFAULT_HEIGHT)));
         }
+        // SilentGram I12: the translate icon is a 44dp child of attachLayout
+        // while it is visible — reserve its width in the text field, like
+        // the other attachLayout extras above (+48dp per 44dp button).
+        if (silentTranslateButton != null && silentTranslateButton.getVisibility() == View.VISIBLE) {
+            layoutParams.rightMargin += dp(48);
+        }
         if (oldRightMargin != layoutParams.rightMargin) {
             messageEditText.setLayoutParams(layoutParams);
         }
@@ -10642,7 +10662,13 @@ public class ChatActivityEnterView extends FrameLayout implements
         }
         boolean hasText = messageEditText != null && messageEditText.getText() != null
                 && messageEditText.getText().toString().trim().length() > 0;
-        silentTranslateButton.setVisibility(hasText ? View.VISIBLE : View.GONE);
+        int newVisibility = hasText ? View.VISIBLE : View.GONE;
+        if (silentTranslateButton.getVisibility() != newVisibility) {
+            silentTranslateButton.setVisibility(newVisibility);
+            // SilentGram I12: showing/hiding the icon changes attachLayout's
+            // width, so the text field's right margin must follow.
+            updateFieldRight(lastAttachVisible);
+        }
     }
 
     // SilentGram G23: translate the whole input text in place — pick the
@@ -13224,13 +13250,17 @@ public class ChatActivityEnterView extends FrameLayout implements
             animated = false;
         }
         ChatActivityEnterViewAnimatedIconView.State nextIcon;
+        // SilentGram (I16): currentPage is EmojiView's remapped page
+        // (saveNewPage(): pager 2 Stickers -> 1, pager 1 GIFs -> 2,
+        // pager 3 Favorites -> 3, pager 0 Emoji -> 0). Hoisted so the
+        // Favorites check below can see it.
+        int currentPage = -1;
         if (byOpen && currentPopupContentType == 0) {
             if (!sendPlainEnabled) {
                 return;
             }
             nextIcon = ChatActivityEnterViewAnimatedIconView.State.KEYBOARD;
         } else {
-            int currentPage;
             if (emojiView == null) {
                 currentPage = MessagesController.getGlobalEmojiSettings().getInt("selected_page", 0);
             } else {
@@ -13253,6 +13283,28 @@ public class ChatActivityEnterView extends FrameLayout implements
         } else if (!stickersEnabled && nextIcon != ChatActivityEnterViewAnimatedIconView.State.SMILE) {
             nextIcon = ChatActivityEnterViewAnimatedIconView.State.SMILE;
         }
+
+        // SilentGram (I16): Favorites tab (currentPage 3) used to fall
+        // through to the GIF icon above. The animated button has no
+        // favorites morph state — its State enum is only VOICE / VIDEO /
+        // STICKER / KEYBOARD / SMILE / GIF, and adding one would need a
+        // new lottie in ChatActivityEnterViewAnimatedIconView — so show
+        // the static favorites star instead: R.drawable.emoji_tabs_faves
+        // (verified: the star icon used for the Favorites tab itself).
+        // Tapping the button still opens the panel at the saved page
+        // (Favorites). RLottieImageView.setImageResource() clears the
+        // lottie drawable, and the next setState() call below restores
+        // the morph icons when leaving Favorites. The KEYBOARD branch
+        // above is untouched: while the panel is open the button keeps
+        // showing the keyboard icon.
+        if (currentPage == 3) {
+            if (!emojiButtonFavoritesIcon) {
+                emojiButtonFavoritesIcon = true;
+                emojiButton.setImageResource(R.drawable.emoji_tabs_faves);
+            }
+            return;
+        }
+        emojiButtonFavoritesIcon = false;
 
         emojiButton.setState(nextIcon, animated);
         onEmojiIconChanged(nextIcon);

@@ -11,9 +11,11 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import org.telegram.messenger.AccountInstance;
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.DialogObject;
 import org.telegram.messenger.LocaleController;
@@ -21,6 +23,8 @@ import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SilentChatLock;
 import org.telegram.messenger.SilentMessageHistory;
+import org.telegram.messenger.UserObject;
+import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.ActionBarMenuItem;
@@ -29,6 +33,7 @@ import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Cells.TextCell;
 import org.telegram.ui.Cells.TextCheckCell;
+import org.telegram.ui.Cells.UserCell;
 import org.telegram.ui.Components.FragmentFloatingButton;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.RecyclerListView;
@@ -380,44 +385,35 @@ public class SilentChatLockActivity extends BaseFragment {
         builder.show();
     }
 
-    /** + button: pick any unlocked chat and add it to the lock. */
+    /** + button: pick any unlocked chat and add it to the lock (I10 picker fragment). */
     private void showAddChatPicker() {
         Context context = getParentActivity();
         if (context == null) {
             return;
         }
+        // Only open the picker when at least one unlocked chat exists.
         Set<Long> lockedSet = SilentChatLock.getLockedChats();
-        ArrayList<Long> ids = new ArrayList<>();
+        boolean hasCandidate = false;
         androidx.collection.LongSparseArray<TLRPC.Dialog> dict = MessagesController.getInstance(currentAccount).dialogs_dict;
-        for (int i = 0; i < dict.size(); i++) {
-            TLRPC.Dialog dialog = dict.valueAt(i);
-            if (dialog == null || dialog.isFolder) {
-                continue;
+        if (dict != null) {
+            for (int i = 0; i < dict.size(); i++) {
+                TLRPC.Dialog dialog = dict.valueAt(i);
+                if (dialog == null || dialog.isFolder) {
+                    continue;
+                }
+                long id = dialog.id;
+                if (id == 0 || DialogObject.isFolderDialogId(id) || lockedSet.contains(id)) {
+                    continue;
+                }
+                hasCandidate = true;
+                break;
             }
-            long id = dialog.id;
-            if (id == 0 || DialogObject.isFolderDialogId(id) || lockedSet.contains(id)) {
-                continue;
-            }
-            ids.add(id);
         }
-        if (ids.isEmpty()) {
+        if (!hasCandidate) {
             toast(LocaleController.getString(R.string.SilentChatLockNoChatsToAdd));
             return;
         }
-        ids.sort((a, b) -> getDialogName(a).compareToIgnoreCase(getDialogName(b)));
-        CharSequence[] names = new CharSequence[ids.size()];
-        for (int i = 0; i < ids.size(); i++) {
-            names[i] = getDialogName(ids.get(i));
-        }
-        AlertDialog.Builder builder = new AlertDialog.Builder(context);
-        builder.setTitle(LocaleController.getString(R.string.SilentChatLockAddChat));
-        builder.setItems(names, (d, which) -> {
-            SilentChatLock.setLocked(ids.get(which), true);
-            toast(LocaleController.getString(R.string.SilentChatLockAdded));
-            reload();
-        });
-        builder.setNegativeButton(LocaleController.getString(R.string.Cancel), null);
-        builder.show();
+        presentFragment(new AddChatPickerFragment());
     }
 
     /** Gear at the top of the list: change PIN + fingerprint toggle. */
@@ -534,6 +530,242 @@ public class SilentChatLockActivity extends BaseFragment {
             TextCell cell = (TextCell) holder.itemView;
             cell.setTextAndValue(getDialogName(did), LocaleController.getString(R.string.SilentChatLockTapToOpen), true);
             cell.setOnClickListener(v -> openLockedChat(did));
+        }
+    }
+
+    /**
+     * I10: "Add chat to lock" picker — pure Telegram theme, CHATS not contacts.
+     * Rows are UserCell (avatar + name + @username), exactly like Telegram's
+     * own chat lists. The list is built from MessagesController dialogs_dict
+     * (chats the user has actually chatted in), never from the raw contact
+     * list, so ancient never-chatted contacts never appear. If the user has
+     * chat folders (DialogFilters), a tab strip (All Chats + one tab per
+     * folder) filters the list via DialogFilter.includesDialog(). Tapping a
+     * chat locks it and returns to the locked list (which reloads onResume).
+     */
+    private static class AddChatPickerFragment extends BaseFragment {
+
+        private ArrayList<TLRPC.Dialog> allDialogs = new ArrayList<>();
+        private ArrayList<TLRPC.Dialog> shownDialogs = new ArrayList<>();
+        private ArrayList<MessagesController.DialogFilter> filters = new ArrayList<>();
+        private int selectedTab = -1; // -1 = All Chats, otherwise index into filters
+        private RecyclerListView listView;
+        private PickerAdapter adapter;
+        private LinearLayout tabsRow;
+        private HorizontalScrollView tabsScroll;
+        private TextView emptyView;
+
+        @Override
+        public View createView(Context context) {
+            actionBar.setBackButtonImage(R.drawable.ic_ab_back);
+            actionBar.setTitle(LocaleController.getString(R.string.SilentChatLockAddChat));
+            actionBar.setActionBarMenuOnItemClick(new ActionBar.ActionBarMenuOnItemClick() {
+                @Override
+                public void onItemClick(int id) {
+                    if (id == -1) {
+                        finishFragment();
+                    }
+                }
+            });
+
+            MessagesController mc = MessagesController.getInstance(currentAccount);
+            Set<Long> lockedSet = SilentChatLock.getLockedChats();
+            if (mc.dialogs_dict != null) {
+                for (int i = 0; i < mc.dialogs_dict.size(); i++) {
+                    TLRPC.Dialog dialog = mc.dialogs_dict.valueAt(i);
+                    if (dialog == null || dialog.isFolder) {
+                        continue;
+                    }
+                    long id = dialog.id;
+                    if (id == 0 || DialogObject.isFolderDialogId(id) || lockedSet.contains(id)) {
+                        continue;
+                    }
+                    allDialogs.add(dialog);
+                }
+            }
+            allDialogs.sort((a, b) -> getDialogName(a.id).compareToIgnoreCase(getDialogName(b.id)));
+            if (mc.dialogFilters != null) {
+                for (int i = 0; i < mc.dialogFilters.size(); i++) {
+                    MessagesController.DialogFilter filter = mc.dialogFilters.get(i);
+                    if (filter != null && !filter.isDefault()) {
+                        filters.add(filter);
+                    }
+                }
+            }
+
+            FrameLayout frame = new FrameLayout(context);
+            frame.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
+            fragmentView = frame;
+
+            LinearLayout column = new LinearLayout(context);
+            column.setOrientation(LinearLayout.VERTICAL);
+            frame.addView(column, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
+
+            if (!filters.isEmpty()) {
+                tabsScroll = new HorizontalScrollView(context);
+                tabsScroll.setHorizontalScrollBarEnabled(false);
+                tabsRow = new LinearLayout(context);
+                tabsRow.setOrientation(LinearLayout.HORIZONTAL);
+                tabsRow.setPadding(AndroidUtilities.dp(8), 0, AndroidUtilities.dp(8), 0);
+                tabsScroll.addView(tabsRow, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.MATCH_PARENT));
+                column.addView(tabsScroll, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, AndroidUtilities.dp(44)));
+                buildTabs(context);
+            }
+
+            listView = new RecyclerListView(context);
+            listView.setLayoutManager(new LinearLayoutManager(context));
+            listView.setAdapter(adapter = new PickerAdapter(context));
+            column.addView(listView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 0, 1.0f));
+
+            emptyView = new TextView(context);
+            emptyView.setText(LocaleController.getString(R.string.SilentChatLockNoChatsToAdd));
+            emptyView.setTextSize(15);
+            emptyView.setGravity(Gravity.CENTER);
+            emptyView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText2));
+            frame.addView(emptyView, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, Gravity.CENTER));
+
+            applyFilter();
+            return fragmentView;
+        }
+
+        private void buildTabs(Context context) {
+            tabsRow.removeAllViews();
+            addTab(context, LocaleController.getString(R.string.FilterAllChats), -1);
+            for (int i = 0; i < filters.size(); i++) {
+                addTab(context, filters.get(i).name, i);
+            }
+            updateTabStyles();
+        }
+
+        private void addTab(Context context, String title, int tabIndex) {
+            TextView tab = new TextView(context);
+            tab.setText(title);
+            tab.setTextSize(15);
+            tab.setPadding(AndroidUtilities.dp(12), 0, AndroidUtilities.dp(12), 0);
+            tab.setGravity(Gravity.CENTER);
+            final int index = tabIndex;
+            tab.setOnClickListener(v -> {
+                selectedTab = index;
+                updateTabStyles();
+                applyFilter();
+            });
+            tabsRow.addView(tab, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.MATCH_PARENT));
+        }
+
+        private void updateTabStyles() {
+            if (tabsRow == null) {
+                return;
+            }
+            for (int i = 0; i < tabsRow.getChildCount(); i++) {
+                View child = tabsRow.getChildAt(i);
+                if (!(child instanceof TextView)) {
+                    continue;
+                }
+                TextView tab = (TextView) child;
+                int tabIndex = i - 1; // first tab is "All Chats" (-1)
+                boolean selected = tabIndex == selectedTab;
+                tab.setTypeface(selected ? AndroidUtilities.bold() : android.graphics.Typeface.DEFAULT);
+                tab.setTextColor(Theme.getColor(selected ? Theme.key_windowBackgroundWhiteBlueText : Theme.key_windowBackgroundWhiteGrayText2));
+            }
+        }
+
+        private void applyFilter() {
+            shownDialogs.clear();
+            if (selectedTab < 0) {
+                shownDialogs.addAll(allDialogs);
+            } else {
+                MessagesController.DialogFilter filter = filters.get(selectedTab);
+                AccountInstance accountInstance = AccountInstance.getInstance(currentAccount);
+                for (int i = 0; i < allDialogs.size(); i++) {
+                    TLRPC.Dialog d = allDialogs.get(i);
+                    if (filter.includesDialog(accountInstance, d.id, d)) {
+                        shownDialogs.add(d);
+                    }
+                }
+            }
+            if (adapter != null) {
+                adapter.notifyDataSetChanged();
+            }
+            updateEmpty();
+        }
+
+        private void updateEmpty() {
+            if (emptyView == null) {
+                return;
+            }
+            boolean empty = shownDialogs.isEmpty();
+            emptyView.setVisibility(empty ? View.VISIBLE : View.GONE);
+            if (listView != null) {
+                listView.setVisibility(empty ? View.GONE : View.VISIBLE);
+            }
+        }
+
+        private String getDialogName(long did) {
+            return SilentMessageHistory.getDialogName(currentAccount, did);
+        }
+
+        private void toast(String text) {
+            Context context = getParentActivity();
+            if (context != null) {
+                android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_SHORT).show();
+            }
+        }
+
+        private class PickerAdapter extends RecyclerListView.SelectionAdapter {
+            private final Context context;
+
+            PickerAdapter(Context context) {
+                this.context = context;
+            }
+
+            @Override
+            public int getItemCount() {
+                return shownDialogs.size();
+            }
+
+            @Override
+            public boolean isEnabled(RecyclerView.ViewHolder holder) {
+                return true;
+            }
+
+            @Override
+            public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+                // Telegram-native row: avatar + name + @username, same as
+                // Telegram's own chat lists.
+                UserCell cell = new UserCell(context, 6, 0, false);
+                cell.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
+                return new RecyclerListView.Holder(cell);
+            }
+
+            @Override
+            public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
+                TLRPC.Dialog d = shownDialogs.get(position);
+                final long did = d.id;
+                TLObject obj = MessagesController.getInstance(currentAccount).getUserOrChat(did);
+                String displayName = getDialogName(did);
+                String username = null;
+                if (obj instanceof TLRPC.User) {
+                    TLRPC.User user = (TLRPC.User) obj;
+                    displayName = UserObject.getUserName(user);
+                    username = user.username;
+                } else if (obj instanceof TLRPC.Chat) {
+                    TLRPC.Chat chat = (TLRPC.Chat) obj;
+                    displayName = chat.title;
+                    username = chat.username;
+                }
+                // `displayName` is reassigned above, so it is NOT effectively
+                // final — capture a final copy for the lambda below (same
+                // H3 lesson as SilentAutoDownloadActivity).
+                final String finalName = displayName;
+                String status = username != null && !username.isEmpty() ? "@" + username : "";
+                UserCell cell = (UserCell) holder.itemView;
+                cell.setData(obj, null, finalName, status, 0, position != shownDialogs.size() - 1);
+                cell.setOnClickListener(v -> {
+                    SilentChatLock.setLocked(did, true);
+                    toast(LocaleController.getString(R.string.SilentChatLockAdded));
+                    finishFragment();
+                });
+            }
         }
     }
 }

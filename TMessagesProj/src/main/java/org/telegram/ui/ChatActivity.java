@@ -1744,12 +1744,6 @@ public class ChatActivity extends BaseFragment implements
     private final static int chat_menu_silent_export = 78;
     private final static int chat_menu_silent_translate_chat = 79;
 
-    // SilentGram H5b: ids of deleted-message tombstones restored from local
-    // history for the current dialog (so a reload never restores the same
-    // tombstone twice). Reset when the dialog changes.
-    private final java.util.HashSet<Integer> silentRestoredTombstoneIds = new java.util.HashSet<>();
-    private long silentRestoredTombstoneDialogId = 0;
-
     private final static int id_chat_compose_panel = 1000;
 
     RecyclerListView.OnItemLongClickListenerExtended onItemLongClickListener = new RecyclerListView.OnItemLongClickListenerExtended() {
@@ -22521,9 +22515,10 @@ public class ChatActivity extends BaseFragment implements
             } else {
                 obj.stableId = lastStableId++;
             }
-            // SilentGram H5b: a tombstone's text is UI chrome ("This message
-            // was deleted"), not user content — never translate it (a
-            // translation would overwrite the delete icon + text).
+            // SilentGram H5b/I14: a tombstone shows the ORIGINAL text with
+            // a delete icon — never translate it (a translation would
+            // overwrite the delete icon + text, and the row is not a real
+            // message).
             if (!obj.silentTombstone) {
                 getMessagesController().getTranslateController().checkTranslation(obj, false);
             }
@@ -27625,16 +27620,28 @@ public class ChatActivity extends BaseFragment implements
         return true;
     }
 
-    // Swap the displayed text to a small delete icon + "This message was
-    // deleted" (MessageObject.applyNewText — the same call Telegram's own
-    // translation uses). The original text is NOT lost: the E7 hook in
-    // didReceivedNotification already saved it to Recent Deleted Chats
-    // before this runs. The cell hides the name/time for deleted messages
-    // itself (ChatMessageCell), and long-press is blocked (didLongPress
-    // below), so a tombstone can never be copied, forwarded or replied to.
+    // Swap the displayed text to a small delete icon + the ORIGINAL message
+    // text (MessageObject.applyNewText — the same call Telegram's own
+    // translation uses). Per the user's spec the deleted message stays
+    // standing showing its original text with only a delete icon next to
+    // it — the text is NOT replaced by a placeholder. The original text is
+    // also safe: the E7 hook in didReceivedNotification already saved it
+    // to Recent Deleted Chats before this runs. The cell hides the name/time
+    // for deleted messages itself (ChatMessageCell), and long-press is
+    // blocked (didLongPress below), so a tombstone can never be copied,
+    // forwarded or replied to. If the original text is somehow empty, fall
+    // back to the "This message was deleted" placeholder.
     private void silentApplyDeletedTombstone(MessageObject obj) {
         obj.silentTombstone = true;
-        android.text.SpannableStringBuilder ssb = new android.text.SpannableStringBuilder("* " + getString(R.string.SilentDeletedMessage));
+        CharSequence original = obj.messageText != null && obj.messageText.length() > 0
+                ? obj.messageText
+                : (obj.messageOwner != null ? obj.messageOwner.message : null);
+        if (original == null || original.length() == 0) {
+            original = getString(R.string.SilentDeletedMessage);
+        }
+        android.text.SpannableStringBuilder ssb = new android.text.SpannableStringBuilder("* ");
+        ssb.append(original); // append (not "* " + original) so the original
+        // text keeps its spans (bold, links, ...).
         org.telegram.ui.Components.ColoredImageSpan icon = new org.telegram.ui.Components.ColoredImageSpan(R.drawable.msg_delete);
         icon.setSize(AndroidUtilities.dp(16));
         icon.setColorKey(obj.isOutOwner() ? Theme.key_chat_messageTextOut : Theme.key_chat_messageTextIn);
@@ -27648,25 +27655,36 @@ public class ChatActivity extends BaseFragment implements
     // the deleted text + arrival time locally (SilentMessageHistory, prefs
     // msg_history_<dialogId>). When a chat loads, messages from that local
     // store that are no longer in the DB are rendered back in place as
-    // LOCAL-ONLY tombstones: the delete icon + "This message was deleted"
-    // with the ORIGINAL arrival time (the cell draws the time from
-    // messageOwner.date, exactly like a real message). They are never
-    // written to the DB, never sent anywhere, and never counted as real
-    // messages. Only plain-text deletions we actually saw before they were
-    // deleted can come back (a message never displayed was never cached);
-    // tombstones only appear inside the currently loaded date/id window, so
-    // pagination bounds stay exact. The merge loop below places them exactly
-    // like real messages (date objects, day arrays, stable ids included).
+    // LOCAL-ONLY tombstones: the delete icon + the ORIGINAL text, with the
+    // ORIGINAL arrival time (the cell draws the time from messageOwner.date,
+    // exactly like a real message). They are never written to the DB, never
+    // sent anywhere, and never counted as real messages. Only plain-text
+    // deletions we actually saw before they were deleted can come back (a
+    // message never displayed was never cached); tombstones only appear
+    // inside the currently loaded date/id window, so pagination bounds stay
+    // exact. The merge loop below places them exactly like real messages
+    // (date objects, day arrays, stable ids included).
+    //
+    // SilentGram I14: this restore is deliberately RE-RUNNABLE on every
+    // load. It used to keep a once-per-ChatActivity-instance set of
+    // restored ids (silentRestoredTombstoneIds), which is exactly why a
+    // tombstone vanished on back + re-enter: the in-memory `messages` /
+    // `messagesDict` lists are cleared several times inside one ChatActivity
+    // lifetime (clearChatData, the clearOnLoad block, the firstLoading
+    // block) and a re-delivered messagesDeleted can also remove a restored
+    // row (see processDeletedMessages), but the set still remembered the id
+    // and every later load skipped re-adding it. Deduplication now relies
+    // only on live state — an entry is skipped only while a tombstone for
+    // that id is actually present in messagesDict[loadIndex] — so any load
+    // after a wipe restores it again, and two loads of the same window can
+    // never duplicate it (the merge loop puts each restored tombstone into
+    // messagesDict before the next load runs).
     private void silentRestoreDeletedTombstones(ArrayList<MessageObject> messArr, int loadIndex) {
         if (chatMode != MODE_DEFAULT || chatAdapter == null || chatAdapter.isFiltered || currentEncryptedChat != null || dialog_id == 0) {
             return;
         }
         if (loadIndex != 0 || messArr == null || messArr.isEmpty()) {
             return;
-        }
-        if (silentRestoredTombstoneDialogId != dialog_id) {
-            silentRestoredTombstoneIds.clear();
-            silentRestoredTombstoneDialogId = dialog_id;
         }
         java.util.List<org.telegram.messenger.SilentMessageHistory.Entry> history;
         try {
@@ -27726,9 +27744,6 @@ public class ChatActivity extends BaseFragment implements
             if (e.msgId <= 0 || e.text == null || e.text.isEmpty()) {
                 continue;
             }
-            if (silentRestoredTombstoneIds.contains(e.msgId)) {
-                continue;
-            }
             if (messagesDict[loadIndex].indexOfKey(e.msgId) >= 0) {
                 continue;
             }
@@ -27755,7 +27770,6 @@ public class ChatActivity extends BaseFragment implements
                 }
             }
             messArr.add(pos, tomb);
-            silentRestoredTombstoneIds.add(e.msgId);
         }
     }
 
@@ -27816,6 +27830,12 @@ public class ChatActivity extends BaseFragment implements
             }
             MessageObject obj = new MessageObject(currentAccount, msg, false, false);
             obj.silentTombstone = true;
+            // SilentGram I14: mark it deleted exactly like the in-place
+            // tombstone from processDeletedMessages, so the cell (no time in
+            // groups, no name, no share button) and the long-press guard
+            // treat a restored tombstone identically — it can never be
+            // copied, forwarded or replied to.
+            obj.deleted = true;
             silentApplyDeletedTombstone(obj);
             return obj;
         } catch (Exception ex) {
@@ -27878,6 +27898,17 @@ public class ChatActivity extends BaseFragment implements
             if (selectedObject != null && obj == selectedObject || obj != null && selectedObjectGroup != null && selectedObjectGroup == groupedMessagesMap.get(obj.getGroupId())) {
                 closeMenu();
             }
+            // SilentGram I14: a tombstone already stands for this id — a
+            // re-delivered delete for the same message must be a no-op.
+            // Without this, silentCanTombstone() is false for a tombstone
+            // (it is already one), so the code below would take the normal
+            // removal path and delete the restored tombstone from
+            // messages / messagesDict / messagesByDays for real. The
+            // reply-count decrement below is not idempotent either, so the
+            // guard sits before any mutation for this id.
+            if (obj != null && obj.silentTombstone) {
+                continue;
+            }
             if (PhotoViewer.isPlayingMessage(obj)) {
                 PhotoViewer.getInstance().closePhoto(false, false);
             } else if (PhotoViewer.isPlayingMessageInPip(obj)) {
@@ -27927,9 +27958,9 @@ public class ChatActivity extends BaseFragment implements
                 }
                 int index = chatAdapter != null && chatAdapter.isFiltered && filteredMessagesDict != null ? chatAdapter.filteredMessages.indexOf(filteredMessagesDict.get(mid)) : messages.indexOf(obj);
                 if (index != -1) {
-                    // SilentGram H5: a deleted plain-text message stays
-                    // standing as a tombstone (small delete icon + "This
-                    // message was deleted") instead of vanishing. It stays
+                    // SilentGram H5/I14: a deleted plain-text message stays
+                    // standing as a tombstone (small delete icon + the
+                    // ORIGINAL text) instead of vanishing. It stays
                     // in messages/messagesDict/messagesByDays, so replies,
                     // quotes, date separators and unread counts are
                     // untouched; only the displayed text is swapped and

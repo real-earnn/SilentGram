@@ -267,6 +267,7 @@ public class EmojiView extends FrameLayout implements
     private FrameLayout favoritesContainer;
     private RecyclerListView favoritesGridView;
     private GridLayoutManager favoritesLayoutManager;
+    private ScrollSlidingTabStrip favoritesTabStrip;
     private FavoritePacksAdapter favoritePacksAdapter;
     private RecyclerListView.OnItemClickListener favoritesOnItemClickListener;
     private ArrayList<TLRPC.TL_messages_stickerSet> favoritePacks = new ArrayList<>();
@@ -2626,13 +2627,37 @@ public class EmojiView extends FrameLayout implements
                     if (favoritePacksAdapter == null) {
                         return 1;
                     }
-                    return favoritePacksAdapter.getItemViewType(position) == 0 ? 1 : 5;
+                    // SilentGram (I3): header/empty rows span the whole grid —
+                    // the span count is dynamic (width / dp(72), like the
+                    // Stickers tab), so it must be read live, not hardcoded.
+                    return favoritePacksAdapter.getItemViewType(position) == 0 ? 1 : favoritesLayoutManager.getSpanCount();
                 }
             });
             glassEngine.addScrolledView(favoritesGridView);
-            favoritesGridView.setPadding(0, 0, 0, AndroidUtilities.dp(44));
+            // SilentGram (I2): top padding leaves room for the pack strip
+            // below (36dp), exactly like stickersGridView.
+            favoritesGridView.setPadding(0, AndroidUtilities.dp(36), 0, AndroidUtilities.dp(44));
             favoritesGridView.setClipToPadding(false);
             favoritesGridView.setOnScrollListener(new TypedScrollListener(Type.STICKERS));
+            // SilentGram (I2): keep the pack strip in sync with the grid —
+            // scrolling to a pack highlights its strip icon, same as
+            // updateStickerTabsPosition() does for the Stickers tab.
+            favoritesGridView.addOnScrollListener(new RecyclerView.OnScrollListener() {
+                @Override
+                public void onScrolled(@NonNull RecyclerView recyclerView, int dx, int dy) {
+                    if (favoritesTabStrip == null || favoritePacksAdapter == null || favoritesLayoutManager == null) {
+                        return;
+                    }
+                    int firstVisible = favoritesLayoutManager.findFirstVisibleItemPosition();
+                    if (firstVisible == RecyclerView.NO_POSITION) {
+                        return;
+                    }
+                    int tab = favoritePacksAdapter.getTabForPosition(firstVisible);
+                    if (tab >= 0) {
+                        favoritesTabStrip.onPageScrolled(tab, 0);
+                    }
+                }
+            });
             ThemeBind.listGlowColor(favoritesGridView, Theme.key_chat_emojiPanelBackground, resourcesProvider);
             favoritesOnItemClickListener = (view, position) -> {
                 if (!(view instanceof StickerEmojiCell)) {
@@ -2666,6 +2691,26 @@ public class EmojiView extends FrameLayout implements
             favoritesGridView.setOnTouchListener((v, event) -> ContentPreviewViewer.getInstance().onTouch(event, favoritesGridView, EmojiView.this.getMeasuredHeight(), favoritesOnItemClickListener, contentPreviewViewerDelegate, resourcesProvider));
             favoritesGridView.setAdapter(favoritePacksAdapter = new FavoritePacksAdapter(context));
             favoritesContainer.addView(favoritesGridView);
+            // SilentGram (I2): pack-icon strip for the Favorites tab — the
+            // SAME mechanism as the Stickers tab's stickersTab
+            // (ScrollSlidingTabStrip + addStickerTab, one icon per pack).
+            // Tapping an icon scrolls the grid to that pack's header.
+            // Plain (non-draggable) strip: Favorites has no pack reorder.
+            // Added after the grid so it draws above it and receives taps.
+            favoritesTabStrip = new ScrollSlidingTabStrip(context, resourcesProvider, glassDesign);
+            favoritesTabStrip.setType(ScrollSlidingTabStrip.Type.TAB);
+            favoritesTabStrip.setIndicatorColor(getThemedColor(Theme.key_chat_emojiPanelStickerPackSelectorLine));
+            favoritesTabStrip.setUnderlineColor(getThemedColor(Theme.key_chat_emojiPanelShadowLine));
+            favoritesTabStrip.setDelegate(page -> {
+                if (favoritePacksAdapter == null) {
+                    return;
+                }
+                int position = favoritePacksAdapter.getPositionForPackIndex(page);
+                if (position >= 0) {
+                    scrollFavoritesToPosition(position);
+                }
+            });
+            favoritesContainer.addView(favoritesTabStrip, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 36, Gravity.LEFT | Gravity.TOP));
             // SilentGram (H20b): "+" in the top-right corner of the
             // Favorites tab — add a pack by pasting its link, without
             // needing the long-press. Same icon/tint/press treatment as
@@ -5982,6 +6027,80 @@ public class EmojiView extends FrameLayout implements
         if (favoritePacksAdapter != null) {
             favoritePacksAdapter.reload();
         }
+        updateFavoritesTabs();
+    }
+
+    // SilentGram (I2): rebuild the Favorites pack strip from favoritePacks
+    // — the same addStickerTab loop updateStickerTabs() uses for the
+    // Stickers tab (pack thumb document, 90px thumb, same content
+    // description). One tab per favorited pack, in the same order the
+    // grid shows them, so strip index == pack index in the adapter.
+    private void updateFavoritesTabs() {
+        if (favoritesTabStrip == null) {
+            return;
+        }
+        favoritesTabStrip.beginUpdate(false);
+        for (TLRPC.TL_messages_stickerSet stickerSet : favoritePacks) {
+            if (stickerSet == null || stickerSet.set == null || stickerSet.documents == null || stickerSet.documents.isEmpty()) {
+                continue;
+            }
+            TLRPC.Document document = null;
+            if (stickerSet.set.thumb_document_id != 0) {
+                for (int i = 0; i < stickerSet.documents.size(); i++) {
+                    TLRPC.Document d = stickerSet.documents.get(i);
+                    if (d != null && stickerSet.set.thumb_document_id == d.id) {
+                        document = d;
+                        break;
+                    }
+                }
+            }
+            if (document == null) {
+                document = stickerSet.documents.get(0);
+            }
+            TLObject thumb = FileLoader.getClosestPhotoSizeWithSize(stickerSet.set.thumbs, 90);
+            if (thumb == null || stickerSet.set.gifs) {
+                thumb = document;
+            }
+            View packTabView = favoritesTabStrip.addStickerTab(thumb, document, stickerSet);
+            packTabView.setContentDescription(stickerSet.set.title + ", " + getString(R.string.AccDescrStickerSet));
+            // Long-press a strip icon to (un)favorite the pack — same menu
+            // as the Stickers tab's pack icons. No drag to cancel here:
+            // this is a plain strip, not the draggable stickersTab.
+            String shortName = stickerSet.set.short_name;
+            if (shortName != null && !shortName.isEmpty()) {
+                packTabView.setOnLongClickListener(v -> {
+                    showPackFavoriteMenu(shortName);
+                    return true;
+                });
+            }
+        }
+        favoritesTabStrip.commitUpdate();
+        favoritesTabStrip.updateTabStyles();
+        // Keep the highlighted tab in step with the grid after a reload.
+        if (favoritePacksAdapter != null && favoritesLayoutManager != null) {
+            int firstVisible = favoritesLayoutManager.findFirstVisibleItemPosition();
+            int tab = firstVisible == RecyclerView.NO_POSITION ? 0 : favoritePacksAdapter.getTabForPosition(firstVisible);
+            if (tab >= 0) {
+                favoritesTabStrip.onPageScrolled(tab, 0);
+            }
+        }
+    }
+
+    // SilentGram (I2): scroll the Favorites grid to a pack header —
+    // same shape as scrollStickersToPosition(): jump when far away,
+    // smooth-scroll when close. Offset 0 lands the header at the top
+    // of the grid's padding box, just below the 36dp pack strip.
+    private void scrollFavoritesToPosition(int position) {
+        if (favoritesGridView == null || favoritesLayoutManager == null) {
+            return;
+        }
+        favoritesGridView.stopScroll();
+        int firstVisible = favoritesLayoutManager.findFirstVisibleItemPosition();
+        if (firstVisible == RecyclerView.NO_POSITION || Math.abs(position - firstVisible) > 40) {
+            favoritesLayoutManager.scrollToPositionWithOffset(position, 0);
+        } else {
+            favoritesGridView.smoothScrollToPosition(position);
+        }
     }
 
     private TLRPC.TL_messages_stickerSet findInstalledPackByShortName(MediaDataController mediaDataController, String shortName) {
@@ -6175,6 +6294,9 @@ public class EmojiView extends FrameLayout implements
 
         private final Context context;
         private final ArrayList<FavItem> items = new ArrayList<>();
+        // SilentGram (I2): adapter position of each pack's header row,
+        // in favoritePacks order — parallel to the pack strip's tabs.
+        private final ArrayList<Integer> packHeaderPositions = new ArrayList<>();
 
         FavoritePacksAdapter(Context context) {
             this.context = context;
@@ -6182,12 +6304,28 @@ public class EmojiView extends FrameLayout implements
         }
 
         void reload() {
+            // SilentGram (I3): same per-row math as the Stickers tab
+            // (StickersGridAdapter.updateItems()): perRow =
+            // width / dp(72), and the layout manager's span count
+            // follows it. Cell height stays dp(82) — the same
+            // StickerEmojiCell override the Stickers tab uses — so a
+            // Favorites cell is exactly a Stickers-tab cell on any
+            // width: a 360dp phone -> 5/row, a ~504dp panel -> 7/row.
+            if (favoritesLayoutManager != null && favoritesGridView != null) {
+                int width = favoritesGridView.getMeasuredWidth();
+                if (width == 0) {
+                    width = AndroidUtilities.displaySize.x;
+                }
+                favoritesLayoutManager.setSpanCount(Math.max(1, width / AndroidUtilities.dp(72)));
+            }
             items.clear();
+            packHeaderPositions.clear();
             for (TLRPC.TL_messages_stickerSet pack : favoritePacks) {
                 if (pack == null || pack.set == null || pack.documents == null || pack.documents.isEmpty()) {
                     continue;
                 }
                 boolean isEmojiPack = pack.set.emojis;
+                packHeaderPositions.add(items.size());
                 items.add(new FavItem(pack, null, isEmojiPack, null));
                 java.util.HashMap<Long, String> emoticons = null;
                 if (isEmojiPack && pack.packs != null) {
@@ -6223,6 +6361,29 @@ public class EmojiView extends FrameLayout implements
                 return null;
             }
             return items.get(position);
+        }
+
+        // SilentGram (I2): adapter position of a pack's header row, by
+        // strip-tab index (same order as updateFavoritesTabs()).
+        int getPositionForPackIndex(int tabIndex) {
+            if (tabIndex < 0 || tabIndex >= packHeaderPositions.size()) {
+                return -1;
+            }
+            return packHeaderPositions.get(tabIndex);
+        }
+
+        // SilentGram (I2): strip-tab index of the pack an item belongs to
+        // (the last header at or before this position).
+        int getTabForPosition(int position) {
+            int tab = -1;
+            for (int i = 0; i < packHeaderPositions.size(); i++) {
+                if (packHeaderPositions.get(i) <= position) {
+                    tab = i;
+                } else {
+                    break;
+                }
+            }
+            return tab;
         }
 
         @Override
@@ -6277,6 +6438,8 @@ public class EmojiView extends FrameLayout implements
             if (holder.getItemViewType() == 0) {
                 StickerEmojiCell cell = (StickerEmojiCell) holder.itemView;
                 cell.setSticker(item.document, item.pack, false);
+                // SilentGram (I7): see loadFavoritesFullFrame below.
+                loadFavoritesFullFrame(cell, item);
             } else if (holder.getItemViewType() == 1) {
                 StickerSetNameCell cell = (StickerSetNameCell) holder.itemView;
                 if (item.pack != null && item.pack.set != null) {
@@ -6287,6 +6450,48 @@ public class EmojiView extends FrameLayout implements
                         }
                     });
                 }
+            }
+        }
+
+        // SilentGram (I7): StickerEmojiCell renders an animated (.tgs /
+        // .webm) document from the FULL file only when
+        // MessageObject.canAutoplayAnimatedSticker() is true. Otherwise
+        // (LiteMode animated-stickers-keyboard off) it falls back to the
+        // 90px thumb as the main image, and the full file is never
+        // requested — the thumb is upscaled to the 66dp draw size and
+        // looks blurred, while the same emoji in the Emoji tab stays
+        // sharp because AnimatedEmojiDrawable draws the full vector
+        // file. Only documents whose full file happened to be cached
+        // already looked sharp — the reported "2-3 sharp, rest blurry".
+        // Fix, for exactly those demoted animated/video documents: load
+        // the full document here with the upstream "_firstframe" filter
+        // (ImageLoader: "return firstframe for Lottie or Video
+        // animation"; same filter the pack icons use when autoplay is
+        // off) — a sharp first frame, still no animation, so the
+        // LiteMode choice is respected. The call mirrors
+        // StickerEmojiCell's own autoplay branch (same setImage
+        // overload, same thumb + svgThumb placeholders), only the
+        // filter differs. Static stickers are untouched: their thumb
+        // path is upstream behaviour, identical in the Stickers tab.
+        private void loadFavoritesFullFrame(StickerEmojiCell cell, FavItem item) {
+            TLRPC.Document document = item.document;
+            if (document == null) {
+                return;
+            }
+            if (MessageObject.canAutoplayAnimatedSticker(document)) {
+                return;
+            }
+            if (!MessageObject.isAnimatedStickerDocument(document, true) && !MessageObject.isVideoStickerDocument(document)) {
+                return;
+            }
+            TLRPC.PhotoSize thumb = FileLoader.getClosestPhotoSizeWithSize(document.thumbs, 90);
+            SvgHelper.SvgDrawable svgThumb = DocumentObject.getSvgThumb(document, Theme.key_emptyListPlaceholder, 0.2f, 1f, resourcesProvider);
+            if (svgThumb != null) {
+                cell.getImageView().setImage(ImageLocation.getForDocument(document), "66_66_firstframe", ImageLocation.getForDocument(thumb, document), null, svgThumb, 0, null, item.pack, 1);
+            } else if (thumb != null) {
+                cell.getImageView().setImage(ImageLocation.getForDocument(document), "66_66_firstframe", ImageLocation.getForDocument(thumb, document), null, (String) null, item.pack, 1);
+            } else {
+                cell.getImageView().setImage(ImageLocation.getForDocument(document), "66_66_firstframe", (Drawable) null, (String) null, item.pack, 1);
             }
         }
     }

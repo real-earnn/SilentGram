@@ -316,6 +316,12 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
         RecyclerListView.OnItemClickListener itemClickListener = (view, position) -> {
             StoryCell cell = (StoryCell) view;
             if (silentAccountsMode) {
+                // SilentGram I15: the trailing "+" tile adds an account
+                // directly — no trip to Settings.
+                if (cell.silentAddAccount && fragment instanceof DialogsActivity) {
+                    ((DialogsActivity) fragment).openSilentAddAccount();
+                    return;
+                }
                 // SilentGram H3: tapping an account circle switches to that
                 // account — it must NEVER open the camera / story recorder.
                 if (cell.silentAccount >= 0 && fragment instanceof DialogsActivity) {
@@ -362,6 +368,23 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
         emojiStatusView = new ImageView(context);
         emojiStatusView.setScaleType(ImageView.ScaleType.CENTER);
         emojiStatusView.setImageDrawable(statusDrawable);
+        // SilentGram I5: tapping the status icon next to the collapsed
+        // header opens the status-icon changer — the same flow as tapping
+        // the ActionBar title's status drawable (DialogsActivity
+        // .updateStatus): while the strip is collapsed, scroll to the top
+        // first — the changer itself only opens while the strip is
+        // expanded (see DialogsActivity.showSelectStatusDialog).
+        emojiStatusView.setOnClickListener(v -> {
+            if (!(fragment instanceof DialogsActivity)) {
+                return;
+            }
+            DialogsActivity activity = (DialogsActivity) fragment;
+            if (!isExpanded()) {
+                activity.scrollToTop(true, true);
+            } else {
+                activity.showSelectStatusDialog();
+            }
+        });
         addView(emojiStatusView, LayoutHelper.createFrame(40, 40));
 
         subtitleOverlayContainer = new ActionBarAnimatedSubtitleOverlayContainer(context, null, ellipsizeSpanAnimator) {
@@ -608,6 +631,25 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
         return overScrollCoef;
     }
 
+    // SilentGram I15: sentinel dialogId for the trailing "+" tile that
+    // adds an account. No real dialog ever has this id; Item.equals also
+    // checks the addAccount flag, so the tile can never collide with a
+    // real account circle.
+    private static final long ADD_ACCOUNT_DIALOG_ID = Long.MIN_VALUE;
+
+    // SilentGram I4: same word replacement as IntroActivity.silentBrand()
+    // (IntroActivity.java:144). The downloaded official language pack
+    // (USE_CLOUD_STRINGS) still returns "Telegram" for AppName even though
+    // our bundled strings.xml says "SilentGram", so the home header can
+    // never trust the localizable string for the brand name — swap the
+    // brand word here, at display time.
+    private static String silentBrand(String s) {
+        if (s == null) {
+            return null;
+        }
+        return s.replace("Telegram", "SilentGram").replace("تيليجرام", "SilentGram");
+    }
+
     public void updateItems(boolean animated, boolean force) {
         if ((currentState == TRANSITION_STATE || overscrollProgress != 0) && !force) {
             updateOnIdleState = true;
@@ -648,6 +690,10 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
                     items.add(new Item(uid, acc));
                 }
             }
+            // SilentGram I15: always append the "+" tile that adds an
+            // account — even with a single account, so the user can add a
+            // second one from the strip itself instead of going to Settings.
+            items.add(new Item(ADD_ACCOUNT_DIALOG_ID, -1, true));
         } else {
             if (type != TYPE_ARCHIVE) {
                 items.add(new Item(UserConfig.getInstance(currentAccount).getClientUserId()));
@@ -673,7 +719,9 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
         if (silentAccountsMode) {
             // SilentGram H1/H3: the collapsed header always reads
             // "SilentGram" — never the "S" logo, never "Telegram".
-            currentTitle = getString(R.string.AppName);
+            // I4: silentBrand() — the cloud language pack can still return
+            // "Telegram" for AppName, so swap the brand word at display time.
+            currentTitle = silentBrand(getString(R.string.AppName));
         } else if (storiesController.hasOnlySelfStories()) {
             if (storiesController.hasUploadingStories(UserConfig.getInstance(currentAccount).getClientUserId())) {
                 String str = LocaleController.getString(R.string.UploadingStory);
@@ -695,12 +743,13 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
                 // the old code left the title empty, so the collapsed header
                 // showed the telegramLogoView image instead ("Telegram"
                 // wordmark, then the "S" monogram) — the header now always
-                // reads "SilentGram" as text.
-                currentTitle = menuItemsOffset < dp(50) ? getString(R.string.AppName) :
+                // reads "SilentGram" as text. I4: silentBrand() — the cloud
+                // language pack can still return "Telegram" for AppName.
+                currentTitle = menuItemsOffset < dp(50) ? silentBrand(getString(R.string.AppName)) :
                     LocaleController.getString(R.string.MyStory);
             }
         } else {
-            currentTitle = menuItemsOffset < dp(50) ? getString(R.string.AppName) :
+            currentTitle = menuItemsOffset < dp(50) ? silentBrand(getString(R.string.AppName)) :
                 LocaleController.formatPluralString("Stories", totalCount);
         }
 
@@ -1017,7 +1066,7 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
             telegramLogoView.setTranslationX(titleView.getTranslationX() + dp(1));
             telegramLogoView.setTranslationY(bottomY - barOffset + dp(14 + FAKE_TOP_PADDING + 4.333f) + translationOffset /*titleView.getTranslationY() + dpf2(37.33f)*/);
 
-            emojiStatusView.setTranslationX(titleView.getTranslationX() - dpf2(3.33f) + telegramLogoView.getMeasuredWidth());
+            emojiStatusView.setTranslationX(titleView.getTranslationX() + titleView.getDrawable().getWidth() - dp(5));
             emojiStatusView.setTranslationY(bottomY - barOffset + dp(14 - 11 + FAKE_TOP_PADDING + 4.333f) + translationOffset);
 
             subtitleOverlayContainer.setTranslationX(titleView.getTranslationX());
@@ -1477,9 +1526,9 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
             StoryCell cell = (StoryCell) holder.itemView;
             cell.position = position;
             if (mini) {
-                cell.setDialogId(miniItems.get(position).dialogId, miniItems.get(position).account);
+                cell.setDialogId(miniItems.get(position).dialogId, miniItems.get(position).account, miniItems.get(position).addAccount);
             } else {
-                cell.setDialogId(items.get(position).dialogId, items.get(position).account);
+                cell.setDialogId(items.get(position).dialogId, items.get(position).account, items.get(position).addAccount);
             }
         }
 
@@ -1501,15 +1550,22 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
         // SilentGram H3: which account this circle stands for in
         // "My Accounts" strip mode (-1 = a story cell, not an account).
         final int account;
+        // SilentGram I15: the trailing "+" tile that adds an account.
+        final boolean addAccount;
 
         public Item(long dialogId) {
             this(dialogId, -1);
         }
 
         public Item(long dialogId, int account) {
+            this(dialogId, account, false);
+        }
+
+        public Item(long dialogId, int account, boolean addAccount) {
             super(0, false);
             this.dialogId = dialogId;
             this.account = account;
+            this.addAccount = addAccount;
         }
 
         @Override
@@ -1517,12 +1573,12 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
             if (this == o) return true;
             if (!(o instanceof Item)) return false;
             Item item = (Item) o;
-            return dialogId == item.dialogId;
+            return dialogId == item.dialogId && addAccount == item.addAccount;
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(dialogId);
+            return Objects.hash(dialogId, addAccount);
         }
     }
 
@@ -1567,6 +1623,9 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
         // SilentGram H3: in "My Accounts" strip mode, which account this
         // circle stands for (-1 = a story cell, not an account).
         public int silentAccount = -1;
+        // SilentGram I15: this cell is the trailing "+" tile that adds an
+        // account (not a story cell and not an account circle).
+        public boolean silentAddAccount;
         boolean isFail;
         boolean crossfadeToDialog;
         long crossfadeToDialogId;
@@ -1626,7 +1685,12 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
         }
 
         public void setDialogId(long dialogId, int account) {
+            setDialogId(dialogId, account, false);
+        }
+
+        public void setDialogId(long dialogId, int account, boolean addAccount) {
             silentAccount = account;
+            silentAddAccount = addAccount;
             boolean animated = this.dialogId == dialogId;
             if (!animated) {
                 if (cancellable != null) {
@@ -1636,6 +1700,26 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
                 }
             }
             this.dialogId = dialogId;
+
+            if (addAccount) {
+                // SilentGram I15: the "+" tile — no user or chat behind it.
+                // Reset the per-cell state a recycled cell may carry, then
+                // show only the label; the circle itself is drawn in
+                // dispatchDraw. Mini (collapsed-row) cells never show labels.
+                isSelf = false;
+                isFail = false;
+                isUploadingState = false;
+                crossfadeToDialog = false;
+                user = null;
+                chat = null;
+                avatarImage.clearImage();
+                if (!mini) {
+                    textView.setTextSize(11);
+                    textView.setText(getString(R.string.AddAccount));
+                    textView.setRightDrawable(null);
+                }
+                return;
+            }
 
             isSelf = dialogId == UserConfig.getInstance(currentAccount).getClientUserId();
             if (silentAccountsMode) {
@@ -1808,6 +1892,35 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
             }
             if (progressToCollapsed != 0) {
                 canvas.drawCircle(cx, cy, radius + dpf2(1.5f), backgroundPaint);
+            }
+
+            if (silentAddAccount) {
+                // SilentGram I15: the "+" tile — a plain accent circle with
+                // a centred plus, no avatar and no story ring. The label
+                // ("Add Account", set in setDialogId) is positioned by the
+                // same lines the normal path uses below.
+                addCirclePaint.setColor(Theme.multAlpha(getThemedColor(Theme.key_telegram_color), 1f));
+                canvas.drawCircle(cx, cy, radius, addCirclePaint);
+                int addAccountPlusColor = getThemedColor(Theme.key_actionBarDefault);
+                if (addAccountPlusColor != addNewStoryLastColor) {
+                    addNewStoryDrawable.setColorFilter(new PorterDuffColorFilter(addNewStoryLastColor = addAccountPlusColor, PorterDuff.Mode.MULTIPLY));
+                }
+                addNewStoryDrawable.setAlpha(0xFF);
+                addNewStoryDrawable.setBounds(
+                        (int) (cx - addNewStoryDrawable.getIntrinsicWidth() / 2f),
+                        (int) (cy - addNewStoryDrawable.getIntrinsicHeight() / 2f),
+                        (int) (cx + addNewStoryDrawable.getIntrinsicWidth() / 2f),
+                        (int) (cy + addNewStoryDrawable.getIntrinsicHeight() / 2f)
+                );
+                addNewStoryDrawable.draw(canvas);
+                textViewContainer.setTranslationY(y + finalSize + dp(7) * (1f - progressToCollapsed));
+                textViewContainer.setTranslationX(x - fromX);
+                if (!mini) {
+                    textViewContainer.setAlpha(1f);
+                    textViewContainer.setVisibility(View.VISIBLE);
+                }
+                super.dispatchDraw(canvas);
+                return;
             }
 
             canvas.save();
@@ -2355,8 +2468,14 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
             telegramLogoView.setVisibility(logoAlpha > 0 ? VISIBLE : GONE);
         }
         if (emojiStatusView != null) {
-            emojiStatusView.setAlpha(logoAlpha);
-            emojiStatusView.setVisibility(logoAlpha > 0 ? VISIBLE : GONE);
+            // SilentGram I5: the status icon is NOT part of the logo — it
+            // used to share logoAlpha, and H1/H18 hardcoded logoVisibility
+            // to 0f to kill the "Telegram"/"S" logo, which silently hid the
+            // premium status icon with it even though updateStatus() keeps
+            // its drawable current. It shows exactly when the collapsed
+            // header title shows, next to the header name.
+            emojiStatusView.setAlpha(titleAlpha);
+            emojiStatusView.setVisibility(titleAlpha > 0 ? VISIBLE : GONE);
         }
         if (subtitleOverlayContainer != null) {
             subtitleOverlayContainer.setAlpha(progress);

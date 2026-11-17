@@ -598,6 +598,8 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
     private ActionBarMenuSubItem readItem;
     @Nullable
     private ActionBarMenuSubItem blockItem;
+    @Nullable
+    private ActionBarMenuSubItem lockItem;
 
     private float additionalFloatingTranslation;
     private float floatingButtonPanOffset;
@@ -719,6 +721,8 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
     private final static int add_to_folder = 109;
     private final static int remove_from_folder = 110;
     private final static int community_ungroup = 111;
+    // SilentGram I9: "Add to Chat Lock" in the selection-mode menu.
+    private final static int lock = 112;
 
     private final static int ARCHIVE_ITEM_STATE_PINNED = 0;
     private final static int ARCHIVE_ITEM_STATE_SHOWED = 1;
@@ -2926,6 +2930,19 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         }
     }
 
+    // SilentGram I4: same word replacement as IntroActivity.silentBrand()
+    // (IntroActivity.java:144) and DialogStoriesCell.silentBrand(). The
+    // downloaded official language pack (USE_CLOUD_STRINGS) still returns
+    // "Telegram" for AppName even though our bundled strings.xml says
+    // "SilentGram", so the home header can never trust the localizable
+    // string for the brand name — swap the brand word at display time.
+    private static String silentBrand(String s) {
+        if (s == null) {
+            return null;
+        }
+        return s.replace("Telegram", "SilentGram").replace("تيليجرام", "SilentGram");
+    }
+
     private Drawable premiumStar;
 
     public void updateStatus(TLRPC.User user, boolean animated) {
@@ -2989,6 +3006,16 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         if (selectAnimatedEmojiDialog != null && selectAnimatedEmojiDialog.getContentView() instanceof SelectAnimatedEmojiDialog) {
             SimpleTextView textView = actionBar.getTitleTextView();
             ((SelectAnimatedEmojiDialog) selectAnimatedEmojiDialog.getContentView()).setScrimDrawable(textView != null && textView.getRightDrawable() == statusDrawable ? statusDrawable : null, textView);
+        }
+        // SilentGram I5: re-assert the home title WITH its status drawable.
+        // ActionBar.setTitle(value) clears the right drawable (it delegates
+        // to setTitle(value, null)), so any title re-set without a drawable
+        // — e.g. setTitleAnimated in select/forward mode — silently drops
+        // the premium status icon next to the header name. Only the home
+        // title (not folders, communities, search or select mode) carries
+        // the drawable, so only re-assert it there.
+        if (!onlySelect && folderId == 0 && communityId == 0 && !searchIsShowed && actionBar != null && !actionBar.isActionModeShowed() && statusDrawable != null) {
+            actionBar.setTitle(silentBrand(getString(R.string.AppName)), statusDrawable);
         }
     }
 
@@ -3446,7 +3473,10 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                 // this one — it is DialogStoriesCell's collapsed header
                 // (titleView/logo); see updateItems() there, which is why
                 // the header used to show only "S".
-                actionBar.setTitle(getString(R.string.AppName), statusDrawable);
+                // I4: silentBrand() — the cloud language pack can still
+                // return "Telegram" for AppName, so swap the brand word at
+                // display time.
+                actionBar.setTitle(silentBrand(getString(R.string.AppName)), statusDrawable);
                 updateStatus(UserConfig.getInstance(currentAccount).getCurrentUser(), false);
             }
             if (folderId == 0) {
@@ -3938,6 +3968,40 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                         undoView.showWithAction(did, UndoView.ACTION_REMOVED_FROM_FOLDER, neverShow.size(), filter, null, null);
                     }
                     hideActionMode(false);
+                } else if (id == lock) {
+                    // SilentGram I9: add the selected chats to Chat Lock.
+                    // Same rule as ChatActivity's lock menu: a PIN must
+                    // exist first — otherwise open the Chat Lock screen to
+                    // set one, and lock nothing.
+                    if (!org.telegram.messenger.SilentChatLock.hasPin()) {
+                        presentFragment(new SilentChatLockActivity());
+                        if (getParentActivity() != null) {
+                            android.widget.Toast.makeText(getParentActivity(), LocaleController.getString(R.string.SilentChatLockSetPinFirst), android.widget.Toast.LENGTH_SHORT).show();
+                        }
+                        hideActionMode(true);
+                    } else {
+                        int newlyLocked = 0;
+                        for (long did : selectedDialogs) {
+                            if (did != 0 && !DialogObject.isFolderDialogId(did) && !org.telegram.messenger.SilentChatLock.isLocked(did)) {
+                                org.telegram.messenger.SilentChatLock.setLocked(did, true);
+                                newlyLocked++;
+                            }
+                        }
+                        if (newlyLocked > 0) {
+                            if (getParentActivity() != null) {
+                                android.widget.Toast.makeText(getParentActivity(), LocaleController.getString(R.string.SilentChatLockAdded), android.widget.Toast.LENGTH_SHORT).show();
+                            }
+                            silentLastKnownLockedChats = org.telegram.messenger.SilentChatLock.getLockedChats();
+                            if (viewPages != null) {
+                                for (int a = 0; a < viewPages.length; a++) {
+                                    if (viewPages[a].dialogsAdapter != null) {
+                                        viewPages[a].dialogsAdapter.notifyDataSetChanged();
+                                    }
+                                }
+                            }
+                        }
+                        hideActionMode(true);
+                    }
                 } else if (id == pin || id == read || id == delete || id == clear || id == mute || id == archive || id == block || id == archive2 || id == pin2) {
                     performSelectedDialogsAction(selectedDialogs, id, true, false);
                 }
@@ -5242,9 +5306,11 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         dialogStoriesCell.setActionBar(actionBar);
         dialogStoriesCell.setMenuItemsOffset(isArchive() ? dp(68) : dpf2(16.66f));
         // SilentGram H3: restore the strip mode ("My Status" stories vs
-        // "My Accounts" circles). One account only -> stories mode.
+        // "My Accounts" circles). SilentGram I15: no account-count guard —
+        // with a single account the strip still opens in accounts mode so
+        // its "+" tile can add a second account.
         silentStripAccountsMode = MessagesController.getGlobalMainSettings().getBoolean("silent_strip_accounts", false)
-                && !isArchive() && UserConfig.getActivatedAccountsCount() > 1;
+                && !isArchive();
         dialogStoriesCell.setSilentAccountsMode(silentStripAccountsMode);
         dialogStoriesCell.allowGlobalUpdates = false;
         dialogStoriesCell.setVisibility(View.GONE);
@@ -6687,6 +6753,8 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         readItem = otherItem.addSubItem(read, R.drawable.msg_markread, LocaleController.getString(R.string.MarkAsRead));
         clearItem = otherItem.addSubItem(clear, R.drawable.msg_clear, LocaleController.getString(R.string.ClearHistory));
         blockItem = otherItem.addSubItem(block, R.drawable.msg_block, LocaleController.getString(R.string.BlockUser));
+        // SilentGram I9: lock the selected chats (single or multiple).
+        lockItem = otherItem.addSubItem(lock, R.drawable.msg_secret, LocaleController.getString(R.string.SilentChatLockAdd));
 
         muteItem.setOnLongClickListener(e -> {
             performSelectedDialogsAction(selectedDialogs, mute, true, true);
@@ -12567,8 +12635,10 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         dialogStoriesCellVisible = onlySelfStories || newVisibility;
         // SilentGram H3: in "My Accounts" strip mode the strip must stay
         // visible even when there are no stories at all — otherwise the
-        // account circles would never appear.
-        if (silentStripAccountsMode && !isArchive() && communityId == 0 && UserConfig.getActivatedAccountsCount() > 1) {
+        // account circles would never appear. SilentGram I15: no
+        // account-count guard — with a single account the strip still
+        // shows, so its "+" tile can add a second account.
+        if (silentStripAccountsMode && !isArchive() && communityId == 0) {
             dialogStoriesCellVisible = true;
             newVisibility = true;
         }
@@ -13529,22 +13599,40 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             args.putLong("user_id", UserConfig.getInstance(currentAccount).getClientUserId());
             presentFragment(new ChatActivity(args));
         });
+        // SilentGram I8: switch to a different proxy. Some proxies accept
+        // a connection but never deliver data, so chats, emoji and files
+        // stall — tapping Refresh marks the current proxy bad and connects
+        // to the next-fastest one (see SilentProxyManager.rotateProxy).
+        io.add(R.drawable.msg_reset, getString(R.string.Refresh), () -> {
+            boolean switched = org.telegram.messenger.SilentProxyManager.rotateProxy();
+            if (getParentActivity() != null) {
+                android.widget.Toast.makeText(getParentActivity(), switched
+                        ? "Switched to a different proxy — things should work now"
+                        : "No other proxy available right now — try again in a moment",
+                        android.widget.Toast.LENGTH_LONG).show();
+            }
+        });
         // SilentGram H3: the 3-dot menu toggles what the strip above search
         // shows — "My Status" (stories, as now) or "My Accounts" (one
         // circle per account, active first; tap switches account, never
-        // opens the camera). "My Accounts" only appears when more than one
-        // account is added. Posting a story stays on the "My Story" cell
+        // opens the camera). Posting a story stays on the "My Story" cell
         // in the strip itself.
-        if (UserConfig.getActivatedAccountsCount() > 1) {
-            io.add(R.drawable.outline_fab_story_24, getString(silentStripAccountsMode ? R.string.SilentMyStatus : R.string.SilentMyAccounts), () -> {
-                silentStripAccountsMode = !silentStripAccountsMode;
-                MessagesController.getGlobalMainSettings().edit().putBoolean("silent_strip_accounts", silentStripAccountsMode).apply();
-                if (dialogStoriesCell != null) {
-                    dialogStoriesCell.setSilentAccountsMode(silentStripAccountsMode);
-                }
-                updateStoriesVisibility(false);
-            });
-        }
+        // SilentGram I15: the toggle is always shown — even with a single
+        // account, so the user can open "My Accounts" and tap its "+" tile
+        // to add a second account. (The old "only when more than one
+        // account is added" guard hid the toggle — and with it the "+" tile
+        // — from single-account users.)
+        // SilentGram I1: the icon matches the label — the camera icon for
+        // "My Status", a person icon (Settings' account icon) for
+        // "My Accounts". The camera used to show for both.
+        io.add(silentStripAccountsMode ? R.drawable.outline_fab_story_24 : R.drawable.settings_account, getString(silentStripAccountsMode ? R.string.SilentMyStatus : R.string.SilentMyAccounts), () -> {
+            silentStripAccountsMode = !silentStripAccountsMode;
+            MessagesController.getGlobalMainSettings().edit().putBoolean("silent_strip_accounts", silentStripAccountsMode).apply();
+            if (dialogStoriesCell != null) {
+                dialogStoriesCell.setSilentAccountsMode(silentStripAccountsMode);
+            }
+            updateStoriesVisibility(false);
+        });
         // SilentGram F4: Chat Lock — manage locked chats, PIN, fingerprint.
         io.add(R.drawable.msg_secret, getString(R.string.SilentChatLockTitle), () -> {
             presentFragment(new SilentChatLockActivity());
@@ -14222,6 +14310,30 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         final DialogsActivity dialogsActivity = new DialogsActivity(arguments);
         dialogsActivity.setDelegate(oldDelegate);
         launchActivity.presentFragment(dialogsActivity, false, true);
+    }
+
+    // SilentGram I15: add an account directly from the "My Accounts"
+    // strip's "+" tile — no trip to Settings. Same free-slot / premium
+    // limit rule as Settings' "Add Account" (UserInfoActivity).
+    public void openSilentAddAccount() {
+        int freeAccounts = 0;
+        Integer availableAccount = null;
+        for (int a = UserConfig.MAX_ACCOUNT_COUNT - 1; a >= 0; a--) {
+            if (!UserConfig.getInstance(a).isClientActivated()) {
+                freeAccounts++;
+                if (availableAccount == null) {
+                    availableAccount = a;
+                }
+            }
+        }
+        if (!UserConfig.hasPremiumOnAccounts()) {
+            freeAccounts -= (UserConfig.MAX_ACCOUNT_COUNT - UserConfig.MAX_ACCOUNT_DEFAULT_COUNT);
+        }
+        if (freeAccounts > 0 && availableAccount != null) {
+            presentFragment(new LoginActivity(availableAccount));
+        } else if (!UserConfig.hasPremiumOnAccounts()) {
+            showDialog(new LimitReachedBottomSheet(this, getContext(), LimitReachedBottomSheet.TYPE_ACCOUNTS, currentAccount, null));
+        }
     }
 
     private boolean openAccountSelector(View view) {
