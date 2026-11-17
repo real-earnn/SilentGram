@@ -27680,7 +27680,7 @@ public class ChatActivity extends BaseFragment implements
         // Bounds of the loaded window, from real messages only (this batch
         // plus whatever was already loaded): id + date.
         int minId = Integer.MAX_VALUE, maxId = Integer.MIN_VALUE;
-        int minDate = Integer.MAX_VALUE, maxDate = Integer.MIN_VALUE;
+        int windowMinDate = Integer.MAX_VALUE, windowMaxDate = Integer.MIN_VALUE;
         for (MessageObject o : messArr) {
             if (o == null || o.messageOwner == null) {
                 continue;
@@ -27692,8 +27692,8 @@ public class ChatActivity extends BaseFragment implements
             }
             int d = o.messageOwner.date;
             if (d != 0) {
-                if (d < minDate) minDate = d;
-                if (d > maxDate) maxDate = d;
+                if (d < windowMinDate) windowMinDate = d;
+                if (d > windowMaxDate) windowMaxDate = d;
             }
         }
         // Normal chats: maxMessageId holds the smallest loaded id,
@@ -27702,9 +27702,9 @@ public class ChatActivity extends BaseFragment implements
             if (maxMessageId[loadIndex] < minId) minId = maxMessageId[loadIndex];
             if (minMessageId[loadIndex] > maxId) maxId = minMessageId[loadIndex];
         }
-        if (minDate[loadIndex] != 0 && minDate[loadIndex] < minDate) minDate = minDate[loadIndex];
-        if (maxDate[loadIndex] != Integer.MIN_VALUE && maxDate[loadIndex] > maxDate) maxDate = maxDate[loadIndex];
-        if (minId == Integer.MAX_VALUE || minDate == Integer.MAX_VALUE) {
+        if (minDate[loadIndex] != 0 && minDate[loadIndex] < windowMinDate) windowMinDate = minDate[loadIndex];
+        if (maxDate[loadIndex] != Integer.MIN_VALUE && maxDate[loadIndex] > windowMaxDate) windowMaxDate = maxDate[loadIndex];
+        if (minId == Integer.MAX_VALUE || windowMinDate == Integer.MAX_VALUE) {
             return;
         }
         // messArr order, detected from its own first/last elements.
@@ -27733,7 +27733,7 @@ public class ChatActivity extends BaseFragment implements
                 continue;
             }
             int date = (int) (e.time / 1000);
-            if (date < minDate || date > maxDate) {
+            if (date < windowMinDate || date > windowMaxDate) {
                 continue;
             }
             if (e.msgId < minId || e.msgId > maxId) {
