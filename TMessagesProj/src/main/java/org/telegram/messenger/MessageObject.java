@@ -229,6 +229,11 @@ public class MessageObject {
     public String monthKey;
     public boolean deleted;
     public boolean deletedByThanos;
+    // SilentGram H5: this message was deleted but stays standing in the
+    // chat as a tombstone ("This message was deleted" + delete icon).
+    // Plain display flag only — never serialized, never sent anywhere.
+    // A second delete of the same message removes it for real.
+    public boolean silentTombstone;
     public float audioProgress;
     public float forceSeekTo = -1;
     public int audioProgressMs;

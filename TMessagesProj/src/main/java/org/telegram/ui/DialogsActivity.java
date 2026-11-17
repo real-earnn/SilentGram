@@ -530,6 +530,10 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
     private SearchViewPager searchViewPager;
     private SharedMediaLayout.SharedMediaPreloader sharedMediaPreloader;
     public DialogStoriesCell dialogStoriesCell;
+    // SilentGram H3: "My Accounts" strip mode — the strip above search shows
+    // account circles instead of stories. Persisted in global main settings
+    // ("silent_strip_accounts") so it survives account switches/restarts.
+    private boolean silentStripAccountsMode;
     private DialogsActivityStatusLayout dialogsActivityStatusLayout;
     public boolean dialogStoriesCellVisible;
     public float progressToDialogStoriesCell;
@@ -3437,11 +3441,11 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             } else {
                 statusDrawable = new AnimatedEmojiDrawable.SwapAnimatedEmojiDrawable(null, dp(26));
                 statusDrawable.center = true;
-                // SilentGram: show the "SilentGram" wordmark as plain text.
-                // The old code covered the whole AppName title with an
-                // ImageSpan of R.drawable.telegram_logo_2, so the home page
-                // still showed Telegram's paper-plane logo even though
-                // AppName is already "SilentGram".
+                // SilentGram: the home title is the plain "SilentGram" text
+                // (AppName). Note the title you see while SCROLLING is not
+                // this one — it is DialogStoriesCell's collapsed header
+                // (titleView/logo); see updateItems() there, which is why
+                // the header used to show only "S".
                 actionBar.setTitle(getString(R.string.AppName), statusDrawable);
                 updateStatus(UserConfig.getInstance(currentAccount).getCurrentUser(), false);
             }
@@ -3458,7 +3462,9 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             if (initialDialogsType != DIALOGS_TYPE_WIDGET) {
                 hideFloatingButton(false);
             }
-            if (hasOnlySlefStories && getStoriesController().hasOnlySelfStories()) {
+            // SilentGram H3: in "My Accounts" strip mode the header tap
+            // scrolls to the top — it never opens self stories.
+            if (!silentStripAccountsMode && hasOnlySlefStories && getStoriesController().hasOnlySelfStories()) {
                 dialogStoriesCell.openSelfStories();
             } else {
                 scrollToTop(true, true);
@@ -5235,6 +5241,11 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         };
         dialogStoriesCell.setActionBar(actionBar);
         dialogStoriesCell.setMenuItemsOffset(isArchive() ? dp(68) : dpf2(16.66f));
+        // SilentGram H3: restore the strip mode ("My Status" stories vs
+        // "My Accounts" circles). One account only -> stories mode.
+        silentStripAccountsMode = MessagesController.getGlobalMainSettings().getBoolean("silent_strip_accounts", false)
+                && !isArchive() && UserConfig.getActivatedAccountsCount() > 1;
+        dialogStoriesCell.setSilentAccountsMode(silentStripAccountsMode);
         dialogStoriesCell.allowGlobalUpdates = false;
         dialogStoriesCell.setVisibility(View.GONE);
         animateToHasStories = false;
@@ -12554,6 +12565,13 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
 
         boolean oldStoriesCellVisibility = dialogStoriesCellVisible;
         dialogStoriesCellVisible = onlySelfStories || newVisibility;
+        // SilentGram H3: in "My Accounts" strip mode the strip must stay
+        // visible even when there are no stories at all — otherwise the
+        // account circles would never appear.
+        if (silentStripAccountsMode && !isArchive() && communityId == 0 && UserConfig.getActivatedAccountsCount() > 1) {
+            dialogStoriesCellVisible = true;
+            newVisibility = true;
+        }
 
         if (newVisibility || dialogStoriesCellVisible) {
             dialogStoriesCell.updateItems(animated, dialogStoriesCellVisible != oldStoriesCellVisibility);
@@ -13508,13 +13526,22 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             args.putLong("user_id", UserConfig.getInstance(currentAccount).getClientUserId());
             presentFragment(new ChatActivity(args));
         });
-        // SilentGram E5: Status/Stories moved here (the swipe-down area now
-        // shows the account switcher instead). Opens the story recorder.
-        io.add(R.drawable.outline_fab_story_24, getString(R.string.SilentMyStatus), () -> {
-            if (dialogStoriesCell != null) {
-                dialogStoriesCell.openStoryRecorder();
-            }
-        });
+        // SilentGram H3: the 3-dot menu toggles what the strip above search
+        // shows — "My Status" (stories, as now) or "My Accounts" (one
+        // circle per account, active first; tap switches account, never
+        // opens the camera). "My Accounts" only appears when more than one
+        // account is added. Posting a story stays on the "My Story" cell
+        // in the strip itself.
+        if (UserConfig.getActivatedAccountsCount() > 1) {
+            io.add(R.drawable.outline_fab_story_24, getString(silentStripAccountsMode ? R.string.SilentMyStatus : R.string.SilentMyAccounts), () -> {
+                silentStripAccountsMode = !silentStripAccountsMode;
+                MessagesController.getGlobalMainSettings().edit().putBoolean("silent_strip_accounts", silentStripAccountsMode).apply();
+                if (dialogStoriesCell != null) {
+                    dialogStoriesCell.setSilentAccountsMode(silentStripAccountsMode);
+                }
+                updateStoriesVisibility(false);
+            });
+        }
         // SilentGram F4: Chat Lock — manage locked chats, PIN, fingerprint.
         io.add(R.drawable.msg_secret, getString(R.string.SilentChatLockTitle), () -> {
             presentFragment(new SilentChatLockActivity());
@@ -14175,6 +14202,23 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                 return false;
             }
         });
+    }
+
+    // SilentGram H3: tap an account circle in the "My Accounts" strip to
+    // switch to that account. Same switch as the account selector popup
+    // (openAccountSelector below), minus the share-carry, which only the
+    // popup path needs.
+    public void switchToSilentAccount(int account) {
+        if (account == currentAccount || getParentActivity() == null) {
+            return;
+        }
+        final LaunchActivity launchActivity = (LaunchActivity) getParentActivity();
+        final DialogsActivityDelegate oldDelegate = delegate;
+        launchActivity.switchToAccount(account, true);
+
+        final DialogsActivity dialogsActivity = new DialogsActivity(arguments);
+        dialogsActivity.setDelegate(oldDelegate);
+        launchActivity.presentFragment(dialogsActivity, false, true);
     }
 
     private boolean openAccountSelector(View view) {

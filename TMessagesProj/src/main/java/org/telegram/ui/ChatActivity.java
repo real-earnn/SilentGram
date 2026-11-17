@@ -1740,8 +1740,6 @@ public class ChatActivity extends BaseFragment implements
     private final static int chat_menu_topic_create = 73;
     private final static int chat_menu_topics_panel = 75;
 
-    // SilentGram: quick actions (admin/share) in a user chat.
-    private final static int chat_menu_silent_quick = 76;
     private final static int chat_menu_silent_lock = 77;
     private final static int chat_menu_silent_export = 78;
     private final static int chat_menu_silent_translate_chat = 79;
@@ -4138,14 +4136,6 @@ public class ChatActivity extends BaseFragment implements
                     openTopicsPanel();
                 } else if (id == chat_menu_topic_create) {
                     presentFragment(TopicCreateFragment.create(-dialog_id, 0).setOpenInChatActivity(ChatActivity.this));
-                } else if (id == chat_menu_silent_quick) {
-                    // SilentGram: Administration for MY channel/group chats.
-                    // (1-1 user chats use the floating button instead — the
-                    // header arrow is only added for channels/groups now.)
-                    // NOTE: showChannelAdminMenu takes the POSITIVE chat id.
-                    if (currentChat != null) {
-                        org.telegram.messenger.SilentQuickActions.showChannelAdminMenu(ChatActivity.this, currentAccount, currentChat.id);
-                    }
                 } else if (id == 888) {
                     dumpCanvas();
                 } else if (id == 889) {
@@ -4314,16 +4304,6 @@ public class ChatActivity extends BaseFragment implements
 
         if (UserObject.isBotForumWithEditableTopics(currentUser) && chatMode == 0) {
             topicCreateItem = menu.addItem(chat_menu_topic_create, R.drawable.menu_topic_add_30);
-        }
-
-        // SilentGram: small arrow in the header of MY channel/group chats —
-        // Administration (admins, members, invite link). 1-1 user chats use
-        // the floating button on the right edge instead (added below), so
-        // the header arrow is NOT added for users anymore.
-        if (chatMode == 0 && currentEncryptedChat == null && currentChat != null
-                && (currentChat.creator || currentChat.admin_rights != null)) {
-            ActionBarMenuItem quickItem = menu.addItem(chat_menu_silent_quick, R.drawable.ic_arrow_drop_down);
-            quickItem.setContentDescription(LocaleController.getString(R.string.SilentQuickActions));
         }
 
         if (currentEncryptedChat == null && (chatMode == 0 || chatMode == MODE_SAVED || chatMode == MODE_SUGGESTIONS) && !isReport()) {
@@ -7330,15 +7310,25 @@ public class ChatActivity extends BaseFragment implements
             contentView.addView(sideControlsButtonsLayout, indexToAdd, LayoutHelper.createFrame(57, 300, Gravity.RIGHT | Gravity.BOTTOM));
         }
 
-        // SilentGram G6: small floating button on the RIGHT edge, vertically
-        // centred, for 1-1 user chats (replaces the header arrow). Rounded
-        // on the front (left) edge, flat against the screen edge at the back
-        // (right). Tapping it opens the VIP quick-actions panel. The icon
-        // alone rotates (the pill background must not rotate with it).
-        if (chatMode == 0 && currentUser != null && !UserObject.isReplyUser(currentUser) && currentEncryptedChat == null) {
+        // SilentGram G6 (H10): small floating button on the RIGHT edge,
+        // vertically centred. Rounded on the front (left) edge, flat against
+        // the screen edge at the back (right). It replaces the header arrow
+        // everywhere: in 1-1 user chats it opens the VIP quick-actions
+        // panel; in MY channel/group chats (creator/admin — the same chats
+        // the header arrow used to appear in) it opens the Administration
+        // menu. Background is Telegram's own overflow-menu background
+        // (Theme.key_actionBarDefaultSubmenuBackground — the same background
+        // the 3-dot menu uses), NOT our violet, and the chevron uses the
+        // header icon colour (key_actionBarDefaultIcon) so it stays visible
+        // on that background in light and dark themes. The icon alone
+        // rotates (the pill background must not rotate with it).
+        boolean showSilentQuickFab = chatMode == 0 && currentEncryptedChat == null
+                && ((currentUser != null && !UserObject.isReplyUser(currentUser))
+                || (currentChat != null && (currentChat.creator || currentChat.admin_rights != null)));
+        if (showSilentQuickFab) {
             FrameLayout silentQuickFab = new FrameLayout(context);
             android.graphics.drawable.GradientDrawable fabBg = new android.graphics.drawable.GradientDrawable();
-            fabBg.setColor(0xFF6D28D9);
+            fabBg.setColor(Theme.getColor(Theme.key_actionBarDefaultSubmenuBackground, getResourceProvider()));
             fabBg.setCornerRadii(new float[]{AndroidUtilities.dp(22), AndroidUtilities.dp(22), 0, 0, 0, 0, AndroidUtilities.dp(22), AndroidUtilities.dp(22)});
             silentQuickFab.setBackground(fabBg);
             silentQuickFab.setElevation(AndroidUtilities.dp(4));
@@ -7347,9 +7337,14 @@ public class ChatActivity extends BaseFragment implements
             fabIcon.setImageResource(R.drawable.ic_arrow_drop_down);
             fabIcon.setRotation(90); // down chevron -> points left, toward the chat
             fabIcon.setScaleType(ImageView.ScaleType.CENTER);
-            fabIcon.setColorFilter(0xFFFFFFFF, android.graphics.PorterDuff.Mode.SRC_IN);
+            fabIcon.setColorFilter(Theme.getColor(Theme.key_actionBarDefaultIcon, getResourceProvider()), android.graphics.PorterDuff.Mode.SRC_IN);
             silentQuickFab.addView(fabIcon, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
-            silentQuickFab.setOnClickListener(v -> org.telegram.messenger.SilentQuickActions.showVipPanel(ChatActivity.this, currentAccount, dialog_id, currentUser.id));
+            if (currentChat != null) {
+                // NOTE: showChannelAdminMenu takes the POSITIVE chat id.
+                silentQuickFab.setOnClickListener(v -> org.telegram.messenger.SilentQuickActions.showChannelAdminMenu(ChatActivity.this, currentAccount, currentChat.id));
+            } else {
+                silentQuickFab.setOnClickListener(v -> org.telegram.messenger.SilentQuickActions.showVipPanel(ChatActivity.this, currentAccount, dialog_id, currentUser.id));
+            }
             // Mid-screen right edge, shifted up so it clears the input field.
             contentView.addView(silentQuickFab, LayoutHelper.createFrame(30, 46, Gravity.RIGHT | Gravity.CENTER_VERTICAL, 0, 0, 0, 120));
         }
@@ -27580,9 +27575,65 @@ public class ChatActivity extends BaseFragment implements
     private void processDeletedMessages(ArrayList<Integer> markAsDeletedMessages, long channelId, boolean sent) {
         processDeletedMessages(markAsDeletedMessages, channelId, sent, true);
     }
+    // SilentGram H5: a tombstone is only safe for a plain-text message in
+    // a normal chat. Anything else is removed exactly as before:
+    //  - media / polls / stickers / files: swapping the text would leave
+    //    the photo/video/document standing — a fake message.
+    //  - albums (groupId != 0): the group layout is computed from its
+    //    members; a tombstone inside it would break the grid.
+    //  - scheduled / filtered (search) / pinned-mode / quick-replies /
+    //    welcome chats: separate lists with their own removal logic.
+    //  - the thread root: deleting it finishes the thread fragment anyway.
+    //  - already a tombstone: a second delete removes it for real.
+    // Deliberately NOT excluded: messages that other messages reply to
+    // (their quotes are cleared by updateReplyMessageOwners, exactly as
+    // Telegram does today) and formerly-pinned messages (the pinned bar
+    // is already gone by the time this runs).
+    private boolean silentCanTombstone(MessageObject obj, int mid) {
+        if (obj == null || obj.silentTombstone || obj.scheduled) {
+            return false;
+        }
+        if (chatMode != MODE_DEFAULT || chatAdapter == null || chatAdapter.isFiltered) {
+            return false;
+        }
+        if (mid == threadMessageId) {
+            return false;
+        }
+        if (obj.type != MessageObject.TYPE_TEXT && obj.type != MessageObject.TYPE_EMOJIS) {
+            return false;
+        }
+        if (obj.getGroupId() != 0) {
+            return false;
+        }
+        if (obj.messageOwner == null || obj.messageOwner.action != null || !obj.isMediaEmpty()) {
+            return false;
+        }
+        return true;
+    }
+
+    // Swap the displayed text to a small delete icon + "This message was
+    // deleted" (MessageObject.applyNewText — the same call Telegram's own
+    // translation uses). The original text is NOT lost: the E7 hook in
+    // didReceivedNotification already saved it to Recent Deleted Chats
+    // before this runs. The cell hides the name/time for deleted messages
+    // itself (ChatMessageCell), and long-press is blocked (didLongPress
+    // below), so a tombstone can never be copied, forwarded or replied to.
+    private void silentApplyDeletedTombstone(MessageObject obj) {
+        obj.silentTombstone = true;
+        android.text.SpannableStringBuilder ssb = new android.text.SpannableStringBuilder("* " + getString(R.string.SilentDeletedMessage));
+        org.telegram.ui.Components.ColoredImageSpan icon = new org.telegram.ui.Components.ColoredImageSpan(R.drawable.msg_delete);
+        icon.setSize(AndroidUtilities.dp(16));
+        icon.setColorKey(obj.isOutOwner() ? Theme.key_chat_messageTextOut : Theme.key_chat_messageTextIn);
+        ssb.setSpan(icon, 0, 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        obj.applyNewText(ssb);
+    }
+
     private void processDeletedMessages(ArrayList<Integer> markAsDeletedMessages, long channelId, boolean sent, boolean thanos) {
         ArrayList<Integer> removedIndexes = new ArrayList<>();
         ArrayList<Integer> thanosMessagesIndexes = new ArrayList<>();
+        // SilentGram H5: rows that stay standing as deleted tombstones
+        // (rebound in place, not removed).
+        ArrayList<Integer> silentTombstoneIndexes = new ArrayList<>();
         final int currentTime = getConnectionsManager().getCurrentTime();
         int loadIndex = 0;
         if (ChatObject.isChannel(currentChat)) {
@@ -27681,6 +27732,28 @@ public class ChatActivity extends BaseFragment implements
                 }
                 int index = chatAdapter != null && chatAdapter.isFiltered && filteredMessagesDict != null ? chatAdapter.filteredMessages.indexOf(filteredMessagesDict.get(mid)) : messages.indexOf(obj);
                 if (index != -1) {
+                    // SilentGram H5: a deleted plain-text message stays
+                    // standing as a tombstone (small delete icon + "This
+                    // message was deleted") instead of vanishing. It stays
+                    // in messages/messagesDict/messagesByDays, so replies,
+                    // quotes, date separators and unread counts are
+                    // untouched; only the displayed text is swapped and
+                    // the row is rebound in place. Everything else is
+                    // removed exactly as before (see silentCanTombstone).
+                    // Pinned removal, reply-owner clearing and reply
+                    // counts above still run for tombstones too.
+                    if (silentCanTombstone(obj, mid)) {
+                        if (selectedMessagesIds[loadIndex].indexOfKey(mid) >= 0) {
+                            updatedSelected = true;
+                            addToSelectedMessages(obj, false, updatedSelectedLast = (a == size - 1));
+                        }
+                        silentApplyDeletedTombstone(obj);
+                        if (chatAdapter != null && !chatAdapter.isFiltered) {
+                            silentTombstoneIndexes.add(chatAdapter.messagesStartRow + index);
+                        }
+                        updated = true;
+                        continue;
+                    }
                     if (obj.scheduled) {
                         scheduledMessagesCount--;
                         updateScheduled = true;
@@ -27881,6 +27954,11 @@ public class ChatActivity extends BaseFragment implements
                 for (int a = 0, N = removedIndexes.size(); a < N; a++) {
                     final int pos = removedIndexes.get(a);
                     chatAdapter.notifyItemRemoved(pos, thanosMessagesIndexes.contains(pos));
+                }
+                // SilentGram H5: rebind tombstone rows in place so the
+                // bubble re-layouts to the short placeholder text.
+                for (int a = 0, N = silentTombstoneIndexes.size(); a < N; a++) {
+                    chatAdapter.notifyItemChanged(silentTombstoneIndexes.get(a));
                 }
                 if (!isThreadChat() || messages.size() <= 3) {
                     removeUnreadPlane(false);
@@ -42254,6 +42332,11 @@ public class ChatActivity extends BaseFragment implements
 
         @Override
         public void didLongPress(ChatMessageCell cell, float x, float y) {
+            // SilentGram H5: a deleted tombstone has no menu — it must
+            // never be copied, forwarded, replied to or multi-selected.
+            if (cell != null && cell.getMessageObject() != null && cell.getMessageObject().deleted) {
+                return;
+            }
             createMenu(cell, false, false, x, y, false);
             startMultiselect(chatListView.getChildAdapterPosition(cell));
         }

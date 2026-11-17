@@ -13,12 +13,14 @@ import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SilentAutoDownload;
 import org.telegram.messenger.SilentMessageHistory;
+import org.telegram.messenger.UserObject;
+import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.Theme;
-import org.telegram.ui.Cells.TextCell;
+import org.telegram.ui.Cells.UserCell;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.RecyclerListView;
 
@@ -131,7 +133,9 @@ public class SilentAutoDownloadActivity extends BaseFragment {
 
         @Override
         public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-            TextCell cell = new TextCell(context);
+            // Telegram-native row: channel/user avatar + name on top, the
+            // current rule (Normal / Always / Never) below it.
+            UserCell cell = new UserCell(context, 6, 0, false);
             cell.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
             return new RecyclerListView.Holder(cell);
         }
@@ -142,8 +146,14 @@ public class SilentAutoDownloadActivity extends BaseFragment {
             long did = d.id;
             String name = SilentMessageHistory.getDialogName(currentAccount, did);
             int rule = SilentAutoDownload.getRule(did);
-            TextCell cell = (TextCell) holder.itemView;
-            cell.setTextAndValue(name, ruleLabel(rule), true);
+            TLObject obj = MessagesController.getInstance(currentAccount).getUserOrChat(did);
+            if (obj instanceof TLRPC.User) {
+                name = UserObject.getUserName((TLRPC.User) obj);
+            } else if (obj instanceof TLRPC.Chat) {
+                name = ((TLRPC.Chat) obj).title;
+            }
+            UserCell cell = (UserCell) holder.itemView;
+            cell.setData(obj, null, name, ruleLabel(rule), 0, position != dialogs.size() - 1);
             cell.setOnClickListener(v -> {
                 // Popup with the three rules; the current one is marked
                 // with a check icon. Tapping one applies it.

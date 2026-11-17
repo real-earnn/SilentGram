@@ -32,15 +32,15 @@ import java.util.ArrayList;
 import java.util.HashSet;
 
 /**
- * SilentGram: "Show member in my channels & groups".
+ * SilentGram: "Show Member in My Groups".
  *
- * From any user's chat, see which of YOUR channels/groups (where you are
- * creator or admin) this person is a member of — two tabs (Groups /
- * Channels). Tap one chat for Ban / Mute / Remove, or select several and
- * apply the action to all of them at once.
+ * From any user's chat, see which of YOUR groups (where you are creator
+ * or admin) this person is a member of. Tap one group for Ban / Mute /
+ * Remove, or select several and apply the action to all of them at once.
+ * Channels are intentionally NOT listed here (H7).
  *
  * Membership comes from Telegram's own common-chats list
- * (messages.getCommonChats), filtered to chats where you can manage members.
+ * (messages.getCommonChats), filtered to groups where you can manage members.
  */
 public class SilentMemberChatsActivity extends BaseFragment implements NotificationCenter.NotificationCenterDelegate {
 
@@ -48,15 +48,11 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
     private final String userName;
     private MessagesController.CommonChatsList commonChats;
     private final ArrayList<TLRPC.Chat> groups = new ArrayList<>();
-    private final ArrayList<TLRPC.Chat> channels = new ArrayList<>();
     private final HashSet<Long> selected = new HashSet<>();
-    private boolean showChannels = false;
     private boolean selectionMode = false;
 
     private RecyclerListView listView;
     private ListAdapter adapter;
-    private TextView groupsTab;
-    private TextView channelsTab;
     private LinearLayout bottomBar;
     private TextView emptyView;
 
@@ -84,19 +80,6 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
         LinearLayout layout = new LinearLayout(context);
         layout.setOrientation(LinearLayout.VERTICAL);
         frameLayout.addView(layout, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, LayoutHelper.MATCH_PARENT));
-
-        // Tabs: Groups | Channels.
-        LinearLayout tabs = new LinearLayout(context);
-        tabs.setOrientation(LinearLayout.HORIZONTAL);
-        tabs.setPadding(AndroidUtilities.dp(16), AndroidUtilities.dp(12), AndroidUtilities.dp(16), AndroidUtilities.dp(4));
-        layout.addView(tabs, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
-
-        groupsTab = makeTab(context, LocaleController.getString(R.string.SilentMemberChatsGroups), true);
-        channelsTab = makeTab(context, LocaleController.getString(R.string.SilentMemberChatsChannels), false);
-        groupsTab.setOnClickListener(v -> setTab(false));
-        channelsTab.setOnClickListener(v -> setTab(true));
-        tabs.addView(groupsTab, LayoutHelper.createLinear(0, LayoutHelper.WRAP_CONTENT, 1f));
-        tabs.addView(channelsTab, LayoutHelper.createLinear(0, LayoutHelper.WRAP_CONTENT, 1f));
 
         listView = new RecyclerListView(context);
         listView.setLayoutManager(new LinearLayoutManager(context));
@@ -130,50 +113,17 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
             }
             rebuildLists();
             // getCommonChats pages (first 15, then 30 per page) — keep
-            // loading until every page is in, so channels on later pages
+            // loading until every page is in, so groups on later pages
             // show up too and not just the first page's groups.
             if (!commonChats.endReached) {
                 commonChats.load();
             }
         }
-        updateTabs();
         return fragmentView;
-    }
-
-    private TextView makeTab(Context context, String text, boolean active) {
-        TextView tab = new TextView(context);
-        tab.setText(text);
-        tab.setTextSize(15);
-        tab.setGravity(Gravity.CENTER);
-        tab.setPadding(0, AndroidUtilities.dp(10), 0, AndroidUtilities.dp(10));
-        updateTabStyle(tab, active);
-        return tab;
-    }
-
-    private void updateTabStyle(TextView tab, boolean active) {
-        tab.setTextColor(active ? 0xFFFFFFFF : Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
-        tab.setBackground(Theme.createRoundRectDrawable(AndroidUtilities.dp(20), active ? 0xFF6D28D9 : Theme.getColor(Theme.key_windowBackgroundGray)));
-    }
-
-    private void setTab(boolean channels) {
-        showChannels = channels;
-        selectionMode = false;
-        selected.clear();
-        updateTabs();
-        if (adapter != null) {
-            adapter.notifyDataSetChanged();
-        }
-        updateBottomBar();
-    }
-
-    private void updateTabs() {
-        updateTabStyle(groupsTab, !showChannels);
-        updateTabStyle(channelsTab, showChannels);
     }
 
     private void rebuildLists() {
         groups.clear();
-        channels.clear();
         if (commonChats == null) {
             return;
         }
@@ -192,17 +142,16 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
             if (chat.deactivated) {
                 continue;
             }
+            // Groups only (H7): broadcast channels are never listed here.
+            // Megagroups and basic groups both count as groups.
+            if (ChatObject.isChannelAndNotMegaGroup(chat)) {
+                continue;
+            }
             // Only chats where I am creator or admin (so I can manage members).
             if (!chat.creator && chat.admin_rights == null) {
                 continue;
             }
-            // Broadcast channel = isChannel && !megagroup; anything else
-            // (megagroup / basic group) is a group.
-            if (ChatObject.isChannelAndNotMegaGroup(chat)) {
-                channels.add(chat);
-            } else {
-                groups.add(chat);
-            }
+            groups.add(chat);
         }
         updateEmpty();
     }
@@ -211,7 +160,7 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
         if (emptyView == null) {
             return;
         }
-        boolean empty = (showChannels ? channels : groups).isEmpty();
+        boolean empty = groups.isEmpty();
         emptyView.setVisibility(empty ? View.VISIBLE : View.GONE);
         if (listView != null) {
             listView.setVisibility(empty ? View.GONE : View.VISIBLE);
@@ -246,7 +195,7 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
             return;
         }
         ArrayList<TLRPC.Chat> targets = new ArrayList<>();
-        for (TLRPC.Chat c : showChannels ? channels : groups) {
+        for (TLRPC.Chat c : groups) {
             if (selected.contains(-c.id)) {
                 targets.add(c);
             }
@@ -374,7 +323,7 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
 
         @Override
         public int getItemCount() {
-            return (showChannels ? channels : groups).size();
+            return groups.size();
         }
 
         @Override
@@ -393,9 +342,9 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
 
         @Override
         public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
-            TLRPC.Chat chat = (showChannels ? channels : groups).get(position);
+            TLRPC.Chat chat = groups.get(position);
             UserCell cell = (UserCell) holder.itemView;
-            cell.setData(chat, null, chat.title, "", 0, position != (showChannels ? channels : groups).size() - 1);
+            cell.setData(chat, null, chat.title, "", 0, position != groups.size() - 1);
             cell.setChecked(selected.contains(-chat.id), false);
             cell.setOnClickListener(v -> {
                 if (selectionMode) {

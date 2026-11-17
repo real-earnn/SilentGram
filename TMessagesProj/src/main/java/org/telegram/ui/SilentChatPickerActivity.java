@@ -111,7 +111,7 @@ public class SilentChatPickerActivity extends BaseFragment {
                 if (share) {
                     SilentQuickActions.shareChat(target, currentAccount, chat, dialogId);
                 } else {
-                    SilentQuickActions.openAdminScreen(target, currentAccount, chat, targetUserId);
+                    SilentQuickActions.openAdminScreen(target, currentAccount, chat, targetUserId, dialogId);
                 }
             });
         }

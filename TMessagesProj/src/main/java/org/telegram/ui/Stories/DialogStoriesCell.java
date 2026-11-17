@@ -74,6 +74,7 @@ import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.SimpleTextView;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.ActionBar.ThemeBind;
+import org.telegram.ui.DialogsActivity;
 import org.telegram.ui.Components.AnimatedEmojiDrawable;
 import org.telegram.ui.Components.AnimatedFloat;
 import org.telegram.ui.Components.AnimatedTextView;
@@ -168,6 +169,10 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
     private float collapsedProgress2;
     BaseFragment fragment;
     private CharSequence currentTitle;
+    // SilentGram H1/H3: "My Accounts" strip mode — the strip shows one
+    // circle per activated account instead of stories. Set from
+    // DialogsActivity; see setSilentAccountsMode.
+    public boolean silentAccountsMode;
     private boolean hasOverlayText;
     private int overlayTextId;
     private SpannableStringBuilder uploadingString;
@@ -310,11 +315,19 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
         recyclerListView.setLayoutManager(layoutManager = new LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false));
         RecyclerListView.OnItemClickListener itemClickListener = (view, position) -> {
             StoryCell cell = (StoryCell) view;
+            if (silentAccountsMode) {
+                // SilentGram H3: tapping an account circle switches to that
+                // account — it must NEVER open the camera / story recorder.
+                if (cell.silentAccount >= 0 && fragment instanceof DialogsActivity) {
+                    ((DialogsActivity) fragment).switchToSilentAccount(cell.silentAccount);
+                }
+                return;
+            }
             openStoryForCell(cell, false);
         };
         recyclerListView.setOnItemClickListener(itemClickListener);
         recyclerListView.setOnItemLongClickListener((view, position) -> {
-            if (collapsedProgress == 0 && overscrollProgress == 0) {
+            if (!silentAccountsMode && collapsedProgress == 0 && overscrollProgress == 0) {
                 onUserLongPressed(view, ((StoryCell) view).dialogId);
             }
             return false;
@@ -456,6 +469,17 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
         this.menuItemsOffset = menuItemsOffset;
     }
 
+    // SilentGram H3: switch the strip between stories ("My Status" mode)
+    // and account circles ("My Accounts" mode). Rebuilds the strip items;
+    // force=true so the rebuild also runs while the cell is mid-transition.
+    public void setSilentAccountsMode(boolean accountsMode) {
+        if (silentAccountsMode == accountsMode) {
+            return;
+        }
+        silentAccountsMode = accountsMode;
+        updateItems(true, true);
+    }
+
     public void openStoryForCell(StoryCell cell) {
         openStoryForCell(cell, false);
     }
@@ -559,6 +583,10 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
     }
 
     private void checkLoadMore() {
+        // SilentGram H3: account circles are a fixed list — nothing to page.
+        if (silentAccountsMode) {
+            return;
+        }
         if (layoutManager.findLastVisibleItemPosition() + 10 > items.size() || isReadAtPosition(layoutManager.findLastVisibleItemPosition() + 9)) {
             boolean hidden = type == TYPE_ARCHIVE;
             storiesController.loadNextStories(hidden);
@@ -590,27 +618,63 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
         oldMiniItems.clear();
         oldMiniItems.addAll(miniItems);
         items.clear();
-        if (type != TYPE_ARCHIVE) {
-            items.add(new Item(UserConfig.getInstance(currentAccount).getClientUserId()));
-        }
+        if (silentAccountsMode) {
+            // SilentGram H3: "My Accounts" strip mode — one circle per
+            // activated account, the ACTIVE account first, then the others
+            // by login time (same order as the account selector popup).
+            ArrayList<Integer> accounts = new ArrayList<>();
+            for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
+                if (a != currentAccount && UserConfig.getInstance(a).isClientActivated()) {
+                    accounts.add(a);
+                }
+            }
+            Collections.sort(accounts, (o1, o2) -> {
+                long l1 = UserConfig.getInstance(o1).loginTime;
+                long l2 = UserConfig.getInstance(o2).loginTime;
+                if (l1 > l2) {
+                    return 1;
+                } else if (l1 < l2) {
+                    return -1;
+                }
+                return 0;
+            });
+            long selfId = UserConfig.getInstance(currentAccount).getClientUserId();
+            if (selfId != 0) {
+                items.add(new Item(selfId, currentAccount));
+            }
+            for (int acc : accounts) {
+                long uid = UserConfig.getInstance(acc).getClientUserId();
+                if (uid != 0) {
+                    items.add(new Item(uid, acc));
+                }
+            }
+        } else {
+            if (type != TYPE_ARCHIVE) {
+                items.add(new Item(UserConfig.getInstance(currentAccount).getClientUserId()));
+            }
 
-        ArrayList<TL_stories.PeerStories> allStories = type == TYPE_ARCHIVE ? storiesController.getHiddenList() : storiesController.getDialogListStories();
-        for (int i = 0; i < allStories.size(); i++) {
-            long dialogId = DialogObject.getPeerDialogId(allStories.get(i).peer);
-            if (dialogId != UserConfig.getInstance(currentAccount).getClientUserId()) {
-                items.add(new Item(dialogId));
+            ArrayList<TL_stories.PeerStories> allStories = type == TYPE_ARCHIVE ? storiesController.getHiddenList() : storiesController.getDialogListStories();
+            for (int i = 0; i < allStories.size(); i++) {
+                long dialogId = DialogObject.getPeerDialogId(allStories.get(i).peer);
+                if (dialogId != UserConfig.getInstance(currentAccount).getClientUserId()) {
+                    items.add(new Item(dialogId));
+                }
             }
         }
         int size = items.size();
-        if (!storiesController.hasSelfStories()) {
+        if (!silentAccountsMode && !storiesController.hasSelfStories()) {
             size--;
         }
         int totalCount;
         boolean hidden = type == TYPE_ARCHIVE;
-        totalCount = Math.max(1, Math.max(storiesController.getTotalStoriesCount(hidden), size));
+        totalCount = silentAccountsMode ? items.size() : Math.max(1, Math.max(storiesController.getTotalStoriesCount(hidden), size));
 
         currentTitle = null;
-        if (storiesController.hasOnlySelfStories()) {
+        if (silentAccountsMode) {
+            // SilentGram H1/H3: the collapsed header always reads
+            // "SilentGram" — never the "S" logo, never "Telegram".
+            currentTitle = getString(R.string.AppName);
+        } else if (storiesController.hasOnlySelfStories()) {
             if (storiesController.hasUploadingStories(UserConfig.getInstance(currentAccount).getClientUserId())) {
                 String str = LocaleController.getString(R.string.UploadingStory);
                 int index = str.indexOf("…");
@@ -627,11 +691,16 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
                     currentTitle = str;
                 }
             } else {
-                currentTitle = menuItemsOffset < dp(50) ? null :
+                // SilentGram H1: on the main list (menuItemsOffset 16.66dp)
+                // the old code left the title empty, so the collapsed header
+                // showed the telegramLogoView image instead ("Telegram"
+                // wordmark, then the "S" monogram) — the header now always
+                // reads "SilentGram" as text.
+                currentTitle = menuItemsOffset < dp(50) ? getString(R.string.AppName) :
                     LocaleController.getString(R.string.MyStory);
             }
         } else {
-            currentTitle = menuItemsOffset < dp(50) ? null :
+            currentTitle = menuItemsOffset < dp(50) ? getString(R.string.AppName) :
                 LocaleController.formatPluralString("Stories", totalCount);
         }
 
@@ -643,7 +712,9 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
 
         miniItems.clear();
         for (int i = 0; i < items.size(); i++) {
-            if (items.get(i).dialogId == UserConfig.getInstance(currentAccount).clientUserId && !shouldDrawSelfInMini()) {
+            // SilentGram H3: in accounts mode the active account is the
+            // first mini cell too — never skipped.
+            if (!silentAccountsMode && items.get(i).dialogId == UserConfig.getInstance(currentAccount).clientUserId && !shouldDrawSelfInMini()) {
                 continue;
             } else {
                 miniItems.add(items.get(i));
@@ -1362,6 +1433,10 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
     }
 
     public boolean openOverscrollSelectedStory() {
+        // SilentGram H3: account circles have no story to open on overscroll.
+        if (silentAccountsMode) {
+            return false;
+        }
         if (expandOvershootAnimator != null && expandOvershootAnimator.isRunning()) {
             return false;
         }
@@ -1402,9 +1477,9 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
             StoryCell cell = (StoryCell) holder.itemView;
             cell.position = position;
             if (mini) {
-                cell.setDialogId(miniItems.get(position).dialogId);
+                cell.setDialogId(miniItems.get(position).dialogId, miniItems.get(position).account);
             } else {
-                cell.setDialogId(items.get(position).dialogId);
+                cell.setDialogId(items.get(position).dialogId, items.get(position).account);
             }
         }
 
@@ -1423,10 +1498,18 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
     private class Item extends AdapterWithDiffUtils.Item {
 
         final long dialogId;
+        // SilentGram H3: which account this circle stands for in
+        // "My Accounts" strip mode (-1 = a story cell, not an account).
+        final int account;
 
         public Item(long dialogId) {
+            this(dialogId, -1);
+        }
+
+        public Item(long dialogId, int account) {
             super(0, false);
             this.dialogId = dialogId;
+            this.account = account;
         }
 
         @Override
@@ -1481,6 +1564,9 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
         SimpleTextView textView;
         long dialogId;
         boolean isSelf;
+        // SilentGram H3: in "My Accounts" strip mode, which account this
+        // circle stands for (-1 = a story cell, not an account).
+        public int silentAccount = -1;
         boolean isFail;
         boolean crossfadeToDialog;
         long crossfadeToDialogId;
@@ -1536,6 +1622,11 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
         }
 
         public void setDialogId(long dialogId) {
+            setDialogId(dialogId, -1);
+        }
+
+        public void setDialogId(long dialogId, int account) {
+            silentAccount = account;
             boolean animated = this.dialogId == dialogId;
             if (!animated) {
                 if (cancellable != null) {
@@ -1547,10 +1638,23 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
             this.dialogId = dialogId;
 
             isSelf = dialogId == UserConfig.getInstance(currentAccount).getClientUserId();
+            if (silentAccountsMode) {
+                // SilentGram H3: account circles are never the "My Story"
+                // cell — no "+" badge, no "My Story" label, and tapping one
+                // switches account instead of opening the camera.
+                isSelf = false;
+            }
             isFail = storiesController.isLastUploadingFailed(dialogId);
             TLObject object;
             if (dialogId > 0) {
-                object = user = MessagesController.getInstance(currentAccount).getUser(dialogId);
+                if (silentAccountsMode && silentAccount >= 0) {
+                    // SilentGram H3: another account's own user is not in
+                    // this account's MessagesController — read it from that
+                    // account's UserConfig instead.
+                    object = user = UserConfig.getInstance(silentAccount).getCurrentUser();
+                } else {
+                    object = user = MessagesController.getInstance(currentAccount).getUser(dialogId);
+                }
                 chat = null;
             } else {
                 object = chat = MessagesController.getInstance(currentAccount).getChat(-dialogId);
@@ -2001,6 +2105,17 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
                     TLObject object;
                     if (dialogId > 0) {
                         object = user = MessagesController.getInstance(currentAccount).getUser(dialogId);
+                        if (object == null && DialogStoriesCell.this.silentAccountsMode) {
+                            // SilentGram H3: crossfading to an account circle —
+                            // resolve the user from that account, as in
+                            // setDialogId above.
+                            for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) {
+                                if (UserConfig.getInstance(a).isClientActivated() && UserConfig.getInstance(a).getClientUserId() == dialogId) {
+                                    object = user = UserConfig.getInstance(a).getCurrentUser();
+                                    break;
+                                }
+                            }
+                        }
                         chat = null;
                     } else {
                         object = chat = MessagesController.getInstance(currentAccount).getChat(-dialogId);
@@ -2224,7 +2339,10 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
     private void checkUi_titleVisibility() {
         final float progress = MathUtils.clamp(Math.min(collapsedProgress, collapsedProgress2), 0, 1);
         final float titleVisibility = animatorHasTitleText.getFloatValue();
-        final float logoVisibility = 1f - titleVisibility;
+        // SilentGram H1/H2/H18: the collapsed header is ALWAYS the
+        // "SilentGram" text (titleView). The old telegramLogoView image
+        // ("Telegram" wordmark, then the "S" monogram) must never show.
+        final float logoVisibility = 0f;
         final float titleAlpha = titleVisibility * progress;
         final float logoAlpha = logoVisibility * progress;
 

@@ -17,11 +17,12 @@ import org.telegram.messenger.SilentMessageHistory;
 import org.telegram.messenger.UserConfig;
 import org.telegram.SQLite.SQLiteCursor;
 import org.telegram.tgnet.NativeByteBuffer;
+import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.Theme;
-import org.telegram.ui.Cells.TextCell;
+import org.telegram.ui.Cells.UserCell;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.RecyclerListView;
 
@@ -165,7 +166,9 @@ public class SilentScheduledActivity extends BaseFragment {
 
         @Override
         public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-            TextCell cell = new TextCell(context);
+            // Telegram-native row: channel/user avatar + name on top, send
+            // time + message preview below it.
+            UserCell cell = new UserCell(context, 6, 0, false);
             cell.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
             return new RecyclerListView.Holder(cell);
         }
@@ -173,11 +176,12 @@ public class SilentScheduledActivity extends BaseFragment {
         @Override
         public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
             SchedRow row = rows.get(position);
-            TextCell cell = (TextCell) holder.itemView;
+            UserCell cell = (UserCell) holder.itemView;
             String time = LocaleController.getInstance().getFormatterDayMonth().format(new java.util.Date(row.date * 1000))
                     + " " + LocaleController.getInstance().getFormatterDay().format(new java.util.Date(row.date * 1000));
             String preview = row.text == null ? "" : (row.text.length() > 70 ? row.text.substring(0, 70) + "…" : row.text);
-            cell.setTextAndValue(row.chatName + " • " + time, preview, true);
+            TLObject obj = MessagesController.getInstance(currentAccount).getUserOrChat(row.dialogId);
+            cell.setData(obj, null, row.chatName, time + " • " + preview, 0, position != rows.size() - 1);
             cell.setOnClickListener(v -> {
                 android.os.Bundle args = new android.os.Bundle();
                 if (row.dialogId > 0) {

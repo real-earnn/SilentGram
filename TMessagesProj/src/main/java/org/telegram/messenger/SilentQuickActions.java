@@ -25,7 +25,8 @@ import java.util.ArrayList;
  *
  * The menu is Telegram's own bottom-sheet menu (BottomSheet.Builder with
  * icon rows), opened from the floating button on the right edge of a
- * 1-1 chat, or from the header arrow in MY channel/group chats.
+ * 1-1 chat, or — in MY channel/group chats — from the same floating
+ * button, which opens the Administration menu instead.
  */
 public class SilentQuickActions {
 
@@ -52,8 +53,8 @@ public class SilentQuickActions {
         int[] icons = new int[]{
                 R.drawable.msg_bot,
                 R.drawable.msg_bots,
-                R.drawable.msg_forward,
-                R.drawable.msg_forward,
+                R.drawable.msg_link,
+                R.drawable.msg_link,
                 R.drawable.msg_expand,
                 R.drawable.msg_delete_auto,
                 R.drawable.msg_saved,
@@ -120,7 +121,7 @@ public class SilentQuickActions {
         pickChat(fragment, account, false, true, targetUserId, dialogId);
     }
 
-    /** "Show Member in My Channels & Groups" — which of MY chats is this person in? */
+    /** "Show Member in My Groups" — which of MY groups is this person in? */
     public static void showMemberChats(BaseFragment fragment, long targetUserId) {
         if (fragment == null) {
             return;
@@ -296,46 +297,174 @@ public class SilentQuickActions {
         fragment.presentFragment(new org.telegram.ui.SilentChatPickerActivity(fragment, mine, title, share, targetUserId, dialogId));
     }
 
-    /** Open the permissions screen to make targetUserId an admin of chat. */
-    public static void openAdminScreen(BaseFragment fragment, int account, TLRPC.Chat chat, long targetUserId) {
-        MessagesController mc = MessagesController.getInstance(account);
-        // NOTE: getChatFull / loadFullChat / ChatRightsEditActivity all take
-        // the POSITIVE chat id (fullChats is keyed by it; every upstream
-        // caller passes chat.id or -dialogId). Passing -chat.id here used
-        // to make getChatFull always return null, so the rights screen
-        // never opened.
-        TLRPC.ChatFull full = mc.getChatFull(chat.id);
-        if (full == null) {
-            // Full info not cached yet — load it, then the user taps again.
-            mc.loadFullChat(chat.id, 0, true);
-            android.widget.Toast.makeText(fragment.getParentActivity(), LocaleController.getString(R.string.SilentQuickLoading), android.widget.Toast.LENGTH_SHORT).show();
+    /**
+     * Open the permissions screen to make targetUserId an admin of chat.
+     *
+     * This is exactly the page Telegram shows in the manual flow (user
+     * already chosen + channel/group already chosen): the PERMISSIONS LIST
+     * (ChatRightsEditActivity) directly — never a "Loading channel info,
+     * tap again" toast (H8). The sequence is:
+     *   1. Check whether the user is a member of the chat. For channels
+     *      and megagroups that is one server call, channels.getParticipant
+     *      (TL_channels_getParticipant, TLRPC.java:57671); for basic groups
+     *      it is the full chat's participant list (ChatFull.participants,
+     *      TLRPC.java:11024), loaded first via loadFullChat if needed and
+     *      continued automatically when chatInfoDidLoad arrives.
+     *   2. Member -> open the rights screen. Not a member -> ask whether
+     *      to share the channel/group link so they can join first.
+     *
+     * All ids here are POSITIVE chat ids: getChatFull / loadFullChat /
+     * ChatRightsEditActivity all take chat.id (see the note that used to
+     * live on the old -chat.id bug).
+     */
+    public static void openAdminScreen(BaseFragment fragment, int account, TLRPC.Chat chat, long targetUserId, long dialogId) {
+        openAdminScreen(fragment, account, chat, targetUserId, dialogId, false);
+    }
+
+    private static void openAdminScreen(BaseFragment fragment, int account, TLRPC.Chat chat, long targetUserId, long dialogId, boolean fullLoadAttempted) {
+        if (fragment == null || fragment.getParentActivity() == null || chat == null) {
             return;
         }
-        TLRPC.TL_chatAdminRights adminRights = new TLRPC.TL_chatAdminRights();
-        adminRights.change_info = true;
-        adminRights.post_messages = true;
-        adminRights.edit_messages = true;
-        adminRights.delete_messages = true;
-        adminRights.ban_users = true;
-        adminRights.invite_users = true;
-        adminRights.pin_messages = true;
-        adminRights.add_admins = true;
-        adminRights.anonymous = false;
-        adminRights.manage_call = true;
-        adminRights.other = true;
-        adminRights.manage_topics = true;
-        adminRights.post_stories = true;
-        adminRights.edit_stories = true;
-        adminRights.delete_stories = true;
-        // default_banned_rights lives on the Chat itself (base TLRPC.Chat),
-        // not on ChatFull — ChatObject reads it the same way.
-        TLRPC.TL_chatBannedRights defaultBanned = new TLRPC.TL_chatBannedRights();
-        if (chat.default_banned_rights != null) {
-            defaultBanned = chat.default_banned_rights;
+        MessagesController mc = MessagesController.getInstance(account);
+        if (ChatObject.isChannel(chat)) {
+            // Channels and megagroups: ask the server directly whether the
+            // user is a participant. No full-chat info is needed for this.
+            TLRPC.TL_channels_getParticipant req = new TLRPC.TL_channels_getParticipant();
+            req.channel = mc.getInputChannel(chat.id);
+            req.participant = mc.getInputPeer(targetUserId);
+            ConnectionsManager.getInstance(account).sendRequest(req, (res, err) -> AndroidUtilities.runOnUIThread(() -> {
+                if (fragment.getParentActivity() == null) {
+                    return;
+                }
+                if (res instanceof TLRPC.TL_channels_channelParticipant) {
+                    TLRPC.ChannelParticipant participant = ((TLRPC.TL_channels_channelParticipant) res).participant;
+                    openRightsScreen(fragment, account, chat, targetUserId, participant != null ? participant.admin_rights : null);
+                } else if (err != null && "USER_NOT_PARTICIPANT".equals(err.text)) {
+                    showNotMemberPrompt(fragment, account, chat, targetUserId, dialogId);
+                } else {
+                    // Any other outcome (e.g. the user has no access hash,
+                    // so the server cannot resolve them): do not block —
+                    // open the rights screen and let Telegram itself
+                    // report the problem.
+                    openRightsScreen(fragment, account, chat, targetUserId, null);
+                }
+            }));
+            return;
+        }
+        // Basic group: membership lives in the full chat's participant list.
+        TLRPC.ChatFull full = mc.getChatFull(chat.id);
+        if (full != null && full.participants != null) {
+            if (isBasicGroupMember(full, targetUserId)) {
+                openRightsScreen(fragment, account, chat, targetUserId, null);
+            } else {
+                showNotMemberPrompt(fragment, account, chat, targetUserId, dialogId);
+            }
+            return;
+        }
+        if (!fullLoadAttempted) {
+            // Full info not cached yet — register the waiter FIRST, then
+            // load, so the notification cannot slip past us. The flow
+            // continues automatically when chatInfoDidLoad arrives.
+            NotificationCenter.getInstance(account).addObserver(new FullChatWaiter(account, fragment, chat, targetUserId, dialogId), NotificationCenter.chatInfoDidLoad);
+            mc.loadFullChat(chat.id, 0, true);
+            return;
+        }
+        // The load finished (or failed) without usable participants: open
+        // the rights screen anyway — ChatRightsEditActivity tolerates a
+        // null ChatFull and picks it up via its own chatInfoDidLoad
+        // observer (ChatRightsEditActivity:1283,1307).
+        openRightsScreen(fragment, account, chat, targetUserId, null);
+    }
+
+    private static boolean isBasicGroupMember(TLRPC.ChatFull full, long userId) {
+        if (full.participants == null || full.participants.participants == null) {
+            return false;
+        }
+        for (TLRPC.ChatParticipant p : full.participants.participants) {
+            if (p != null && p.user_id == userId) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** One-shot waiter: when the full chat we asked for arrives, continue the admin flow. */
+    private static class FullChatWaiter implements NotificationCenter.NotificationCenterDelegate {
+        private final int account;
+        private final java.lang.ref.WeakReference<BaseFragment> fragmentRef;
+        private final TLRPC.Chat chat;
+        private final long targetUserId;
+        private final long dialogId;
+
+        FullChatWaiter(int account, BaseFragment fragment, TLRPC.Chat chat, long targetUserId, long dialogId) {
+            this.account = account;
+            this.fragmentRef = new java.lang.ref.WeakReference<>(fragment);
+            this.chat = chat;
+            this.targetUserId = targetUserId;
+            this.dialogId = dialogId;
+        }
+
+        @Override
+        public void didReceivedNotification(int id, int account, Object... args) {
+            if (id != NotificationCenter.chatInfoDidLoad || args == null || args.length == 0 || !(args[0] instanceof TLRPC.ChatFull)) {
+                return;
+            }
+            TLRPC.ChatFull full = (TLRPC.ChatFull) args[0];
+            if (full.id != chat.id) {
+                return;
+            }
+            NotificationCenter.getInstance(this.account).removeObserver(this, NotificationCenter.chatInfoDidLoad);
+            BaseFragment fragment = fragmentRef.get();
+            if (fragment == null || fragment.getParentActivity() == null) {
+                return;
+            }
+            AndroidUtilities.runOnUIThread(() -> openAdminScreen(fragment, this.account, chat, targetUserId, dialogId, true));
+        }
+    }
+
+    /** The user is not a member of this chat — ask whether to share its link so they can join first. */
+    private static void showNotMemberPrompt(BaseFragment fragment, int account, TLRPC.Chat chat, long targetUserId, long dialogId) {
+        if (fragment == null || fragment.getParentActivity() == null) {
+            return;
+        }
+        TLRPC.User user = MessagesController.getInstance(account).getUser(targetUserId);
+        String userName = user != null ? UserObject.getUserName(user) : "";
+        AlertDialog.Builder builder = new AlertDialog.Builder(fragment.getParentActivity());
+        builder.setTitle(chat.title);
+        builder.setMessage(LocaleController.formatString(R.string.SilentQuickNotMember, userName, chat.title));
+        builder.setPositiveButton(LocaleController.getString(R.string.SilentQuickShareLink), (d, w) -> shareChat(fragment, account, chat, dialogId));
+        builder.setNegativeButton(LocaleController.getString(R.string.Cancel), null);
+        builder.show();
+    }
+
+    /**
+     * Present Telegram's own permissions page (ChatRightsEditActivity) for
+     * targetUserId in this chat — the exact page the manual flow shows.
+     *
+     * Mirrors the upstream promote-new-admin call (ChatUsersActivity:1055):
+     * NO preset admin rights (existingAdminRights is null for a plain
+     * member, so the screen derives the initial toggles from MY admin
+     * rights) — the old code pre-ticked every right, which the manual flow
+     * never does. An already-admin user keeps their current rights
+     * (existingAdminRights passed through, addingNew=false). The chat's own
+     * default banned rights are passed as the default (Chat.default_banned_rights,
+     * as ProfileActivity:7366 does). No delegate is needed: a null delegate
+     * is explicitly handled (ChatRightsEditActivity:1587 — the fragment
+     * finishes itself after the rights are set).
+     */
+    private static void openRightsScreen(BaseFragment fragment, int account, TLRPC.Chat chat, long targetUserId, TLRPC.TL_chatAdminRights existingAdminRights) {
+        if (fragment == null || fragment.getParentActivity() == null) {
+            return;
+        }
+        MessagesController mc = MessagesController.getInstance(account);
+        // Make sure the rights screen's own chatInfoDidLoad observer gets
+        // the full info even when it was not cached yet.
+        if (mc.getChatFull(chat.id) == null) {
+            mc.loadFullChat(chat.id, 0, true);
         }
         ChatRightsEditActivity rightsFragment = new ChatRightsEditActivity(
-                targetUserId, chat.id, adminRights, defaultBanned, null, "",
-                ChatRightsEditActivity.TYPE_ADMIN, true, true, null);
+                targetUserId, chat.id, existingAdminRights, chat.default_banned_rights, null, "",
+                ChatRightsEditActivity.TYPE_ADMIN, true, existingAdminRights == null, null);
         fragment.presentFragment(rightsFragment);
     }
 

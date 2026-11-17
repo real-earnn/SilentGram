@@ -2086,7 +2086,7 @@ public class ChatActivityEnterView extends FrameLayout implements
             cameraDrawable = getResources().getDrawable(R.drawable.input_video_pressed).mutate();
             ThemeBind.drawableColorFilter(this, cameraDrawable, Theme.key_chat_messagePanelVoicePressed, ChatActivityEnterView.this.resourcesProvider, PorterDuff.Mode.MULTIPLY);
 
-            sendDrawable = getResources().getDrawable(R.drawable.icon_plane_54).mutate();
+            sendDrawable = getResources().getDrawable(R.drawable.icon_plane_crescent_54).mutate();
             ThemeBind.drawableColorFilter(this, sendDrawable, Theme.key_chat_messagePanelVoicePressed, ChatActivityEnterView.this.resourcesProvider, PorterDuff.Mode.MULTIPLY);
 
             micOutline = getResources().getDrawable(R.drawable.input_mic).mutate();
@@ -3538,10 +3538,11 @@ public class ChatActivityEnterView extends FrameLayout implements
             }
         });
 
-        // SilentGram G22: the send button shows OUR logo — the white
-        // SilentGram "S" monogram (icon_plane_24, 24dp, same intrinsic size
-        // as the plane it replaces; SendButton draws at intrinsic size).
-        sendButton = new SendButton(context, isInScheduleMode() ? R.drawable.input_schedule : R.drawable.icon_plane_24, resourcesProvider, true) {
+        // SilentGram H17: the send button shows OUR logo — the paper plane
+        // with the crescent moon from the splash screen
+        // (icon_plane_crescent_24, 24dp, same intrinsic size as the plane it
+        // replaces; SendButton draws at intrinsic size). NOT the "S".
+        sendButton = new SendButton(context, isInScheduleMode() ? R.drawable.input_schedule : R.drawable.icon_plane_crescent_24, resourcesProvider, true) {
             @Override
             public boolean isInScheduleMode() {
                 return ChatActivityEnterView.this.isInScheduleMode();

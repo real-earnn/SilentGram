@@ -12,11 +12,16 @@ import org.telegram.messenger.DownloadController;
 import org.telegram.messenger.FileLoader;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MessageObject;
+import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.R;
+import org.telegram.messenger.SilentMessageHistory;
+import org.telegram.messenger.UserObject;
+import org.telegram.tgnet.TLObject;
+import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.Theme;
-import org.telegram.ui.Cells.TextCell;
+import org.telegram.ui.Cells.UserCell;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.RecyclerListView;
 
@@ -123,7 +128,9 @@ public class SilentDownloadManagerActivity extends BaseFragment {
 
         @Override
         public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-            TextCell cell = new TextCell(context);
+            // Telegram-native row: channel/user avatar + name on top, file
+            // name below — so each download shows which chat it came from.
+            UserCell cell = new UserCell(context, 6, 0, false);
             cell.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
             return new RecyclerListView.Holder(cell);
         }
@@ -131,12 +138,24 @@ public class SilentDownloadManagerActivity extends BaseFragment {
         @Override
         public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
             MessageObject msg = files.get(position);
-            TextCell cell = (TextCell) holder.itemView;
+            UserCell cell = (UserCell) holder.itemView;
             String name = msg.getFileName();
             if (name == null || name.isEmpty()) {
                 name = LocaleController.getString(R.string.SilentDownloadUnknown);
             }
-            cell.setTextAndValue(name, LocaleController.getString(R.string.SilentBoostDownload), true);
+            long did = msg.getDialogId();
+            TLObject obj = did != 0 ? MessagesController.getInstance(currentAccount).getUserOrChat(did) : null;
+            String chatName;
+            if (obj instanceof TLRPC.User) {
+                chatName = UserObject.getUserName((TLRPC.User) obj);
+            } else if (obj instanceof TLRPC.Chat) {
+                chatName = ((TLRPC.Chat) obj).title;
+            } else if (did != 0) {
+                chatName = SilentMessageHistory.getDialogName(currentAccount, did);
+            } else {
+                chatName = LocaleController.getString(R.string.SilentDownloadUnknown);
+            }
+            cell.setData(obj, null, chatName, name, 0, position != files.size() - 1);
             cell.setOnClickListener(v -> {
                 boostFile(currentAccount, msg);
                 android.widget.Toast.makeText(getParentActivity(), LocaleController.getString(R.string.SilentDownloadBoosted), android.widget.Toast.LENGTH_SHORT).show();

@@ -9,13 +9,16 @@ import android.widget.TextView;
 
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.LocaleController;
+import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SilentNotes;
+import org.telegram.messenger.UserObject;
+import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.Theme;
-import org.telegram.ui.Cells.TextCell;
+import org.telegram.ui.Cells.UserCell;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.RecyclerListView;
 
@@ -114,7 +117,9 @@ public class SilentNotesActivity extends BaseFragment {
 
         @Override
         public RecyclerView.ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
-            TextCell cell = new TextCell(context);
+            // Telegram-native row: the chat's avatar + name on top, reminder
+            // time + note preview below it.
+            UserCell cell = new UserCell(context, 6, 0, false);
             cell.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
             return new RecyclerListView.Holder(cell);
         }
@@ -122,13 +127,18 @@ public class SilentNotesActivity extends BaseFragment {
         @Override
         public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
             SilentNotes.Note n = notes.get(position);
-            TextCell cell = (TextCell) holder.itemView;
+            UserCell cell = (UserCell) holder.itemView;
+            // Notes are stored per person (user id); resolve the user so the
+            // row shows their real avatar. Falls back to the stored name
+            // (UserCell draws a letter avatar when the object is null).
+            TLRPC.User user = MessagesController.getInstance(currentAccount).getUser(n.userId);
+            String name = user != null ? UserObject.getUserName(user) : n.chatName;
             String sub = n.text.length() > 70 ? n.text.substring(0, 70) + "…" : n.text;
             if (n.remindAt > 0) {
                 String when = new SimpleDateFormat("dd MMM, HH:mm", Locale.US).format(new Date(n.remindAt));
-                sub = "⏰ " + when + " — " + sub;
+                sub = when + " • " + sub;
             }
-            cell.setTextAndValue(n.chatName, sub, true);
+            cell.setData(user, null, name, sub, 0, position != notes.size() - 1);
             cell.setOnClickListener(v -> {
                 presentFragment(new SilentNoteEditorActivity(n.userId, n.chatName));
             });
