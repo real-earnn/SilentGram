@@ -65,7 +65,7 @@ public class SilentChatExport {
         if (context == null) {
             return;
         }
-        android.widget.Toast.makeText(context, LocaleController.getString(R.string.SilentExportWorking), android.widget.Toast.LENGTH_SHORT).show();
+        SilentToast.show(context, LocaleController.getString(R.string.SilentExportWorking), android.widget.Toast.LENGTH_SHORT);
         MessagesStorage.getInstance(account).getStorageQueue().postRunnable(() -> {
             ArrayList<ExportMsg> msgs = new ArrayList<>();
             try {
@@ -185,10 +185,10 @@ public class SilentChatExport {
             final File outFile = file;
             AndroidUtilities.runOnUIThread(() -> {
                 if (!done) {
-                    android.widget.Toast.makeText(context, LocaleController.getString(R.string.SilentExportFailed), android.widget.Toast.LENGTH_SHORT).show();
+                    SilentToast.show(context, LocaleController.getString(R.string.SilentExportFailed), android.widget.Toast.LENGTH_SHORT);
                     return;
                 }
-                android.widget.Toast.makeText(context, LocaleController.getString(R.string.SilentExportDone) + " " + fileName, android.widget.Toast.LENGTH_SHORT).show();
+                SilentToast.show(context, LocaleController.getString(R.string.SilentExportDone) + " " + fileName, android.widget.Toast.LENGTH_SHORT);
                 // Offer to share/open the file.
                 try {
                     Intent intent = new Intent(Intent.ACTION_SEND);

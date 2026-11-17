@@ -361,7 +361,11 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
         telegramLogoView.setFocusableInTouchMode(true);
         addView(telegramLogoView, LayoutHelper.createFrame(90, 22));
 
-        statusDrawable = new AnimatedEmojiDrawable.SwapAnimatedEmojiDrawable(null, dp(26));
+        // SilentGram K14: the header status emoji loops continuously — use
+        // the private CACHE_TYPE_SILENTGRAM_HEADER_STATUS bucket (infinite
+        // auto-repeat) instead of CACHE_TYPE_EMOJI_STATUS, which upstream
+        // caps at 2 plays and then freezes.
+        statusDrawable = new AnimatedEmojiDrawable.SwapAnimatedEmojiDrawable(null, dp(26), AnimatedEmojiDrawable.CACHE_TYPE_SILENTGRAM_HEADER_STATUS);
         statusDrawable.center = true;
         statusDrawable.setCallback(this);
 
@@ -1406,12 +1410,8 @@ public class DialogStoriesCell extends FrameLayout implements NotificationCenter
     EllipsizeSpanAnimator ellipsizeSpanAnimator = new EllipsizeSpanAnimator(this);
 
     public void setTitleOverlayText(String titleOverlayText, int textId) {
-        final CharSequence subtitleToSet;
-        if (textId == R.string.ConnectingToProxyWithDots) {
-            subtitleToSet = AndroidUtilities.replaceArrows(getString(R.string.TitleSetupProxy), true, dp(8f / 3f), dp(2));
-        } else {
-            subtitleToSet = null;
-        }
+        // SilentGram: never show the "Setup proxy" subtitle under the connecting header — the proxy must stay invisible.
+        final CharSequence subtitleToSet = null;
         subtitleOverlayContainer.setText(subtitleToSet, true);
 
         boolean hasEllipsizedText = false;

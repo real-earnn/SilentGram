@@ -158,7 +158,7 @@ public class SilentQuickActions {
                     long when = (long) scheduleDate * 1000L;
                     SilentReminders.addReminder(context, dialogId, 0, chatName, chatName, when);
                     String whenText = android.text.format.DateFormat.format("d MMM, HH:mm", when).toString();
-                    android.widget.Toast.makeText(context, whenText, android.widget.Toast.LENGTH_SHORT).show();
+                    SilentToast.show(context, whenText, android.widget.Toast.LENGTH_SHORT);
                 }, null);
     }
 
@@ -176,7 +176,7 @@ public class SilentQuickActions {
         builder.setTitle(LocaleController.getString(R.string.SilentQuickAutoDelete));
         builder.setItems(items, (dialog, which) -> {
             MessagesController.getInstance(account).setDialogHistoryTTL(dialogId, ttls[which]);
-            android.widget.Toast.makeText(context, items[which], android.widget.Toast.LENGTH_SHORT).show();
+            SilentToast.show(context, items[which], android.widget.Toast.LENGTH_SHORT);
         });
         builder.show();
     }
@@ -198,19 +198,47 @@ public class SilentQuickActions {
         }
         boolean isPublic = chat.username != null && !chat.username.isEmpty();
         Context context = fragment.getParentActivity();
-        CharSequence[] items = new CharSequence[]{
-                LocaleController.getString(R.string.SilentAdminList),
-                LocaleController.getString(R.string.SilentMemberList),
-                isPublic ? LocaleController.getString(R.string.SilentCopyPublicLink)
-                        : LocaleController.getString(R.string.SilentCopyPrivateLink),
-                LocaleController.getString(R.string.SilentCreateNewLink)
-        };
+        // K16: the row list is built conditionally, so the click handler
+        // switches on an action code carried alongside each row — never
+        // on the row index, which shifts when a row is hidden.
+        ArrayList<CharSequence> itemList = new ArrayList<>();
+        ArrayList<Integer> actionList = new ArrayList<>();
+        itemList.add(LocaleController.getString(R.string.SilentAdminList));
+        actionList.add(0);
+        itemList.add(LocaleController.getString(R.string.SilentMemberList));
+        actionList.add(1);
+        itemList.add(isPublic ? LocaleController.getString(R.string.SilentCopyPublicLink)
+                : LocaleController.getString(R.string.SilentCopyPrivateLink));
+        actionList.add(2);
+        itemList.add(LocaleController.getString(R.string.SilentCreateNewLink));
+        actionList.add(3);
+        // K16 "Recent Actions": Telegram's admin log
+        // (ChannelAdminLogActivity). It only exists for channels — broadcast
+        // channels and megagroups — and gigagroups; basic groups have no
+        // event log. Same type gate as ChatEditActivity, which only creates
+        // its log row under `isChannel || gigagroup` (ChatEditActivity:1291).
+        // The pill itself already limits this menu to creator/admin
+        // (ChatActivity:7338), so no extra rights gate is needed here.
+        if (ChatObject.isChannel(chat) || chat.gigagroup) {
+            itemList.add(LocaleController.getString(R.string.EventLog));
+            actionList.add(4);
+        }
+        // K16 "Reactions": the screen where the allowed reactions are
+        // chosen. Shown only when the user may change chat info — exactly
+        // the gate ChatEditActivity uses for its own reactions row
+        // (ChatEditActivity:2477: reactionsCell visible only if
+        // ChatObject.canChangeChatInfo).
+        if (ChatObject.canChangeChatInfo(chat)) {
+            itemList.add(LocaleController.getString(R.string.Reactions));
+            actionList.add(5);
+        }
+        CharSequence[] items = itemList.toArray(new CharSequence[0]);
         AlertDialog.Builder builder = new AlertDialog.Builder(context);
         builder.setTitle(LocaleController.getString(R.string.SilentAdministration));
         builder.setItems(items, (dialog, which) -> {
             android.os.Bundle args = new android.os.Bundle();
             args.putLong("chat_id", chatId);
-            switch (which) {
+            switch (actionList.get(which)) {
                 case 0:
                     args.putInt("type", org.telegram.ui.ChatUsersActivity.TYPE_ADMIN);
                     fragment.presentFragment(new org.telegram.ui.ChatUsersActivity(args));
@@ -229,15 +257,118 @@ public class SilentQuickActions {
                 case 3:
                     exportInviteLink(fragment, account, chatId, true);
                     break;
+                case 4:
+                    // Same screen as the "Recent Actions" row in the
+                    // channel/group edit settings (ChatEditActivity:1295).
+                    // (ChatUsersActivity also has a recentActionsRow tap
+                    // at :1062, but its row assignment is commented out
+                    // at :536 in this codebase, so ChatEditActivity is
+                    // the live precedent.)
+                    fragment.presentFragment(new org.telegram.ui.ChannelAdminLogActivity(chat));
+                    break;
+                case 5:
+                    openReactionsScreen(fragment, account, chat);
+                    break;
             }
         });
         builder.show();
     }
 
+    /**
+     * K16 "Reactions": open the screen where the allowed reactions for
+     * this chat are chosen — the same screens the channel/group edit
+     * settings use (ChatEditActivity:1226-1235):
+     *   • broadcast channel -> ChatCustomReactionsEditActivity(chatId, info)
+     *   • group / megagroup -> ChatReactionsEditActivity (Bundle with
+     *     KEY_CHAT_ID) + setInfo(info)
+     *
+     * Both screens need the full chat info (ChatFull): the broadcast
+     * screen refuses to create itself when info is null
+     * (ChatCustomReactionsEditActivity.onFragmentCreate returns false),
+     * and the group screen derives its initial selection from it
+     * (ChatReactionsEditActivity.setInfo). So the info is taken from the
+     * cache when available, otherwise loaded first and the screen is
+     * opened when chatInfoDidLoad arrives — the same waiter pattern
+     * openAdminScreen uses above.
+     */
+    private static void openReactionsScreen(BaseFragment fragment, int account, TLRPC.Chat chat) {
+        openReactionsScreen(fragment, account, chat, false);
+    }
+
+    private static void openReactionsScreen(BaseFragment fragment, int account, TLRPC.Chat chat, boolean fullLoadAttempted) {
+        if (fragment == null || fragment.getParentActivity() == null || chat == null) {
+            return;
+        }
+        MessagesController mc = MessagesController.getInstance(account);
+        TLRPC.ChatFull full = mc.getChatFull(chat.id);
+        if (full != null) {
+            presentReactionsScreen(fragment, chat, full);
+            return;
+        }
+        if (!fullLoadAttempted) {
+            // Register the waiter FIRST, then load, so the notification
+            // cannot slip past us.
+            NotificationCenter.getInstance(account).addObserver(new ReactionsFullChatWaiter(account, fragment, chat), NotificationCenter.chatInfoDidLoad);
+            mc.loadFullChat(chat.id, 0, true);
+            return;
+        }
+        // The load finished (or failed) without usable full info: open
+        // anyway — the group screen tolerates a null info
+        // (ChatReactionsEditActivity.setInfo is null-safe); the broadcast
+        // screen declines to create itself in that case, so nothing is
+        // shown rather than crashing.
+        presentReactionsScreen(fragment, chat, null);
+    }
+
+    private static void presentReactionsScreen(BaseFragment fragment, TLRPC.Chat chat, TLRPC.ChatFull info) {
+        if (fragment == null || fragment.getParentActivity() == null || chat == null) {
+            return;
+        }
+        if (ChatObject.isChannelAndNotMegaGroup(chat)) {
+            fragment.presentFragment(new org.telegram.ui.Components.Reactions.ChatCustomReactionsEditActivity(chat.id, info));
+        } else {
+            android.os.Bundle args = new android.os.Bundle();
+            args.putLong(org.telegram.ui.ChatReactionsEditActivity.KEY_CHAT_ID, chat.id);
+            org.telegram.ui.ChatReactionsEditActivity reactionsFragment = new org.telegram.ui.ChatReactionsEditActivity(args);
+            reactionsFragment.setInfo(info);
+            fragment.presentFragment(reactionsFragment);
+        }
+    }
+
+    /** One-shot waiter: when the full chat we asked for arrives, open the reactions screen. */
+    private static class ReactionsFullChatWaiter implements NotificationCenter.NotificationCenterDelegate {
+        private final int account;
+        private final java.lang.ref.WeakReference<BaseFragment> fragmentRef;
+        private final TLRPC.Chat chat;
+
+        ReactionsFullChatWaiter(int account, BaseFragment fragment, TLRPC.Chat chat) {
+            this.account = account;
+            this.fragmentRef = new java.lang.ref.WeakReference<>(fragment);
+            this.chat = chat;
+        }
+
+        @Override
+        public void didReceivedNotification(int id, int account, Object... args) {
+            if (id != NotificationCenter.chatInfoDidLoad || args == null || args.length == 0 || !(args[0] instanceof TLRPC.ChatFull)) {
+                return;
+            }
+            TLRPC.ChatFull full = (TLRPC.ChatFull) args[0];
+            if (full.id != chat.id) {
+                return;
+            }
+            NotificationCenter.getInstance(this.account).removeObserver(this, NotificationCenter.chatInfoDidLoad);
+            BaseFragment fragment = fragmentRef.get();
+            if (fragment == null || fragment.getParentActivity() == null) {
+                return;
+            }
+            AndroidUtilities.runOnUIThread(() -> openReactionsScreen(fragment, this.account, chat, true));
+        }
+    }
+
     private static void copyLink(Context context, String link) {
         android.content.ClipboardManager cm = (android.content.ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
         cm.setPrimaryClip(android.content.ClipData.newPlainText("link", link));
-        android.widget.Toast.makeText(context, LocaleController.getString(R.string.TextCopied), android.widget.Toast.LENGTH_SHORT).show();
+        SilentToast.show(context, LocaleController.getString(R.string.TextCopied), android.widget.Toast.LENGTH_SHORT);
     }
 
     /** Export the invite link; revoke=true creates a brand-new private link. */
@@ -250,7 +381,7 @@ public class SilentQuickActions {
         ConnectionsManager.getInstance(account).sendRequest(req, (res, err) -> {
             AndroidUtilities.runOnUIThread(() -> {
                 if (err != null) {
-                    android.widget.Toast.makeText(fragment.getParentActivity(), err.text, android.widget.Toast.LENGTH_SHORT).show();
+                    SilentToast.show(fragment.getParentActivity(), err.text, android.widget.Toast.LENGTH_SHORT);
                     return;
                 }
                 if (res instanceof TLRPC.TL_chatInviteExported) {
@@ -289,7 +420,7 @@ public class SilentQuickActions {
             mine.add(chat);
         }
         if (mine.isEmpty()) {
-            android.widget.Toast.makeText(fragment.getParentActivity(), LocaleController.getString(channels ? R.string.SilentQuickNoChannels : R.string.SilentQuickNoGroups), android.widget.Toast.LENGTH_SHORT).show();
+            SilentToast.show(fragment.getParentActivity(), LocaleController.getString(channels ? R.string.SilentQuickNoChannels : R.string.SilentQuickNoGroups), android.widget.Toast.LENGTH_SHORT);
             return;
         }
         // Telegram-style picker: avatar + name rows, Telegram theme.
@@ -488,7 +619,7 @@ public class SilentQuickActions {
                     SendMessagesHelper.getInstance(account).sendMessage(params);
                 });
             } else {
-                AndroidUtilities.runOnUIThread(() -> android.widget.Toast.makeText(fragment.getParentActivity(), LocaleController.getString(R.string.SilentQuickShareFailed), android.widget.Toast.LENGTH_SHORT).show());
+                AndroidUtilities.runOnUIThread(() -> SilentToast.show(fragment.getParentActivity(), LocaleController.getString(R.string.SilentQuickShareFailed), android.widget.Toast.LENGTH_SHORT).show());
             }
         });
     }

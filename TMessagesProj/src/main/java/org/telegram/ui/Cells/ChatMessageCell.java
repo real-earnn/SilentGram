@@ -1717,6 +1717,9 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
 
     private float drawTimeX;
     private float drawTimeY;
+    // SilentGram K11: paint for the small red no-entry mark drawn left of
+    // a deleted tombstone's time. Created lazily and reused — never in draw.
+    private Paint silentTombstoneIconPaint;
     public StaticLayout timeLayout;
     public int timeWidth;
     int timeTextWidth;
@@ -11654,6 +11657,16 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         if (currentMessageObject.isUnsupported()) {
             newLineForTime = true;
         }
+        if (currentMessageObject.silentTombstone) {
+            // SilentGram K11: a deleted tombstone's time always goes on its
+            // own line below the text (totalHeight += 14dp, the bubble grows
+            // taller), with the red no-entry mark drawn left of that time —
+            // so the time can never land on top of the text, whatever the
+            // last line's width. This is the existing newLineForTime path
+            // (the same one RTL, unsupported and code-at-bottom messages
+            // already use), not a new layout mode.
+            newLineForTime = true;
+        }
         if ((reactionsLayoutInBubble.isEmpty || reactionsLayoutInBubble.isSmall) && currentMessageObject.richLayout != null && currentMessageObject.richLayout.forceNewLineForTime()) {
             newLineForTime = true;
         }
@@ -11676,7 +11689,12 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 hasNewLineForTime = true;
             }
             backgroundWidth = Math.max(maxChildWidth, lastLineWidth) + dp(31);
-            backgroundWidth = Math.max(backgroundWidth, (currentMessageObject.isOutOwner() ? timeWidth + dp(17) : timeWidth) + dp(31));
+            // SilentGram K11: the new-line row holds the red no-entry mark
+            // left of the time, so the bubble must be wide enough for
+            // mark + gap + time (+ ticks, out) — otherwise the mark could
+            // poke past the bubble's left edge on a short outgoing text.
+            int silentTombstoneTimeExtra = currentMessageObject.silentTombstone ? dp(13) + dp(4) : 0;
+            backgroundWidth = Math.max(backgroundWidth, (currentMessageObject.isOutOwner() ? timeWidth + dp(17) : timeWidth) + silentTombstoneTimeExtra + dp(31));
         } else {
             int diff = maxChildWidth - getExtraTextX() - lastLineWidth;
             if (diff >= 0 && diff <= timeMore) {
@@ -21809,6 +21827,31 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         }
     }
 
+    // SilentGram K11: draw the deleted-tombstone mark — a small red circle
+    // with a diagonal line (GBWhatsApp-style no-entry, like a red "no"
+    // sign), immediately left of the time text. Drawn with canvas
+    // primitives, so it needs no drawable asset and is exactly red and
+    // exactly 13dp on every density. Called from drawTimeInternal while
+    // the canvas is translated to the time text's top-left, so the mark is
+    // placed in local coordinates: its right edge 4dp left of the time,
+    // vertically centred on the time text. timeHeight is the time text's
+    // height (timeLayout.getHeight() at the call site).
+    private void drawSilentTombstoneIcon(Canvas canvas, int timeHeight) {
+        if (silentTombstoneIconPaint == null) {
+            silentTombstoneIconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            silentTombstoneIconPaint.setStyle(Paint.Style.STROKE);
+        }
+        float size = dp(13);
+        float r = size / 2f;
+        float cx = -dp(4) - r;
+        float cy = timeHeight / 2f;
+        silentTombstoneIconPaint.setColor(getThemedColor(Theme.key_text_RedRegular));
+        silentTombstoneIconPaint.setStrokeWidth(dp(1.5f));
+        canvas.drawCircle(cx, cy, r, silentTombstoneIconPaint);
+        float k = r * 0.7f;
+        canvas.drawLine(cx - k, cy - k, cx + k, cy + k, silentTombstoneIconPaint);
+    }
+
     private void drawTimeInternal(Canvas canvas, float alpha, boolean fromParent, float timeX, StaticLayout timeLayout, float timeWidth, boolean drawSelectionBackground) {
         if ((!drawTime || groupPhotoInvisible) && shouldDrawTimeOnMedia() || timeLayout == null || (currentMessageObject.deleted && currentPosition != null) || currentMessageObject.type == MessageObject.TYPE_PHONE_CALL) {
             return;
@@ -22118,6 +22161,15 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             } else {
                 canvas.translate(drawTimeX = timeTitleTimeX + additionalX, drawTimeY = layoutHeight - dp(pinnedBottom || pinnedTop ? 7.5f : 6.5f) - timeLayout.getHeight() + timeYOffset);
                 SpoilerEffect.layoutDrawMaybe(timeLayout, canvas);
+                // SilentGram K11: small red no-entry mark left of the time.
+                // The canvas is translated to the time text's top-left here,
+                // so drawSilentTombstoneIcon places the mark in local
+                // coordinates; the animated-edited path above does not set
+                // drawTimeX/drawTimeY and is transient, so the mark is only
+                // drawn on this normal path.
+                if (currentMessageObject != null && currentMessageObject.silentTombstone) {
+                    drawSilentTombstoneIcon(canvas, timeLayout.getHeight());
+                }
             }
             canvas.restore();
         }

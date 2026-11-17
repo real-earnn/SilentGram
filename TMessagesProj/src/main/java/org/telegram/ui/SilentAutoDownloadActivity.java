@@ -19,6 +19,7 @@ import org.telegram.messenger.R;
 import org.telegram.messenger.SilentAutoDownload;
 import org.telegram.messenger.SilentMessageHistory;
 import org.telegram.messenger.UserObject;
+import org.telegram.messenger.SilentToast;
 import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.ActionBar;
@@ -348,7 +349,7 @@ public class SilentAutoDownloadActivity extends BaseFragment {
                 builder.setTitle(dialogName);
                 builder.setItems(items, icons, (dialog, which) -> {
                     SilentAutoDownload.setRule(did, which);
-                    android.widget.Toast.makeText(getParentActivity(), dialogName + ": " + ruleLabel(which), android.widget.Toast.LENGTH_SHORT).show();
+                    SilentToast.show(getParentActivity(), dialogName + ": " + ruleLabel(which), android.widget.Toast.LENGTH_SHORT);
                     notifyDataSetChanged();
                 });
                 builder.show();

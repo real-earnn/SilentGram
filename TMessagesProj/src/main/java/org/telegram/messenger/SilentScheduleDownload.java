@@ -148,7 +148,7 @@ public class SilentScheduleDownload {
                     alarmManager.setExact(AlarmManager.RTC_WAKEUP, whenMillis, pi);
                 }
             }
-            android.widget.Toast.makeText(context, "Download scheduled", android.widget.Toast.LENGTH_SHORT).show();
+            SilentToast.show(context, "Download scheduled", android.widget.Toast.LENGTH_SHORT);
         } catch (Throwable e) {
             FileLog.e(e);
         }

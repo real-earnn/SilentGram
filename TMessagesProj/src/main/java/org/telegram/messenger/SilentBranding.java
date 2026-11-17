@@ -1,5 +1,7 @@
 package org.telegram.messenger;
 
+import android.content.Context;
+import android.content.SharedPreferences;
 import android.text.TextUtils;
 
 import org.telegram.tgnet.TLRPC;
@@ -151,13 +153,86 @@ public class SilentBranding {
         return "Owner";
     }
 
-    /** Has the user joined the official / sponsored channel? */
+    /** SilentGram K10: locally-persisted joined/left state for the
+     * Official / sponsored channel row.
+     *
+     * The row used to be decided by scanning the in-memory dialog list
+     * (see hasJoinedOfficialChannel below) — that list only fills once the
+     * dialogs have synced from the server, so on a fresh start, with no
+     * internet, or while the proxy is still connecting, the scan found
+     * nothing and the row kept showing even though the user had joined.
+     * The joined/left state is therefore remembered in the "silentgram"
+     * SharedPreferences (same file the other Silent* helpers use), keyed
+     * per account AND per channel username — so the official channel
+     * (@silent_gram) and a sponsored channel from the API config (when
+     * one is set) each keep their own state, with the same mechanism.
+     * Local memory wins: once a value is stored it is trusted without
+     * any network check. It is updated on the real server events in
+     * MessagesController (TL_updateChannel join/leave) and seeded from
+     * the dialog list the first time it is asked (positive hits only —
+     * an empty / not-yet-loaded dialog list must never overwrite a
+     * stored "joined"). */
+    private static SharedPreferences silentPrefs() {
+        return ApplicationLoader.applicationContext.getSharedPreferences("silentgram", Context.MODE_PRIVATE);
+    }
+
+    private static String joinedKey(int account, String username) {
+        return "official_joined_" + account + "_" + (username == null ? "" : username.toLowerCase());
+    }
+
+    /** Is there a locally stored joined/left value for this channel? */
+    public static boolean hasStoredJoinedState(int account, String username) {
+        if (username == null || username.isEmpty()) {
+            return false;
+        }
+        return silentPrefs().contains(joinedKey(account, username));
+    }
+
+    /** The locally remembered joined state (false when nothing stored). */
+    public static boolean isJoinedStored(int account, String username) {
+        if (username == null || username.isEmpty()) {
+            return false;
+        }
+        return silentPrefs().getBoolean(joinedKey(account, username), false);
+    }
+
+    /** Remember that the user joined (true) or left (false) this channel.
+     * Called from MessagesController when the server reports the change
+     * (TL_updateChannel), never from a guess. */
+    public static void setJoinedChannelLocally(int account, String username, boolean joined) {
+        if (username == null || username.isEmpty()) {
+            return;
+        }
+        silentPrefs().edit().putBoolean(joinedKey(account, username), joined).apply();
+    }
+
+    /** Is this one of the channels the Official row can show — the
+     * official @silent_gram, or the sponsored channel from the API config
+     * (which falls back to @silent_gram when the config has none)? */
+    public static boolean isOfficialOrSponsoredChannel(String username) {
+        if (username == null || username.isEmpty()) {
+            return false;
+        }
+        return OFFICIAL_CHANNEL_USERNAME.equalsIgnoreCase(username)
+                || getSponsoredUsername().equalsIgnoreCase(username);
+    }
+
+    /** Has the user joined the official / sponsored channel?
+     * K10: local memory is consulted FIRST — a stored value is returned
+     * as-is, even with no internet / no proxy, so the row's visibility
+     * on app open never depends on a network check. Only when nothing
+     * is stored yet (first run after this build) is the dialog list
+     * scanned, and only a positive hit is persisted — a miss means
+     * "not loaded yet or not joined", which must not be remembered. */
     public static boolean hasJoinedOfficialChannel(int account) {
+        String sponsored = getSponsoredUsername();
+        if (hasStoredJoinedState(account, sponsored)) {
+            return isJoinedStored(account, sponsored);
+        }
         MessagesController mc = MessagesController.getInstance(account);
         if (mc == null) {
             return false;
         }
-        String sponsored = getSponsoredUsername();
         // Walk the dialog list (public API) and match the channel by username.
         for (int i = 0; i < mc.dialogs_dict.size(); i++) {
             TLRPC.Dialog dialog = mc.dialogs_dict.valueAt(i);
@@ -166,6 +241,7 @@ public class SilentBranding {
             }
             TLRPC.Chat chat = mc.getChat(-dialog.id);
             if (chat != null && sponsored.equalsIgnoreCase(chat.username)) {
+                setJoinedChannelLocally(account, sponsored, true);
                 return true;
             }
         }

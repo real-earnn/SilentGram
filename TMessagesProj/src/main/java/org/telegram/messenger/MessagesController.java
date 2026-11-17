@@ -20361,6 +20361,26 @@ public class MessagesController extends BaseController implements NotificationCe
                             } else if (ChatObject.isNotInChat(chat) && dialog != null && (promoDialog == null || promoDialog.id != dialog.id)) {
                                 deleteDialog(dialog.id, 0);
                             }
+                            // SilentGram K10: persist the official / sponsored
+                            // channel's joined/left state in local memory, on
+                            // the server's own membership event. This mirrors
+                            // the two branches above exactly (join = dialog
+                            // missing but the user is in the channel; leave =
+                            // ChatObject.isNotInChat), so nothing here is a
+                            // guess — and the leave branch deliberately does
+                            // NOT require dialog != null, so leaving on
+                            // another device is remembered even when this
+                            // device's dialog is already gone. The dialog
+                            // list is never consulted: the row's visibility
+                            // on the next app open comes from this stored
+                            // value alone.
+                            if (SilentBranding.isOfficialOrSponsoredChannel(chat.username)) {
+                                if (dialog == null && chat instanceof TLRPC.TL_channel && !chat.left) {
+                                    SilentBranding.setJoinedChannelLocally(currentAccount, chat.username, true);
+                                } else if (ChatObject.isNotInChat(chat)) {
+                                    SilentBranding.setJoinedChannelLocally(currentAccount, chat.username, false);
+                                }
+                            }
                             if (chat instanceof TLRPC.TL_channelForbidden || chat.kicked) {
                                 ChatObject.Call call = getGroupCall(chat.id, false);
                                 if (call != null) {

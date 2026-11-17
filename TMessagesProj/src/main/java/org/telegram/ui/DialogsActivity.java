@@ -3466,7 +3466,13 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                 communityAvatarImage.setForUserOrChat(community, communityAvatarDrawable);
                 actionBar.addView(communityAvatarImage, LayoutHelper.createFrame(32, 32, Gravity.BOTTOM | Gravity.LEFT, 58, 0, 0, 12f));
             } else {
-                statusDrawable = new AnimatedEmojiDrawable.SwapAnimatedEmojiDrawable(null, dp(26));
+                // SilentGram K14: the header status emoji loops continuously
+                // — use the private CACHE_TYPE_SILENTGRAM_HEADER_STATUS
+                // bucket (infinite auto-repeat) instead of
+                // CACHE_TYPE_EMOJI_STATUS, which upstream caps at 2 plays
+                // and then freezes. Same header emoji as DialogStoriesCell's
+                // emojiStatusView, shown while the strip is collapsed.
+                statusDrawable = new AnimatedEmojiDrawable.SwapAnimatedEmojiDrawable(null, dp(26), AnimatedEmojiDrawable.CACHE_TYPE_SILENTGRAM_HEADER_STATUS);
                 statusDrawable.center = true;
                 // SilentGram: the home title is the plain "SilentGram" text
                 // (AppName). Note the title you see while SCROLLING is not
@@ -3976,7 +3982,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                     if (!org.telegram.messenger.SilentChatLock.hasPin()) {
                         presentFragment(new SilentChatLockActivity());
                         if (getParentActivity() != null) {
-                            android.widget.Toast.makeText(getParentActivity(), LocaleController.getString(R.string.SilentChatLockSetPinFirst), android.widget.Toast.LENGTH_SHORT).show();
+                            org.telegram.messenger.SilentToast.show(getParentActivity(), LocaleController.getString(R.string.SilentChatLockSetPinFirst));
                         }
                         hideActionMode(true);
                     } else {
@@ -3989,7 +3995,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                         }
                         if (newlyLocked > 0) {
                             if (getParentActivity() != null) {
-                                android.widget.Toast.makeText(getParentActivity(), LocaleController.getString(R.string.SilentChatLockAdded), android.widget.Toast.LENGTH_SHORT).show();
+                                org.telegram.messenger.SilentToast.show(getParentActivity(), LocaleController.getString(R.string.SilentChatLockAdded));
                             }
                             silentLastKnownLockedChats = org.telegram.messenger.SilentChatLock.getLockedChats();
                             if (viewPages != null) {
@@ -13610,13 +13616,19 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         // a connection but never deliver data, so chats, emoji and files
         // stall — tapping Refresh marks the current proxy bad and connects
         // to the next-fastest one (see SilentProxyManager.rotateProxy).
+        // SilentGram K9: no "Switched to a different proxy" success toast
+        // any more — the tap shows ONLY a brief themed "Refreshing..."
+        // toast. The failure toast is kept (themed) for when there is no
+        // other proxy to switch to.
         io.add(R.drawable.msg_reset, getString(R.string.Refresh), () -> {
-            boolean switched = org.telegram.messenger.SilentProxyManager.rotateProxy();
             if (getParentActivity() != null) {
-                android.widget.Toast.makeText(getParentActivity(), switched
-                        ? "Switched to a different proxy — things should work now"
-                        : "No other proxy available right now — try again in a moment",
-                        android.widget.Toast.LENGTH_LONG).show();
+                org.telegram.messenger.SilentToast.show(getParentActivity(), "Refreshing...");
+            }
+            boolean switched = org.telegram.messenger.SilentProxyManager.rotateProxy();
+            if (!switched && getParentActivity() != null) {
+                org.telegram.messenger.SilentToast.show(getParentActivity(),
+                        "No other proxy available right now — try again in a moment",
+                        android.widget.Toast.LENGTH_LONG);
             }
         });
         // SilentGram H3: the 3-dot menu toggles what the strip above search

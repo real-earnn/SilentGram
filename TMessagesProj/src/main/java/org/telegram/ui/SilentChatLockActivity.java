@@ -24,6 +24,7 @@ import org.telegram.messenger.R;
 import org.telegram.messenger.SilentChatLock;
 import org.telegram.messenger.SilentMessageHistory;
 import org.telegram.messenger.UserObject;
+import org.telegram.messenger.SilentToast;
 import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.ActionBar;
@@ -496,7 +497,7 @@ public class SilentChatLockActivity extends BaseFragment {
             context = rootView.getContext();
         }
         if (context != null) {
-            android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_SHORT).show();
+            SilentToast.show(context, text, android.widget.Toast.LENGTH_SHORT);
         }
     }
 
@@ -707,7 +708,7 @@ public class SilentChatLockActivity extends BaseFragment {
         private void toast(String text) {
             Context context = getParentActivity();
             if (context != null) {
-                android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_SHORT).show();
+                SilentToast.show(context, text, android.widget.Toast.LENGTH_SHORT);
             }
         }
 

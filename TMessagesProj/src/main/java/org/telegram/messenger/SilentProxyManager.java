@@ -60,6 +60,32 @@ import java.util.concurrent.atomic.AtomicReference;
  * than dead). If most fail at once, nothing is cleared. The active
  * proxy and hand-added proxies are never removed.
  *
+ * SilentGram K6b (why batch J's K6 never switched in practice):
+ * 1) The startup round connected ASAP to the first verified proxy in
+ *    API-latency order and set decisionMade, so the rest of that round
+ *    never compared on-device latencies — and the only re-evaluation
+ *    was the hourly refresh. A 271ms proxy could sit connected for an
+ *    hour with a 4ms proxy available. 2) Telegram's own
+ *    ProxyRotationController (enabled by applyProxies) switches away
+ *    from the current proxy to the lowest-ping OTHER available proxy
+ *    whenever a check completes — with no threshold — and every switch
+ *    re-triggers its 10s check timer, so it ping-ponged between
+ *    proxies and reconnected again and again, undoing K6's switch.
+ *    Rotation is now OFF; the watcher below owns switching.
+ * 3) The probe published the raw TCP connect time as info.ping even
+ *    when the MTProto handshake failed, so the list showed "Ping 4 ms"
+ *    for a proxy the gate (rightly) never picks — display and decision
+ *    disagreed. Only handshake-verified latencies are now stored or
+ *    shown, and a handshake-failed current proxy counts as dead for
+ *    the switch bar. 4) The watcher: while the app is open it
+ *    re-probes the fastest candidates every 3 minutes (first round
+ *    60s after startup) and switches to the lowest-ms verified proxy
+ *    whenever it beats the current one by 50ms; a current proxy that
+ *    fails verification in 2 rounds running is marked bad for an hour
+ *    and abandoned for the fastest verified one. The K7 guard is
+ *    unchanged: dead proxies are only cleared when live >= 3 and
+ *    live > dead, so a dead phone network never mass-clears the list.
+ *
  * The app itself never talks to the proxy-list sites: if a source changes,
  * only the API (silentgram-proxy.silenthost.site) needs updating — the app
  * keeps working.
@@ -97,9 +123,27 @@ public class SilentProxyManager {
     private static final int MAX_PROXIES = 50;
     // How many proxies to probe in parallel (up to 50 candidates now).
     private static final int PROBE_THREADS = 10;
+    // SilentGram K6b: the continuous watcher. While the app is open it
+    // re-probes the fastest candidates every few minutes and switches to
+    // the lowest-ms verified proxy — the hourly fetch alone left the app
+    // stuck on a slow proxy for up to an hour (see class Javadoc).
+    private static final long WATCHER_FIRST_DELAY_MS = 60 * 1000L;
+    private static final long WATCHER_INTERVAL_MS = 3 * 60 * 1000L;
+    // Watcher rounds probe only the fastest candidates (API order) — the
+    // daily live list is ~20-26 proxies, so 25 covers it while bounding
+    // each round to ~2 handshake waves.
+    private static final int WATCHER_MAX_CANDIDATES = 25;
+    // Watcher rounds in a row the current proxy must fail verification
+    // before it is abandoned as unstable (see noteWatcherRound).
+    private static final int WATCHER_UNSTABLE_ROUNDS = 2;
 
     private static volatile boolean started;
     private static volatile boolean fetching;
+    private static volatile boolean watcherStarted;
+    // One probe round at a time (fetch round vs watcher round).
+    private static final AtomicBoolean roundRunning = new AtomicBoolean(false);
+    // Consecutive watcher rounds the current proxy failed verification.
+    private static volatile int watcherUnstableRounds;
 
     // Latency (ms) of the currently active proxy, -1 if unknown.
     private static final AtomicLong currentLatencyMs = new AtomicLong(-1);
@@ -133,7 +177,7 @@ public class SilentProxyManager {
         return Long.MAX_VALUE;
     }
 
-    /** This round's on-device measured latency for a proxy (probe TCP connect + MTProto handshake time), or -1 if it was not probed live this round. */
+    /** This round's VERIFIED on-device latency for a proxy (MTProto handshake time), or -1 if it was not verified live this round. A bare TCP connect time is never stored here — a proxy that accepts TCP but fails the handshake has no usable latency. */
     private static long measuredLatencyMs(String key) {
         Long ms = probeLatencyByKey.get(key);
         return ms != null && ms >= 0 ? ms : -1;
@@ -150,12 +194,36 @@ public class SilentProxyManager {
         return measured >= 0 ? measured : knownLatencyMs(key);
     }
 
+    /** latencyForDecision with "unknown" sorted last (for ranking), so an unknown latency never beats a measured one. */
+    private static long latencyForRank(String key) {
+        long ms = latencyForDecision(key);
+        return ms >= 0 ? ms : Long.MAX_VALUE;
+    }
+
+    /** Probe state of the currently active proxy in this round (0 = still probing, 1 = verified, 2 = dead, 3 = TCP-only), or -1 if it is not a candidate this round. */
+    private static int currentProxyState(List<SharedConfig.ProxyInfo> ranked, int[] state) {
+        SharedConfig.ProxyInfo curProxy = SharedConfig.currentProxy;
+        if (curProxy == null) {
+            return -1;
+        }
+        for (int i = 0; i < ranked.size(); i++) {
+            if (sameProxy(ranked.get(i), curProxy)) {
+                return state[i];
+            }
+        }
+        return -1;
+    }
+
     /**
      * Fresh on-device latency of the currently active proxy, measured in
-     * THIS probe round: its probe time if it was probed live,
-     * Long.MAX_VALUE if it probed dead (so any live proxy beats it), or
-     * the last recorded latency (activeLatency, may be -1 = unknown) if
-     * it was not a candidate this round.
+     * THIS probe round: its handshake-verified probe time if it was
+     * verified live, Long.MAX_VALUE if it probed dead OR if its MTProto
+     * handshake failed (state 3) — a proxy that accepts TCP but never
+     * completes a handshake cannot carry traffic, so its TCP connect
+     * time must NOT be used as the bar: any handshake-verified proxy
+     * beats it, however slow. The last recorded latency (activeLatency,
+     * may be -1 = unknown) is used only if it was not a candidate this
+     * round or is still probing.
      */
     private static long currentProxyMeasuredLatency(List<SharedConfig.ProxyInfo> ranked, int[] state, long activeLatency) {
         SharedConfig.ProxyInfo curProxy = SharedConfig.currentProxy;
@@ -164,12 +232,12 @@ public class SilentProxyManager {
         }
         for (int i = 0; i < ranked.size(); i++) {
             if (sameProxy(ranked.get(i), curProxy)) {
-                if (state[i] == 2) {
-                    // The current proxy probed dead this round — any live
+                if (state[i] == 2 || state[i] == 3) {
+                    // Dead, or TCP-only (handshake failed) — any verified
                     // proxy is better than staying on it.
                     return Long.MAX_VALUE;
                 }
-                if (state[i] == 1 || state[i] == 3) {
+                if (state[i] == 1) {
                     long ms = measuredLatencyMs(proxyKey(curProxy));
                     if (ms >= 0) {
                         return ms;
@@ -228,6 +296,7 @@ public class SilentProxyManager {
         // ConnectionsManager on startup — just refresh the list in background.
         refreshAsync();
         startDownloadWatchdog();
+        startProxyWatcher();
     }
 
     /** Fetch the list from our API and apply the best proxy. Runs off the UI thread. */
@@ -417,13 +486,24 @@ public class SilentProxyManager {
             return;
         }
 
-        // Let Telegram rotate to the next proxy automatically if the active one dies.
-        SharedConfig.proxyRotationEnabled = true;
+        // SilentGram K6b: Telegram's own proxy rotation stays OFF.
+        // ProxyRotationController.switchToAvailable() switches away from
+        // the current proxy to the lowest-ping OTHER available proxy
+        // whenever a check completes — unconditionally, with no
+        // threshold — and every switch re-triggers its 10s check timer
+        // (it fires on ConnectingToProxy, which a switch itself causes),
+        // so it ping-ponged between proxies, reconnected again and
+        // again, and undid this manager's switch to the fastest proxy.
+        // Our setProxySettings posts no proxySettingsChanged
+        // notification either, so nothing ever cancelled its pending
+        // check. The K6b watcher below owns switching now; rotation
+        // would only fight it.
+        SharedConfig.proxyRotationEnabled = false;
         SharedPreferences mainPrefs = MessagesController.getGlobalMainSettings();
-        mainPrefs.edit().putBoolean("proxyRotationEnabled", true).apply();
+        mainPrefs.edit().putBoolean("proxyRotationEnabled", false).apply();
 
         lastCandidates = new ArrayList<>(all);
-        probeAndConnect(all);
+        probeAndConnect(all, false);
     }
 
     /**
@@ -441,7 +521,16 @@ public class SilentProxyManager {
      * candidate simply falls through to the next-fastest, and a proxy the
      * download watchdog blocked is skipped the same way.
      */
-    private static void probeAndConnect(List<SharedConfig.ProxyInfo> candidates) {
+    private static void probeAndConnect(List<SharedConfig.ProxyInfo> candidates, boolean watcherRound) {
+        // One probe round at a time: the hourly fetch round and the
+        // watcher round share the latency maps and the gate, so a second
+        // round starting mid-round would corrupt both decisions. The
+        // skipped round is not lost — the watcher runs again in a few
+        // minutes and the fetch re-schedules hourly.
+        if (!roundRunning.compareAndSet(false, true)) {
+            FileLog.d("SilentProxy: probe round already running — skipping this " + (watcherRound ? "watcher" : "fetch") + " round");
+            return;
+        }
         bestInfo.set(null);
         bestLatencyMs.set(Long.MAX_VALUE);
         // Fastest-first by effective latency (unknown sorts last). The
@@ -510,23 +599,17 @@ public class SilentProxyManager {
                         }
                     }
                     synchronized (gateLock) {
-                        if (tcpMs >= 0) {
+                        if (tcpMs >= 0 && verified) {
+                            // Verified by a real MTProto handshake: this is
+                            // a usable on-device latency — record it, and
+                            // publish it as the proxy's ping so the list UI
+                            // ("Available, Ping X ms") shows the same number
+                            // the switch decision uses.
                             probeLatencyByKey.put(key, ms);
-                            // Feed Telegram's own rotation too: its list is
-                            // sorted by ping, so a real probe time here makes
-                            // the built-in fallback order fastest-first as well.
-                            // (availableCheckTime is NOT touched — upstream
-                            // measures it with elapsedRealtime, not wall time.)
                             info.ping = ms;
                             info.available = true;
-                            // Live: 1 = verified by a real MTProto handshake,
-                            // 3 = TCP only (handshake failed or timed out).
-                            // The gate prefers verified proxies and only
-                            // falls back to unverified ones when no verified
-                            // proxy exists, so behaviour can never get worse
-                            // than the old TCP-only probe.
-                            state[index] = verified ? 1 : 3;
-                            // Track the fastest by own probe RTT (log only).
+                            state[index] = 1;
+                            // Track the fastest VERIFIED proxy (log only).
                             while (true) {
                                 long best = bestLatencyMs.get();
                                 if (ms >= best) {
@@ -537,6 +620,19 @@ public class SilentProxyManager {
                                     break;
                                 }
                             }
+                        } else if (tcpMs >= 0) {
+                            // TCP connects but the MTProto handshake failed
+                            // or timed out (state 3). The TCP time is NOT a
+                            // usable latency — never store it as one, and
+                            // never show it as the proxy's ping: the list
+                            // would claim "Ping 4 ms" for a proxy the gate
+                            // will never pick. Same convention as
+                            // ProxyListActivity (handshake fail -> ping 0,
+                            // unavailable).
+                            probeLatencyByKey.put(key, -1L);
+                            info.ping = 0;
+                            info.available = false;
+                            state[index] = 3;
                         } else {
                             // SilentGram K6: record the failure so a stale
                             // probe time from an earlier round is never
@@ -562,20 +658,31 @@ public class SilentProxyManager {
         // threads, ~8s handshake check each).
         new Thread(() -> {
             try {
-                done.await(60, TimeUnit.SECONDS);
-            } catch (InterruptedException ignored) {
-            }
-            // Safety net: if the last probe's gate call was missed, decide
-            // now that every probe resolved.
-            tryConnectFastest(ranked, state, gateLock, decisionMade, connectedOnce, activeLatency);
-            // SilentGram K7: drop proxies that are dead this round — only
-            // when the round proves the user's own network is fine.
-            cleanupDeadProxies(ranked, state);
-            SharedConfig.ProxyInfo best = bestInfo.get();
-            if (best != null) {
-                FileLog.d("SilentProxy: fastest proxy " + best.settings.getAddress() + ":" + best.settings.getPort() + " (" + bestLatencyMs.get() + "ms probe, " + knownLatencyMs(proxyKey(best)) + "ms effective)");
-            } else {
-                FileLog.d("SilentProxy: no live proxy found in this round");
+                try {
+                    done.await(60, TimeUnit.SECONDS);
+                } catch (InterruptedException ignored) {
+                }
+                // Safety net: if the last probe's gate call was missed, decide
+                // now that every probe resolved.
+                tryConnectFastest(ranked, state, gateLock, decisionMade, connectedOnce, activeLatency);
+                // SilentGram K7: drop proxies that are dead this round — only
+                // when the round proves the user's own network is fine.
+                cleanupDeadProxies(ranked, state);
+                // SilentGram K6b: a watcher round reports back so an
+                // unstable current proxy can be abandoned (see
+                // noteWatcherRound). Fetch rounds do not need this — the
+                // gate already switched them when a verified proxy won.
+                if (watcherRound) {
+                    noteWatcherRound(ranked, state);
+                }
+                SharedConfig.ProxyInfo best = bestInfo.get();
+                if (best != null) {
+                    FileLog.d("SilentProxy: fastest proxy " + best.settings.getAddress() + ":" + best.settings.getPort() + " (" + bestLatencyMs.get() + "ms probe, " + knownLatencyMs(proxyKey(best)) + "ms effective)");
+                } else {
+                    FileLog.d("SilentProxy: no live proxy found in this round");
+                }
+            } finally {
+                roundRunning.set(false);
             }
         }, "silent-proxy-probe-wait").start();
     }
@@ -664,8 +771,12 @@ public class SilentProxyManager {
      * one beats it by SWITCH_FASTER_BY_MS (or the current latency is
      * unknown, or the current proxy probed dead). SilentGram I6: state
      * 3 means TCP-live but the MTProto handshake failed — only a
-     * fallback. The gate remembers such candidates and only uses one
-     * when no verified proxy is available.
+     * fallback, and only when the current proxy probed dead (state 2);
+     * swapping between two handshake-failed proxies is churn, so the
+     * gate stays put instead. SilentGram K6b: a state-3 current proxy
+     * counts as dead for the bar (see currentProxyMeasuredLatency) —
+     * its TCP time is not a usable latency — so any verified proxy
+     * beats it.
      */
     private static void tryConnectFastest(List<SharedConfig.ProxyInfo> ranked, int[] state, Object gateLock,
             AtomicBoolean decisionMade, AtomicBoolean connectedOnce, long activeLatency) {
@@ -720,10 +831,14 @@ public class SilentProxyManager {
                 }
                 if (bestVerified >= 0) {
                     tryConnectCandidate(ranked, state, bestVerified, decisionMade, connectedOnce, bar);
-                } else if (bestUnverified >= 0) {
-                    // No verified proxy this round — fall back to the
-                    // fastest unverified one rather than staying on a
-                    // dead or slower proxy.
+                } else if (bestUnverified >= 0 && currentProxyState(ranked, state) == 2) {
+                    // No verified proxy this round, and the current proxy
+                    // probed DEAD — fall back to the fastest TCP-live one
+                    // rather than staying on a dead proxy. If the current
+                    // proxy is only unverified (state 3, handshake
+                    // failed), stay put: swapping between two
+                    // handshake-failed proxies is pure reconnect churn,
+                    // and the watcher retries in a few minutes.
                     tryConnectCandidate(ranked, state, bestUnverified, decisionMade, connectedOnce, bar);
                 }
                 // Otherwise no live, unblocked proxy this round — stay
@@ -1016,13 +1131,15 @@ public class SilentProxyManager {
             FileLog.d("SilentProxy: marking " + badKey + " bad — switching proxy");
         }
         // Pick the next-fastest candidate that is not the bad one and not
-        // blocked — fastest-first by effective latency, same ranking as the
-        // probe gate above (API latency_ms, else probe RTT).
+        // blocked — fastest-first by ON-DEVICE measured latency (API
+        // latency only as fallback), so the abandon path lands on the
+        // proxy that is actually fastest from this phone, not the one
+        // that is fastest from the API server.
         List<SharedConfig.ProxyInfo> ranked = new ArrayList<>(candidates);
         Collections.sort(ranked, new Comparator<SharedConfig.ProxyInfo>() {
             @Override
             public int compare(SharedConfig.ProxyInfo a, SharedConfig.ProxyInfo b) {
-                return Long.compare(effectiveLatencyMs(proxyKey(a)), effectiveLatencyMs(proxyKey(b)));
+                return Long.compare(latencyForRank(proxyKey(a)), latencyForRank(proxyKey(b)));
             }
         });
         for (SharedConfig.ProxyInfo info : ranked) {
@@ -1040,6 +1157,140 @@ public class SilentProxyManager {
             return true;
         }
         FileLog.d("SilentProxy: no other candidate to switch to");
+        return false;
+    }
+
+    // ------------------------------------------------------------------
+    // SilentGram K6b: continuous background watcher.
+    //
+    // While the app is open, re-probe the fastest candidates every few
+    // minutes and switch to the lowest-ms verified proxy — not only at
+    // the hourly fetch. The watcher reuses the same probe round and
+    // gate as the fetch path (same 50ms bar, same K7 cleanup guard),
+    // just on a short interval and over a trimmed candidate list.
+    // ------------------------------------------------------------------
+
+    private static void startProxyWatcher() {
+        if (watcherStarted) {
+            return;
+        }
+        watcherStarted = true;
+        new Thread(() -> {
+            try {
+                Thread.sleep(WATCHER_FIRST_DELAY_MS);
+            } catch (InterruptedException ignored) {
+                return;
+            }
+            while (true) {
+                runWatcherRound();
+                try {
+                    Thread.sleep(WATCHER_INTERVAL_MS);
+                } catch (InterruptedException ignored) {
+                    return;
+                }
+            }
+        }, "silent-proxy-watcher").start();
+    }
+
+    /** One watcher round: re-probe the fastest saved candidates (no API fetch) and let the gate switch if a faster verified proxy exists. */
+    private static void runWatcherRound() {
+        try {
+            if (SharedConfig.currentProxy == null) {
+                // Nothing connected yet — the startup fetch owns the
+                // first connect; the watcher only switches while open.
+                return;
+            }
+            List<SharedConfig.ProxyInfo> saved = lastCandidates;
+            if (saved == null || saved.isEmpty()) {
+                // No candidates cached (fetch never succeeded) — re-fetch
+                // instead of probing nothing.
+                refreshAsync();
+                return;
+            }
+            List<SharedConfig.ProxyInfo> trimmed = new ArrayList<>(saved);
+            Collections.sort(trimmed, new Comparator<SharedConfig.ProxyInfo>() {
+                @Override
+                public int compare(SharedConfig.ProxyInfo a, SharedConfig.ProxyInfo b) {
+                    return Long.compare(effectiveLatencyMs(proxyKey(a)), effectiveLatencyMs(proxyKey(b)));
+                }
+            });
+            if (trimmed.size() > WATCHER_MAX_CANDIDATES) {
+                trimmed = new ArrayList<>(trimmed.subList(0, WATCHER_MAX_CANDIDATES));
+            }
+            probeAndConnect(trimmed, true);
+        } catch (Throwable e) {
+            FileLog.e(e);
+        }
+    }
+
+    /**
+     * Watcher-round report card, run after the round's gate and K7
+     * cleanup. The gate already switches away from a dead or
+     * handshake-failed current proxy when a verified proxy exists —
+     * this covers the case where it could NOT switch (no verified
+     * proxy that round): if the current proxy fails verification in
+     * WATCHER_UNSTABLE_ROUNDS rounds running, it is unstable (the
+     * "keeps reconnecting" proxy) — mark it bad for an hour, exactly
+     * like the download watchdog does, and switch NOW to the fastest
+     * verified proxy in this round. A proxy that verifies fine resets
+     * the count, so one bad round never condemns a good proxy.
+     */
+    private static void noteWatcherRound(List<SharedConfig.ProxyInfo> ranked, int[] state) {
+        SharedConfig.ProxyInfo current = SharedConfig.currentProxy;
+        if (current == null) {
+            watcherUnstableRounds = 0;
+            return;
+        }
+        int currentState = currentProxyState(ranked, state);
+        if (currentState == 1) {
+            watcherUnstableRounds = 0;
+            return;
+        }
+        if (currentState != 2 && currentState != 3) {
+            // Still probing, or not a candidate this round — do not count.
+            return;
+        }
+        watcherUnstableRounds++;
+        FileLog.d("SilentProxy: K6b watcher: current proxy " + proxyKey(current) + " not verified for " + watcherUnstableRounds + " round(s) (state=" + currentState + ")");
+        if (watcherUnstableRounds < WATCHER_UNSTABLE_ROUNDS) {
+            return;
+        }
+        watcherUnstableRounds = 0;
+        String badKey = proxyKey(current);
+        SharedPreferences prefs = ApplicationLoader.applicationContext
+                .getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
+        prefs.edit().putLong("proxy_bad_" + badKey, System.currentTimeMillis()).apply();
+        FileLog.d("SilentProxy: K6b watcher: abandoning unstable proxy " + badKey);
+        switchToBestVerified(ranked, state);
+    }
+
+    /**
+     * Switch to the fastest handshake-verified, unblocked proxy in this
+     * round, regardless of the 50ms margin — the current proxy was
+     * already condemned as unstable, so any verified proxy beats it.
+     * Tries each verified candidate in latency order until one
+     * connects; returns true if the app switched (or was already on
+     * the best one).
+     */
+    private static boolean switchToBestVerified(List<SharedConfig.ProxyInfo> ranked, int[] state) {
+        ArrayList<Integer> verifiedIdx = new ArrayList<>();
+        for (int i = 0; i < ranked.size(); i++) {
+            if (state[i] == 1 && !isProxyBlocked(proxyKey(ranked.get(i)))) {
+                verifiedIdx.add(i);
+            }
+        }
+        Collections.sort(verifiedIdx, new Comparator<Integer>() {
+            @Override
+            public int compare(Integer a, Integer b) {
+                return Long.compare(latencyForRank(proxyKey(ranked.get(a))), latencyForRank(proxyKey(ranked.get(b))));
+            }
+        });
+        for (int index : verifiedIdx) {
+            if (tryConnectCandidate(ranked, state, index, new AtomicBoolean(false), new AtomicBoolean(true), Long.MAX_VALUE)) {
+                return true;
+            }
+        }
+        FileLog.d("SilentProxy: K6b watcher: no verified proxy to abandon to");
         return false;
     }
 }

@@ -1299,6 +1299,8 @@ public class ChatActivity extends BaseFragment implements
     public final static int OPTION_SILENT_FORWARD_ACCOUNT = 206;
     public final static int OPTION_SILENT_REMIND_ME = 207;
     public final static int OPTION_SILENT_TRANSCRIBE = 208;
+    // SilentGram K13: save a post as a Quick Reply Template.
+    public final static int OPTION_SILENT_ADD_TEMPLATE = 209;
 
     public final static int OPTION_SUGGESTION_EDIT_PRICE = 111;
     public final static int OPTION_SUGGESTION_EDIT_TIME = 112;
@@ -10183,9 +10185,10 @@ public class ChatActivity extends BaseFragment implements
 
     private boolean lastSidebarAttach;
     /**
-     * SilentGram E4: slash-trigger quick reply templates. Typing "/mywork"
-     * in the input pops a suggestion box above the input with the matching
-     * templates — tap one and its text is inserted.
+     * SilentGram E4 / K13: slash-trigger quick reply templates. Typing
+     * "/mywork" in the input pops a suggestion box above the input with
+     * the matching templates — tap one and the whole post (text + media)
+     * is SENT to this chat.
      */
     private android.widget.PopupWindow silentTemplatePopup;
 
@@ -10239,14 +10242,26 @@ public class ChatActivity extends BaseFragment implements
         layout.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
         for (org.telegram.messenger.SilentTemplates.Template t : matches) {
             TextView row = new TextView(context);
-            row.setText("/" + t.trigger);
+            String label = "/" + t.trigger;
+            if (t.hasMedia()) {
+                String mediaLabel = org.telegram.messenger.SilentTemplates.MEDIA_VIDEO.equals(t.mediaType)
+                        ? LocaleController.getString(R.string.SilentTemplateVideo)
+                        : org.telegram.messenger.SilentTemplates.MEDIA_PHOTO.equals(t.mediaType)
+                                ? LocaleController.getString(R.string.SilentTemplatePhoto)
+                                : LocaleController.getString(R.string.SilentTemplateFile);
+                label += " [" + mediaLabel + "]";
+            }
+            if (t.text != null && !t.text.isEmpty()) {
+                String preview = t.text.length() > 60 ? t.text.substring(0, 60) + "…" : t.text;
+                label += " — " + preview;
+            }
+            row.setText(label);
             row.setTextSize(15);
             row.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
             row.setPadding(AndroidUtilities.dp(16), AndroidUtilities.dp(12), AndroidUtilities.dp(16), AndroidUtilities.dp(12));
-            row.setOnClickListener(v -> {
-                dismissSilentTemplatePopup();
-                chatActivityEnterView.setFieldText(t.text);
-            });
+            // K13 (d): tapping the suggestion SENDS the post (with media),
+            // it no longer just inserts the text.
+            row.setOnClickListener(v -> sendSilentTemplate(t));
             layout.addView(row);
         }
         silentTemplatePopup = new android.widget.PopupWindow(layout,
@@ -10260,6 +10275,139 @@ public class ChatActivity extends BaseFragment implements
                 android.view.View.MeasureSpec.makeMeasureSpec(0, android.view.View.MeasureSpec.UNSPECIFIED));
         int popupHeight = layout.getMeasuredHeight();
         silentTemplatePopup.showAsDropDown(chatActivityEnterView, 0, -(chatActivityEnterView.getHeight() + popupHeight));
+    }
+
+    /**
+     * SilentGram K13 (d): tapping a template suggestion SENDS the whole
+     * post (text + media) to this chat. The "/trigger" text is cleared
+     * first. Text-only templates send as a plain message; photo / video /
+     * file templates send the stored media with the text as caption.
+     */
+    private void sendSilentTemplate(org.telegram.messenger.SilentTemplates.Template t) {
+        dismissSilentTemplatePopup();
+        if (t == null || chatActivityEnterView == null) {
+            return;
+        }
+        chatActivityEnterView.setFieldText("");
+        String caption = t.text != null && !t.text.isEmpty() ? t.text : null;
+        java.io.File mediaFile = null;
+        if (t.hasMedia() && getParentActivity() != null) {
+            mediaFile = org.telegram.messenger.SilentTemplates.resolveMediaFile(getParentActivity(), t);
+        }
+        if (mediaFile != null && org.telegram.messenger.SilentTemplates.MEDIA_PHOTO.equals(t.mediaType)) {
+            SendMessagesHelper.prepareSendingPhoto(getAccountInstance(), mediaFile.getAbsolutePath(), null, dialog_id, null, getThreadMessage(), null, caption, null, null, null, 0, null, true, 0, chatMode, getMessageChatSendParams());
+            return;
+        }
+        if (mediaFile != null && org.telegram.messenger.SilentTemplates.MEDIA_VIDEO.equals(t.mediaType)) {
+            SendMessagesHelper.prepareSendingVideo(getAccountInstance(), mediaFile.getAbsolutePath(), null, null, null, dialog_id, null, getThreadMessage(), null, null, null, 0, null, true, 0, 0, false, false, caption, getMessageChatSendParams(), 0, 0, getSendMonoForumPeerId(), getSendMessageSuggestionParams());
+            return;
+        }
+        if (mediaFile != null && org.telegram.messenger.SilentTemplates.MEDIA_DOCUMENT.equals(t.mediaType)) {
+            String mime = t.mediaMime != null && !t.mediaMime.isEmpty() ? t.mediaMime : "application/octet-stream";
+            SendMessagesHelper.prepareSendingDocument(getAccountInstance(), mediaFile.getAbsolutePath(), mediaFile.getAbsolutePath(), null, caption, mime, dialog_id, null, getThreadMessage(), null, null, null, true, 0, null, getMessageChatSendParams(), false);
+            return;
+        }
+        if (t.hasMedia()) {
+            // Media was expected but is not on the device yet (still
+            // downloading) — send the text and say so.
+            BulletinFactory.of(this).createSimpleBulletin(R.drawable.msg_saved, LocaleController.getString(R.string.SilentTemplateMediaMissing)).show();
+        }
+        if (caption != null) {
+            getSendMessagesHelper().sendMessage(SendMessagesHelper.SendMessageParams.of(caption, dialog_id, replyingMessageObject, getThreadMessage(), null, false, null, null, null, true, 0, 0, null, false));
+        }
+    }
+
+    /** K13 (c): pick/enter the trigger, then save the post as a template. */
+    private void showSilentTemplateTriggerPicker(final MessageObject message) {
+        Context context = getParentActivity();
+        if (context == null || message == null) {
+            return;
+        }
+        LinearLayout layout = new LinearLayout(context);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(AndroidUtilities.dp(24), AndroidUtilities.dp(8), AndroidUtilities.dp(24), AndroidUtilities.dp(8));
+        final EditText triggerField = new EditText(context);
+        triggerField.setHint(LocaleController.getString(R.string.SilentTemplateTriggerHint));
+        triggerField.setSingleLine(true);
+        layout.addView(triggerField, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
+        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        builder.setTitle(LocaleController.getString(R.string.SilentAddToTemplate));
+        builder.setView(layout);
+        builder.setPositiveButton(LocaleController.getString(R.string.Save), (d, w) -> {
+            String trigger = triggerField.getText().toString().trim().replaceAll("^/+", "");
+            if (!trigger.isEmpty()) {
+                saveSilentTemplateFromMessage(message, trigger);
+            }
+        });
+        builder.setNegativeButton(LocaleController.getString(R.string.Cancel), null);
+        builder.show();
+    }
+
+    /**
+     * K13 (c): save a channel/chat post (text + media) as a template.
+     * The media file is copied into the app-private template store when
+     * it is already downloaded; when it is not downloaded yet, the
+     * expected cache path is remembered and the download is started, so
+     * a later send can still pick the media up.
+     */
+    private void saveSilentTemplateFromMessage(MessageObject message, String trigger) {
+        if (message == null || message.messageOwner == null || trigger == null || trigger.isEmpty()) {
+            return;
+        }
+        String text = message.messageOwner.message;
+        if (text == null) {
+            text = "";
+        }
+        String mediaType = "";
+        String mediaName = "";
+        String mediaMime = "";
+        String mediaFile = "";
+        String mediaCache = "";
+        try {
+            TLRPC.Document document = message.getDocument();
+            if (message.isPhoto()) {
+                mediaType = org.telegram.messenger.SilentTemplates.MEDIA_PHOTO;
+            } else if (message.isVideo()) {
+                mediaType = org.telegram.messenger.SilentTemplates.MEDIA_VIDEO;
+            } else if (document != null) {
+                mediaType = org.telegram.messenger.SilentTemplates.MEDIA_DOCUMENT;
+                mediaMime = document.mime_type == null ? "" : document.mime_type;
+            }
+            if (!mediaType.isEmpty()) {
+                mediaName = message.getFileName();
+                if (mediaName == null) {
+                    mediaName = "";
+                }
+                File local = FileLoader.getInstance(currentAccount).getPathToMessage(message.messageOwner);
+                if (local != null && local.exists() && getParentActivity() != null) {
+                    File stored = org.telegram.messenger.SilentTemplates.copyMediaIntoStore(getParentActivity(), local, mediaName);
+                    if (stored != null) {
+                        mediaFile = stored.getName();
+                    }
+                } else {
+                    // Not downloaded yet: remember where it will land and
+                    // start the download, so a later send can pick it up.
+                    if (local != null) {
+                        mediaCache = local.getAbsolutePath();
+                    }
+                    if (document != null) {
+                        FileLoader.getInstance(currentAccount).loadFile(document, message, FileLoader.PRIORITY_HIGH, 0);
+                    } else if (message.isPhoto() && message.messageOwner.media instanceof TLRPC.TL_messageMediaPhoto) {
+                        TLRPC.PhotoSize size = FileLoader.getClosestPhotoSizeWithSize(message.photoThumbs, AndroidUtilities.getPhotoSize());
+                        if (size != null) {
+                            FileLoader.getInstance(currentAccount).loadFile(ImageLocation.getForMessage(size, message.messageOwner), message, "jpg", FileLoader.PRIORITY_HIGH, 0);
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // Media lookup must never block saving the text.
+            mediaType = "";
+            mediaFile = "";
+            mediaCache = "";
+        }
+        org.telegram.messenger.SilentTemplates.addTemplate(trigger, text, mediaType, mediaFile, mediaName, mediaMime, mediaCache);
+        BulletinFactory.of(this).createSimpleBulletin(R.drawable.msg_saved, LocaleController.getString(R.string.SilentTemplateSaved)).show();
     }
 
     /**
@@ -27620,17 +27768,23 @@ public class ChatActivity extends BaseFragment implements
         return true;
     }
 
-    // Swap the displayed text to a small delete icon + the ORIGINAL message
-    // text (MessageObject.applyNewText — the same call Telegram's own
-    // translation uses). Per the user's spec the deleted message stays
-    // standing showing its original text with only a delete icon next to
-    // it — the text is NOT replaced by a placeholder. The original text is
-    // also safe: the E7 hook in didReceivedNotification already saved it
-    // to Recent Deleted Chats before this runs. The cell hides the name/time
-    // for deleted messages itself (ChatMessageCell), and long-press is
-    // blocked (didLongPress below), so a tombstone can never be copied,
-    // forwarded or replied to. If the original text is somehow empty, fall
-    // back to the "This message was deleted" placeholder.
+    // Keep the ORIGINAL message text standing (MessageObject.applyNewText —
+    // the same call Telegram's own translation uses). Per the user's spec
+    // the deleted message stays showing its original text — the text is
+    // NOT replaced by a placeholder. The original text is also safe: the
+    // E7 hook in didReceivedNotification already saved it to Recent Deleted
+    // Chats before this runs. Long-press is blocked (didLongPress below),
+    // so a tombstone can never be copied, forwarded or replied to. If the
+    // original text is somehow empty, fall back to the "This message was
+    // deleted" placeholder.
+    //
+    // SilentGram K11: the delete mark is NO LONGER an icon span at the
+    // start of the text. The 16dp span changed the first/last line widths
+    // the cell's inline-time reservation is computed from, so the time
+    // could land on top of the text. The mark is now drawn by the cell
+    // itself — small and red, immediately left of the time
+    // (ChatMessageCell.drawSilentTombstoneIcon) — and the time is forced
+    // onto its own line below the text, so the two can never clash.
     private void silentApplyDeletedTombstone(MessageObject obj) {
         obj.silentTombstone = true;
         CharSequence original = obj.messageText != null && obj.messageText.length() > 0
@@ -27639,13 +27793,9 @@ public class ChatActivity extends BaseFragment implements
         if (original == null || original.length() == 0) {
             original = getString(R.string.SilentDeletedMessage);
         }
-        android.text.SpannableStringBuilder ssb = new android.text.SpannableStringBuilder("* ");
-        ssb.append(original); // append (not "* " + original) so the original
-        // text keeps its spans (bold, links, ...).
-        org.telegram.ui.Components.ColoredImageSpan icon = new org.telegram.ui.Components.ColoredImageSpan(R.drawable.msg_delete);
-        icon.setSize(AndroidUtilities.dp(16));
-        icon.setColorKey(obj.isOutOwner() ? Theme.key_chat_messageTextOut : Theme.key_chat_messageTextIn);
-        ssb.setSpan(icon, 0, 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        // Copy into a fresh builder so the original text keeps its spans
+        // (bold, links, ...).
+        android.text.SpannableStringBuilder ssb = new android.text.SpannableStringBuilder(original);
         obj.applyNewText(ssb);
     }
 
@@ -27655,14 +27805,17 @@ public class ChatActivity extends BaseFragment implements
     // the deleted text + arrival time locally (SilentMessageHistory, prefs
     // msg_history_<dialogId>). When a chat loads, messages from that local
     // store that are no longer in the DB are rendered back in place as
-    // LOCAL-ONLY tombstones: the delete icon + the ORIGINAL text, with the
+    // LOCAL-ONLY tombstones: the ORIGINAL text, with a small red no-entry
+    // mark left of the time (K11, drawn by the cell), and with the
     // ORIGINAL arrival time (the cell draws the time from messageOwner.date,
     // exactly like a real message). They are never written to the DB, never
     // sent anywhere, and never counted as real messages. Only plain-text
     // deletions we actually saw before they were deleted can come back (a
     // message never displayed was never cached); tombstones only appear
     // inside the currently loaded date/id window, so pagination bounds stay
-    // exact. The merge loop below places them exactly like real messages
+    // exact — except a deleted message newer than every surviving message,
+    // which belongs at the newest end (K11 gate below). The merge loop below
+    // places them exactly like real messages
     // (date objects, day arrays, stable ids included).
     //
     // SilentGram I14: this restore is deliberately RE-RUNNABLE on every
@@ -27725,6 +27878,31 @@ public class ChatActivity extends BaseFragment implements
         if (minId == Integer.MAX_VALUE || windowMinDate == Integer.MAX_VALUE) {
             return;
         }
+        // SilentGram K11: THE hole I14 did not close. The window above is
+        // built from LOADED REAL messages only, so a deleted message NEWER
+        // than every surviving message — the usual case, deleting the last
+        // message in the chat — has an id above maxId and a date above
+        // windowMaxDate and was skipped on EVERY re-entry, even though its
+        // history entry is intact (nothing clears msg_history_<dialogId>
+        // on re-entry; only the History viewer's own Clear button does).
+        // No later pagination load ever widens the window upward (forward
+        // loads stop at forwardEndReached), so it never came back — which
+        // is exactly the reported "vanishes on back + reopen". Allow such
+        // an entry when it is provably newer than everything that
+        // survives: this load reaches the newest end (forwardEndReached is
+        // still true for a plain initial load, and is cleared before this
+        // point for anchored/jump loads), or the dialog's top_message says
+        // no surviving message is newer. Its sorted insert position is
+        // then the newest row, which is exactly right.
+        boolean silentAtNewestEnd = forwardEndReached[loadIndex];
+        int silentTopMessage = -1;
+        try {
+            TLRPC.Dialog silentDialog = getMessagesController().dialogs_dict.get(dialog_id);
+            if (silentDialog != null) {
+                silentTopMessage = silentDialog.top_message;
+            }
+        } catch (Exception ignored) {
+        }
         // messArr order, detected from its own first/last elements.
         boolean descending = true;
         if (messArr.size() >= 2) {
@@ -27747,11 +27925,16 @@ public class ChatActivity extends BaseFragment implements
             if (messagesDict[loadIndex].indexOfKey(e.msgId) >= 0) {
                 continue;
             }
+            // SilentGram K11: a beyond-newest entry (see above) skips only
+            // the UPPER bounds — the lower bounds still hold, so a
+            // tombstone for an old message is still restored by scrolling
+            // up to it, never by landing in the wrong window.
+            boolean silentBeyondNewest = e.msgId > maxId && (silentAtNewestEnd || (silentTopMessage > 0 && e.msgId > silentTopMessage));
             int date = (int) (e.time / 1000);
-            if (date < windowMinDate || date > windowMaxDate) {
+            if (date < windowMinDate || (!silentBeyondNewest && date > windowMaxDate)) {
                 continue;
             }
-            if (e.msgId < minId || e.msgId > maxId) {
+            if (e.msgId < minId || (!silentBeyondNewest && e.msgId > maxId)) {
                 continue;
             }
             MessageObject tomb = silentBuildDeletedTombstone(e, date);
@@ -35221,6 +35404,13 @@ public class ChatActivity extends BaseFragment implements
                 // SilentGram F8: voice message to text.
                 if (selectedObject != null) {
                     org.telegram.messenger.SilentVoiceTranscribe.transcribe(getParentActivity(), currentAccount, selectedObject);
+                }
+                break;
+            }
+            case OPTION_SILENT_ADD_TEMPLATE: {
+                // SilentGram K13: save this post as a Quick Reply Template.
+                if (selectedObject != null) {
+                    showSilentTemplateTriggerPicker(selectedObject);
                 }
                 break;
             }
@@ -47855,6 +48045,15 @@ public class ChatActivity extends BaseFragment implements
                         options.add(OPTION_SILENT_TRANSCRIBE);
                         icons.add(R.drawable.input_mic);
                     }
+                }
+                // SilentGram K13: save ANY post as a Quick Reply Template.
+                // Outside the canForward block on purpose: it must show
+                // even on channel posts with forwarding disabled.
+                if (selectedObject != null && selectedObject.messageOwner != null
+                        && selectedObject.messageOwner.action == null && !selectedObject.isSponsored()) {
+                    items.add(LocaleController.getString(R.string.SilentAddToTemplate));
+                    options.add(OPTION_SILENT_ADD_TEMPLATE);
+                    icons.add(R.drawable.msg_saved);
                 }
                 if (allowUnpin) {
                     items.add(LocaleController.getString(R.string.UnpinMessage));

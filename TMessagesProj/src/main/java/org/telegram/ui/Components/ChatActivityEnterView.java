@@ -596,8 +596,10 @@ public class ChatActivityEnterView extends FrameLayout implements
     private Runnable updateSlowModeRunnable;
     private SendButtonBlockedByTypingView sendButtonBlockedByTypingView;
     private SendButton sendButton;
-    // SilentGram G23/I12: small translate icon to the left of the attach
-    // button (a child of attachLayout, created next to attachButton).
+    // SilentGram G23/I12/K15: small translate icon to the left of the
+    // attach button. K15: it is a direct child of messageEditTextContainer
+    // (NOT of attachLayout — see updateSilentTranslateButton), so the
+    // send-state transition that hides attachLayout can never hide it.
     private ImageView silentTranslateButton;
     private int sendButtonBackgroundColor;
     public MessageSendPreview messageSendPreview;
@@ -2888,19 +2890,26 @@ public class ChatActivityEnterView extends FrameLayout implements
             attachButton.setContentDescription(getString(R.string.AccDescrAttachButton));
             updateFieldRight(1);
 
-            // SilentGram G23/I12: small translate icon immediately to the
-            // LEFT of the attach button, as a child of attachLayout (which
-            // sits directly left of attachButton). It used to live inside
-            // sendButtonContainer with a 48dp right margin — x [W-80, W-48]
-            // — which lands on top of the attach button [W-88, W-44]:
-            // sendButtonContainer is drawn above messageEditTextContainer,
-            // so while typing the icon swallowed the attach button's taps.
-            // Inside attachLayout it can never overlap the attach button
-            // (the layout grows leftwards), and updateFieldRight() reserves
-            // its width in the text field's right margin while it is
-            // visible, so typed text never runs underneath it either.
-            // Shows only while the input has text; taps translate the whole
-            // input text in place (same language list as SilentTranslate).
+            // SilentGram G23/I12/K15: small translate icon immediately to
+            // the LEFT of the attach button. K15 root cause: it used to be
+            // a child of attachLayout, and on every keystroke
+            // onTextChanged() first made it VISIBLE (via
+            // updateSilentTranslateButton) and then checkSendButton() hid
+            // its parent — the stock send-state transition fades
+            // attachLayout to alpha 0 and sets it GONE while text is
+            // present, and fades attachButton too. So the icon flashed
+            // for one frame and vanished with its parent, together with
+            // the paperclip. Fix: it is now a direct child of
+            // messageEditTextContainer (the same parent as attachButton),
+            // anchored BOTTOM|RIGHT with a 48dp right margin, i.e. in the
+            // slot immediately left of the attach button. It stays next
+            // to the attach icon when the attach icon is there, and stays
+            // in the same place when the attach cluster is hidden while
+            // typing — it can never vanish with attachLayout again.
+            // Shows only while the input has text (and not while editing
+            // a message — see updateSilentTranslateButton); taps translate
+            // the whole input text in place (same language list as
+            // SilentTranslate).
             silentTranslateButton = new ImageView(context);
             silentTranslateButton.setImageResource(R.drawable.msg_translate);
             silentTranslateButton.setScaleType(ImageView.ScaleType.CENTER);
@@ -2909,7 +2918,7 @@ public class ChatActivityEnterView extends FrameLayout implements
             ThemeBind.colorFilter(silentTranslateButton, Theme.key_glass_defaultIcon, resourcesProvider, PorterDuff.Mode.SRC_IN);
             ThemeBind.selectorBackground(silentTranslateButton, Theme.createSelectorDrawable(getThemedColor(Theme.key_listSelector)), null, ThemeBind.of(Theme.key_listSelector), resourcesProvider);
             silentTranslateButton.setOnClickListener(v -> translateInputText());
-            attachLayout.addView(silentTranslateButton, 0, LayoutHelper.createLinear(DEFAULT_HEIGHT, DEFAULT_HEIGHT));
+            messageEditTextContainer.addView(silentTranslateButton, LayoutHelper.createFrame(DEFAULT_HEIGHT, DEFAULT_HEIGHT, Gravity.BOTTOM | Gravity.RIGHT, 0, 0, DEFAULT_HEIGHT, 0));
         }
 
         aiButton = new ImageView(context);
@@ -8942,11 +8951,22 @@ public class ChatActivityEnterView extends FrameLayout implements
         if (doneButton != null && doneButton.getVisibility() == VISIBLE) {
             layoutParams.rightMargin = Math.max(layoutParams.rightMargin, Math.max(0, doneButton.width() - dp(DEFAULT_HEIGHT)));
         }
-        // SilentGram I12: the translate icon is a 44dp child of attachLayout
+        // SilentGram I12/K15: the translate icon is a 44dp button drawn
         // while it is visible — reserve its width in the text field, like
         // the other attachLayout extras above (+48dp per 44dp button).
+        // K15: the icon is a direct child of messageEditTextContainer at
+        // a 48dp right margin. When the attach cluster is shown it sits
+        // left of attachLayout, so +48dp on top of the base margin (which
+        // already covers the cluster) is right. When the cluster is
+        // hidden (attachVisible == 0, i.e. while typing) the base margin
+        // is only 2dp, so the text would run underneath the icon — reserve
+        // the full 98dp instead (48dp attach slot + 48dp icon + 2dp gap).
         if (silentTranslateButton != null && silentTranslateButton.getVisibility() == View.VISIBLE) {
-            layoutParams.rightMargin += dp(48);
+            if (attachVisible == 0) {
+                layoutParams.rightMargin = Math.max(layoutParams.rightMargin, dp(98));
+            } else {
+                layoutParams.rightMargin += dp(48);
+            }
         }
         if (oldRightMargin != layoutParams.rightMargin) {
             messageEditText.setLayoutParams(layoutParams);
@@ -10653,20 +10673,28 @@ public class ChatActivityEnterView extends FrameLayout implements
         }
     }
 
-    // SilentGram G23: the input-translate icon shows only while the input
-    // has text (called from the text watcher, so it tracks typing, pastes
-    // and programmatic sets alike).
+    // SilentGram G23/K15: the input-translate icon shows only while the
+    // input has text (called from the text watcher, so it tracks typing,
+    // pastes and programmatic sets alike). K15: it is a direct child of
+    // messageEditTextContainer now, so checkSendButton() hiding
+    // attachLayout while typing can no longer hide it — it stays visible
+    // for the whole time text is present. The one exception is message
+    // editing: checkSendButton() returns early then, so attachLayout
+    // stays visible (with e.g. the channel notify button as its
+    // rightmost child), and a fixed-position icon would land exactly on
+    // top of it — so the icon stays hidden while editing a message.
     private void updateSilentTranslateButton() {
         if (silentTranslateButton == null) {
             return;
         }
         boolean hasText = messageEditText != null && messageEditText.getText() != null
                 && messageEditText.getText().toString().trim().length() > 0;
-        int newVisibility = hasText ? View.VISIBLE : View.GONE;
+        int newVisibility = hasText && editingMessageObject == null ? View.VISIBLE : View.GONE;
         if (silentTranslateButton.getVisibility() != newVisibility) {
             silentTranslateButton.setVisibility(newVisibility);
-            // SilentGram I12: showing/hiding the icon changes attachLayout's
-            // width, so the text field's right margin must follow.
+            // SilentGram I12/K15: showing/hiding the icon changes how
+            // much of the text field's right side is covered, so the
+            // text field's right margin must follow.
             updateFieldRight(lastAttachVisible);
         }
     }

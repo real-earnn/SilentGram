@@ -87,6 +87,18 @@ public class AnimatedEmojiDrawable extends Drawable {
     public static final int CACHE_TYPE_ALERT_PREVIEW_LARGE_50 = 27;
     public static final int CACHE_TYPE_TOGGLEABLE_EDIT = 25;
     public static final int CACHE_TYPE_NOANIMATE_FOLDER = 26;
+    // SilentGram K14: private cache bucket for the chat-list header premium
+    // status emoji (DialogStoriesCell + DialogsActivity home title). Upstream
+    // caps CACHE_TYPE_EMOJI_STATUS at 2 repeats in updateAutoRepeat(), so the
+    // header emoji played twice and then froze; the user wants it looping
+    // continuously. This type renders exactly like EMOJI_STATUS (sizedp 34,
+    // same filter/thumb/attach paths) but deliberately has NO branch in
+    // updateAutoRepeat(), so its ImageReceiver keeps autoRepeat = 1 with
+    // autoRepeatCount = -1 (infinite loop). It also gets its own
+    // globalEmojiCache bucket, so every other screen keeps upstream's 2-play
+    // behaviour. Do NOT add this type to updateAutoRepeat()'s finite-count
+    // branches.
+    public static final int CACHE_TYPE_SILENTGRAM_HEADER_STATUS = 28;
 
     private static SparseArray<LongSparseArray<AnimatedEmojiDrawable>> globalEmojiCache;
 

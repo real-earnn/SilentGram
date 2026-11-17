@@ -73,7 +73,7 @@ public class SilentMultiAccountForward {
             }
         }
         if (accounts.isEmpty()) {
-            android.widget.Toast.makeText(fragment.getParentActivity(), LocaleController.getString(R.string.SilentForwardNoOtherAccount), android.widget.Toast.LENGTH_SHORT).show();
+            SilentToast.show(fragment.getParentActivity(), LocaleController.getString(R.string.SilentForwardNoOtherAccount), android.widget.Toast.LENGTH_SHORT);
             return;
         }
         Context context = fragment.getParentActivity();

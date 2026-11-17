@@ -15,6 +15,7 @@ import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
 import org.telegram.messenger.UserConfig;
+import org.telegram.messenger.SilentToast;
 import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.ActionBar;
@@ -247,7 +248,7 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
             req.banned_rights = rights;
             ConnectionsManager.getInstance(currentAccount).sendRequest(req, (res, err) -> {
                 if (err != null) {
-                    AndroidUtilities.runOnUIThread(() -> android.widget.Toast.makeText(getParentActivity(), err.text, android.widget.Toast.LENGTH_SHORT).show());
+                    AndroidUtilities.runOnUIThread(() -> SilentToast.show(getParentActivity(), err.text, android.widget.Toast.LENGTH_SHORT).show());
                 }
             });
         } else {
@@ -257,7 +258,7 @@ public class SilentMemberChatsActivity extends BaseFragment implements Notificat
             req.user_id = mc.getInputUser(userId);
             ConnectionsManager.getInstance(currentAccount).sendRequest(req, (res, err) -> {
                 if (err != null) {
-                    AndroidUtilities.runOnUIThread(() -> android.widget.Toast.makeText(getParentActivity(), err.text, android.widget.Toast.LENGTH_SHORT).show());
+                    AndroidUtilities.runOnUIThread(() -> SilentToast.show(getParentActivity(), err.text, android.widget.Toast.LENGTH_SHORT).show());
                 }
             });
         }

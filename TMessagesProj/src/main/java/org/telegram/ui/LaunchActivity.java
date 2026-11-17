@@ -8495,7 +8495,8 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             title = "Connecting";
             titleId = R.string.Connecting;
         }
-        if (currentConnectionState == ConnectionsManager.ConnectionStateConnecting || currentConnectionState == ConnectionsManager.ConnectionStateConnectingToProxy) {
+        // SilentGram: tapping the header while connecting to the proxy must NOT open the proxy page.
+        if (currentConnectionState == ConnectionsManager.ConnectionStateConnecting) {
             action = () -> {
                 BaseFragment lastFragment = null;
                 if (AndroidUtilities.isTablet()) {
