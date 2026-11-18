@@ -287,6 +287,14 @@ public class ChatAvatarContainer extends FrameLayout implements FactorAnimator.T
         titleTextView.setCanHideRightDrawable(false);
         titleTextView.setRightDrawableOutside(true);
         titleTextView.setPadding(0, dp(6), 0, dp(12));
+        // SilentGram: long-press the chat title (channel/group/user name) to copy it. Single press still opens the profile.
+        titleTextView.setOnLongClickListener(v -> {
+            CharSequence name = titleTextView.getText();
+            if (name != null && name.length() > 0 && AndroidUtilities.addToClipboard(name) && parentFragment != null) {
+                BulletinFactory.of(parentFragment).createCopyBulletin(getString(R.string.TextCopied)).show();
+            }
+            return true;
+        });
         addView(titleTextView);
 
         if (useAnimatedSubtitle()) {

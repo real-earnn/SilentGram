@@ -5543,6 +5543,14 @@ public class ProfileActivity extends BaseFragment implements NotificationCenter.
         nameTextView.setScrollNonFitText(true);
         nameTextView.setFocusable(true);
         nameTextView.setEllipsizeByGradient(true);
+        // SilentGram: long-press the profile name to copy it.
+        nameTextView.setOnLongClickListener(v -> {
+            CharSequence name = nameTextView.getText();
+            if (name != null && name.length() > 0 && AndroidUtilities.addToClipboard(name)) {
+                BulletinFactory.of(ProfileActivity.this).createCopyBulletin(LocaleController.getString(R.string.TextCopied)).show();
+            }
+            return true;
+        });
         avatarContainer2.addView(nameTextView, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT, Gravity.LEFT | Gravity.TOP, 109, -6, 0, 0));
 
         onlineTextView = new AnimatedClickableSmallTextView(context) {
