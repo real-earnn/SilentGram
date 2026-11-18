@@ -28,6 +28,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -122,6 +123,16 @@ public class SilentProxyManager {
     // live proxy, probes them, and keeps only the top 10 (see MAX_PROXIES).
     private static final String API_LIVE_URL = "https://silentgram-proxy.silenthost.site/api/live?limit=1000";
     private static final String API_URL = "https://silentgram-proxy.silenthost.site/api/proxies";
+    // SilentGram T: OUR OWN MTProto proxy (VPS, mtg, port 443, Fake-TLS).
+    // Always live — verified in milliseconds on Telegram Web, official
+    // Telegram mobile and SilentGram — so it is the first-connect on
+    // every app open, and the fallback when nothing else works. If even
+    // this proxy fails, the user's own internet is the problem, not any
+    // proxy. Hardcoded by design (like the api_id in BuildVars): the app
+    // ships it, so it is public to anyone with the app.
+    private static final String OWN_PROXY_HOST = "161.118.196.94";
+    private static final int OWN_PROXY_PORT = 443;
+    private static final String OWN_PROXY_SECRET = "ee56b74aeebb050ff4c915539d4cba50d9676f6f676c652e636f6d";
     // Refresh the list every 1 hour (the API itself refreshes every 1 hour).
     private static final long REFRESH_INTERVAL_MS = 60 * 60 * 1000L;
     // A proxy must answer a TCP connect within this time to count as live.
@@ -184,6 +195,42 @@ public class SilentProxyManager {
 
     private static String proxyKey(ProxySettings settings) {
         return settings.getAddress() + ":" + settings.getPort();
+    }
+
+    /** "address:port" of OUR OWN proxy (see OWN_PROXY_* above). */
+    private static String ownProxyKey() {
+        return OWN_PROXY_HOST + ":" + OWN_PROXY_PORT;
+    }
+
+    private static boolean isOwnProxyKey(String key) {
+        return ownProxyKey().equals(key);
+    }
+
+    private static boolean isOwnProxy(SharedConfig.ProxyInfo info) {
+        return info != null && isOwnProxyKey(proxyKey(info));
+    }
+
+    /**
+     * Our proxy as a ProxyInfo — the saved one if it is already in the
+     * list (keeps its ping/available state), else a new in-memory one
+     * (saved later only if it makes the keep set — see
+     * pruneManagedToTop). Built exactly like the fetched ones.
+     */
+    private static SharedConfig.ProxyInfo ownProxyInfo() {
+        for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
+            if (isOwnProxy(info)) {
+                return info;
+            }
+        }
+        ProxySettings settings = ProxySettings.builder()
+                .setType(ProxySettings.Type.MTPROTO)
+                .setAddress(OWN_PROXY_HOST)
+                .setPort(OWN_PROXY_PORT)
+                .setSecret(OWN_PROXY_SECRET)
+                .setUser("")
+                .setPassword("")
+                .build();
+        return new SharedConfig.ProxyInfo(settings);
     }
 
     /** Latency used for RANKING: API latency_ms if present, else the app's own probe RTT, else "unknown" (sorts last). */
@@ -314,11 +361,71 @@ public class SilentProxyManager {
         // App config (verified channels + sponsored row) from the same API.
         SilentConfig.loadCached();
         SilentConfig.refreshAsync();
-        // If a proxy was already saved from a previous run, it is applied by
-        // ConnectionsManager on startup — just refresh the list in background.
-        refreshAsync();
+        // SilentGram T: fast open — connect to OUR proxy first (always
+        // live), then the last-connected proxy and the saved top 10.
+        // The API is NOT hit on every open; it is fetched only when the
+        // saved proxies are mostly dead (see the open-round hook in
+        // probeAndConnect). The hourly freshness refresh still runs
+        // while the app stays open, starting one hour after open.
+        fastOpenRound();
         startDownloadWatchdog();
         startProxyWatcher();
+        AndroidUtilities.runOnUIThread(SilentProxyManager::refreshAsync, REFRESH_INTERVAL_MS);
+    }
+
+    /**
+     * SilentGram T: the open round. Connect to OUR proxy FIRST (it is
+     * always live — no probe to wait for), then probe the
+     * last-connected proxy and the saved top 10 in the background and
+     * let the gate switch to the fastest verified one. No API fetch
+     * here: on every open the app uses what it already has (ours +
+     * last-connected + saved top 10); the API is hit only when this
+     * round finds too few live saved proxies.
+     */
+    private static void fastOpenRound() {
+        SharedConfig.loadProxyList();
+        SharedConfig.ProxyInfo own = ownProxyInfo();
+        // First-connect: ours, right now. It is our own server and it is
+        // always live (verified in milliseconds on three clients), so
+        // there is no probe to wait for. If the user's internet is down,
+        // this simply does not connect — and our proxy failing is the
+        // signal that the user's own net is the problem, not any proxy.
+        try {
+            enableProxy(own, -1);
+        } catch (Throwable e) {
+            FileLog.e(e);
+        }
+        // Background round: ours + the last-connected proxy + the saved
+        // managed proxies. The gate (already-connected mode) switches to
+        // the fastest verified proxy once the round resolves.
+        ArrayList<SharedConfig.ProxyInfo> candidates = new ArrayList<>();
+        candidates.add(own);
+        SharedConfig.ProxyInfo current = SharedConfig.currentProxy;
+        if (current != null && !sameProxy(current, own)) {
+            candidates.add(current);
+        }
+        SharedPreferences prefs = ApplicationLoader.applicationContext
+                .getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
+        HashSet<String> managed = new HashSet<>();
+        String savedManaged = prefs.getString("managed_proxies", "");
+        if (savedManaged != null && !savedManaged.isEmpty()) {
+            for (String k : savedManaged.split(",")) {
+                if (!k.isEmpty()) managed.add(k);
+            }
+        }
+        HashSet<String> seen = new HashSet<>();
+        seen.add(proxyKey(own));
+        if (current != null) {
+            seen.add(proxyKey(current));
+        }
+        for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
+            String key = proxyKey(info);
+            if (managed.contains(key) && seen.add(key)) {
+                candidates.add(info);
+            }
+        }
+        lastCandidates = new ArrayList<>(candidates);
+        probeAndConnect(candidates, false, true);
     }
 
     /** Fetch the list from our API and apply the best proxy. Runs off the UI thread. */
@@ -514,7 +621,7 @@ public class SilentProxyManager {
         mainPrefs.edit().putBoolean("proxyRotationEnabled", false).apply();
 
         lastCandidates = new ArrayList<>(candidates);
-        probeAndConnect(candidates, false);
+        probeAndConnect(candidates, false, false);
     }
 
     /**
@@ -530,7 +637,7 @@ public class SilentProxyManager {
      * through to the next one, and a proxy the download watchdog blocked
      * is skipped the same way.
      */
-    private static void probeAndConnect(List<SharedConfig.ProxyInfo> candidates, boolean watcherRound) {
+    private static void probeAndConnect(List<SharedConfig.ProxyInfo> candidates, boolean watcherRound, boolean openRound) {
         // One probe round at a time: the hourly fetch round and the
         // watcher round share the latency maps and the gate, so a second
         // round starting mid-round would corrupt both decisions. The
@@ -582,24 +689,29 @@ public class SilentProxyManager {
         final long activeLatency = currentLatencyMs.get();
         CountDownLatch done = new CountDownLatch(n);
         ExecutorService pool = Executors.newFixedThreadPool(PROBE_THREADS);
-        // SilentGram S: submit the CURRENT proxy's probe first — the gate
-        // needs to know quickly whether it is dead (so it can switch right
+        // SilentGram T: submit OUR proxy's probe first (it is the
+        // first-connect), then the CURRENT proxy's — the gate needs to
+        // know quickly whether each is dead (so it can switch right
         // away) or alive. The ranked order (gate scan order) is unchanged.
         ArrayList<Integer> submitOrder = new ArrayList<>();
+        int ownIdx = -1;
         int curIdx = -1;
-        if (current != null) {
-            for (int i = 0; i < n; i++) {
-                if (sameProxy(ranked.get(i), current)) {
-                    curIdx = i;
-                    break;
-                }
+        for (int i = 0; i < n; i++) {
+            if (isOwnProxy(ranked.get(i))) {
+                ownIdx = i;
+            }
+            if (current != null && sameProxy(ranked.get(i), current)) {
+                curIdx = i;
             }
         }
-        if (curIdx >= 0) {
+        if (ownIdx >= 0) {
+            submitOrder.add(ownIdx);
+        }
+        if (curIdx >= 0 && curIdx != ownIdx) {
             submitOrder.add(curIdx);
         }
         for (int i = 0; i < n; i++) {
-            if (i != curIdx) {
+            if (i != curIdx && i != ownIdx) {
                 submitOrder.add(i);
             }
         }
@@ -687,6 +799,9 @@ public class SilentProxyManager {
         // Await long enough for every wave (hundreds of candidates now,
         // 10 threads, ~8s handshake check each — a full round usually
         // lands inside this budget since most handshakes are fast).
+        // SilentGram T: how many proxies verified live in this round
+        // (for the open-round API-fetch decision below).
+        final AtomicInteger openVerifiedLive = new AtomicInteger(0);
         new Thread(() -> {
             try {
                 try {
@@ -712,6 +827,15 @@ public class SilentProxyManager {
                 if (watcherRound) {
                     noteWatcherRound(ranked, state);
                 }
+                if (openRound) {
+                    int live = 0;
+                    for (int i = 0; i < ranked.size(); i++) {
+                        if (state[i] == 1) {
+                            live++;
+                        }
+                    }
+                    openVerifiedLive.set(live);
+                }
                 SharedConfig.ProxyInfo best = bestInfo.get();
                 if (best != null) {
                     FileLog.d("SilentProxy: fastest proxy " + best.settings.getAddress() + ":" + best.settings.getPort() + " (" + bestLatencyMs.get() + "ms probe, " + knownLatencyMs(proxyKey(best)) + "ms effective)");
@@ -720,6 +844,16 @@ public class SilentProxyManager {
                 }
             } finally {
                 roundRunning.set(false);
+            }
+            // SilentGram T: open round — if too few saved proxies
+            // verified live, the saved list is stale; fetch today's
+            // list from the API now. This is the ONLY API hit on open,
+            // and only when needed. It runs after roundRunning is
+            // cleared, so the fetch round is not skipped as "already
+            // running".
+            if (openRound && openVerifiedLive.get() < 3) {
+                FileLog.d("SilentProxy: T open round found only " + openVerifiedLive.get() + " live saved proxies — fetching fresh list from API");
+                refreshAsync();
             }
         }, "silent-proxy-probe-wait").start();
     }
@@ -762,15 +896,16 @@ public class SilentProxyManager {
             }
         }
         // Never remove the active proxy — deleting it would disable the
-        // proxy entirely (SharedConfig.deleteProxy) — and never touch
-        // proxies the user added by hand.
+        // proxy entirely (SharedConfig.deleteProxy) — never our own proxy
+        // (first-connect + fallback), and never touch proxies the user
+        // added by hand.
         String activeKey = SharedConfig.currentProxy != null
                 ? SharedConfig.currentProxy.settings.getAddress() + ":" + SharedConfig.currentProxy.settings.getPort()
                 : null;
         boolean changed = false;
         for (SharedConfig.ProxyInfo info : deadInfos) {
             String key = proxyKey(info);
-            if (key.equals(activeKey) || !managed.contains(key)) {
+            if (key.equals(activeKey) || !managed.contains(key) || isOwnProxyKey(key)) {
                 continue;
             }
             SharedConfig.deleteProxy(info);
@@ -835,6 +970,26 @@ public class SilentProxyManager {
         for (int i = 0; i < verified.size() && i < MAX_PROXIES; i++) {
             keep.add(proxyKey(verified.get(i)));
         }
+        // SilentGram T: OUR proxy is always kept (first-connect +
+        // fallback). It counts as one of the MAX_PROXIES, so the total
+        // stays at 10: if it verified but is not in the top 10, swap it
+        // in for the slowest kept proxy.
+        String ownKey = ownProxyKey();
+        if (!keep.contains(ownKey)) {
+            boolean ownVerified = false;
+            for (SharedConfig.ProxyInfo info : verified) {
+                if (isOwnProxy(info)) {
+                    ownVerified = true;
+                    break;
+                }
+            }
+            if (ownVerified) {
+                if (keep.size() >= MAX_PROXIES && verified.size() >= MAX_PROXIES) {
+                    keep.remove(proxyKey(verified.get(MAX_PROXIES - 1)));
+                }
+                keep.add(ownKey);
+            }
+        }
         SharedPreferences prefs = ApplicationLoader.applicationContext
                 .getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
         HashSet<String> managed = new HashSet<>();
@@ -866,12 +1021,13 @@ public class SilentProxyManager {
             }
         }
         // Delete managed proxies outside the top 10 — never the active
-        // one, and never one still probing (its verdict is not in yet).
+        // one, never our own proxy (first-connect + fallback), and never
+        // one still probing (its verdict is not in yet).
         ArrayList<SharedConfig.ProxyInfo> toRemove = new ArrayList<>();
         for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
             String key = proxyKey(info);
             if (managed.contains(key) && !keep.contains(key) && !key.equals(activeKey)
-                    && !pendingKeys.contains(key)) {
+                    && !pendingKeys.contains(key) && !isOwnProxyKey(key)) {
                 toRemove.add(info);
             }
         }
@@ -1387,7 +1543,7 @@ public class SilentProxyManager {
             if (trimmed.size() > WATCHER_MAX_CANDIDATES) {
                 trimmed = new ArrayList<>(trimmed.subList(0, WATCHER_MAX_CANDIDATES));
             }
-            probeAndConnect(trimmed, true);
+            probeAndConnect(trimmed, true, false);
         } catch (Throwable e) {
             FileLog.e(e);
         }
