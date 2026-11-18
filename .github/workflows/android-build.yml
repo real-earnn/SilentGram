@@ -141,16 +141,26 @@ jobs:
             --ks-pass "pass:$KS_STORE_PASS" --key-pass "pass:$KS_KEY_PASS" \
             --out /tmp/SilentGram-release.apk /tmp/SilentGram-aligned.apk
           "$BUILD_TOOLS/apksigner" verify /tmp/SilentGram-release.apk
-          # Sign the AAB with apksigner (NOT jarsigner): Gradle's bundleRelease
-          # already signed the AAB with Telegram's cert, and jarsigner ADDS a
-          # second signature instead of replacing it — Play rejects the bundle
-          # ("more than 1 certificate chain"). apksigner strips all existing
-          # signatures first, so the AAB ends up with exactly one chain: ours.
-          "$BUILD_TOOLS/apksigner" sign --ks "$KS" \
-            --ks-key-alias "$KS_ALIAS" \
-            --ks-pass "pass:$KS_STORE_PASS" --key-pass "pass:$KS_KEY_PASS" \
-            --out /tmp/SilentGram-release.aab "$AAB"
-          "$BUILD_TOOLS/apksigner" verify /tmp/SilentGram-release.aab
+          # Sign the AAB with jarsigner (NOT apksigner: apksigner only signs
+          # APKs — it fails on an AAB with "Missing AndroidManifest.xml",
+          # which is exactly how Batch O (v2.0.7) failed after a 48-min build).
+          # Gradle's bundleRelease already signed the AAB with Telegram's
+          # cert, and jarsigner ADDS a signature instead of replacing it, so
+          # strip the old signature first — otherwise Play rejects the bundle
+          # ("more than 1 certificate chain", as v2.0.6 was).
+          zip -d "$AAB" "META-INF/*" || true
+          jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 \
+            -keystore "$KS" -storepass "$KS_STORE_PASS" -keypass "$KS_KEY_PASS" \
+            "$AAB" "$KS_ALIAS"
+          # The AAB must carry exactly ONE signature chain (ours) — fail the
+          # build here instead of letting Play reject it after a 50-min build.
+          jarsigner -verify "$AAB"
+          RSA_COUNT=$(unzip -l "$AAB" | grep -c '\.RSA$' || true)
+          if [ "$RSA_COUNT" -ne 1 ]; then
+            echo "::error::Expected exactly 1 .RSA signature in the AAB, found $RSA_COUNT"
+            exit 1
+          fi
+          cp "$AAB" /tmp/SilentGram-release.aab
           ls -lh /tmp/SilentGram-release.apk /tmp/SilentGram-release.aab
 
       # Safety net: even if the Release step below fails, the APK + AAB are
