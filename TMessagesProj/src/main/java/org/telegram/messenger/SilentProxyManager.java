@@ -36,15 +36,16 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * Telegram is blocked in Pakistan / India, so the app must connect through an
  * MTProto proxy — but the user should never have to find one. This manager
- * fetches a fresh proxy list from our own API, checks every proxy IN PARALLEL
- * in the background (a fast TCP connect, milliseconds each), and connects to
- * the FASTEST one that answers — lowest latency (ms) first. Candidates are
- * ranked by the API's latency_ms (measured by the API, fastest first); the
- * app's own probe round-trip time is the fallback ranking when the API
- * reports no latency. The rest keep being checked in the background, and
- * if a faster one shows up the app switches to it in milliseconds.
- * Telegram's built-in proxy rotation is also left on, so if the active
- * proxy dies the next one takes over automatically.
+ * fetches the FULL daily proxy list from our own API (however many — no
+ * limit), checks every proxy IN PARALLEL in the background, and connects
+ * to the FIRST one that verifies live — in milliseconds, even if its ms
+ * is high. The rest keep being checked in the background, and if a
+ * faster one shows up the app switches to it. The API's latency_ms only
+ * orders the probes to start; the APP decides which proxy is live and
+ * which is fastest, by a real MTProto handshake on this phone — a proxy
+ * can work fine from the API server yet never connect inside Telegram.
+ * Telegram's built-in proxy rotation is OFF (it fought this manager);
+ * the watcher below owns switching.
  *
  * SilentGram K6: the switch decision uses latencies measured ON THIS
  * PHONE (TCP connect + MTProto handshake time in each probe round), not
@@ -87,6 +88,19 @@ import java.util.concurrent.atomic.AtomicReference;
  *    unchanged: dead proxies are only cleared when live >= 3 and
  *    live > dead, so a dead phone network never mass-clears the list.
  *
+ * SilentGram S (fast first connect — why v2.0.8 took a minute to connect):
+ * 1) The startup round waited for the API-fastest proxy's probe before
+ *    connecting to any slower verified one, and the API's latency is
+ *    measured from the API server — a 37ms proxy from the server can be
+ *    slow or dead from this phone. Now the gate connects to the FIRST
+ *    proxy that verifies live, whatever its ms, and the background rounds
+ *    switch to the fastest once it is known. 2) The app used to keep the
+ *    50 fastest BY THE API's latency. Now it keeps only the fastest 10
+ *    BY ON-DEVICE measured latency, chosen across yesterday's kept 10
+ *    plus today's fetched list (both probed together), and auto-deletes
+ *    the rest. 3) The API list is only candidates — liveness is decided
+ *    here, by handshake, never by the API.
+ *
  * The app itself never talks to the proxy-list sites: if a source changes,
  * only the API (silentgram-proxy.silenthost.site) needs updating — the app
  * keeps working.
@@ -98,12 +112,15 @@ import java.util.concurrent.atomic.AtomicReference;
 public class SilentProxyManager {
 
     // Our own API — the single source of proxies for the app.
-    // /api/live returns ONLY the live, fastest proxies (pre-checked by the
-    // API, sorted by latency) — the app never has to probe hundreds of
-    // dead ones. /api/proxies is the full list, used only as a fallback.
-    // limit=50 fetches the WHOLE daily live list (currently ~20-26) — the
-    // old limit=10 was only the user's rough estimate, not a real cap.
-    private static final String API_LIVE_URL = "https://silentgram-proxy.silenthost.site/api/live?limit=50";
+    // /api/live returns the FULL daily live list (however many — currently
+    // ~565), fastest first by the API's latency. The API's numbers only
+    // order the probes to start: the APP decides which proxy is live and
+    // which is fastest, by probing each one on this phone (a proxy can
+    // work fine from the API server yet never connect inside Telegram).
+    // /api/proxies is the full list, used only as a fallback.
+    // No limit here — the limit=50 cap is gone: the app fetches every
+    // live proxy, probes them, and keeps only the top 10 (see MAX_PROXIES).
+    private static final String API_LIVE_URL = "https://silentgram-proxy.silenthost.site/api/live?limit=1000";
     private static final String API_URL = "https://silentgram-proxy.silenthost.site/api/proxies";
     // Refresh the list every 1 hour (the API itself refreshes every 1 hour).
     private static final long REFRESH_INTERVAL_MS = 60 * 60 * 1000L;
@@ -117,12 +134,16 @@ public class SilentProxyManager {
     // far more than that, and a 50ms margin still stops flapping between
     // near-equal proxies.
     private static final long SWITCH_FASTER_BY_MS = 50;
-    // At most this many proxies are ever added/saved — the full daily live
-    // list (limit=50 above), so every live proxy reaches the app and the
-    // fastest one can be picked. The /api/proxies fallback is also sorted
-    // by latency, so capping it here keeps the 50 fastest of the full list.
-    private static final int MAX_PROXIES = 50;
-    // How many proxies to probe in parallel (up to 50 candidates now).
+    // At most this many proxies are ever KEPT saved — the fastest 10 by
+    // ON-DEVICE measured latency (MTProto handshake time on this phone),
+    // chosen across yesterday's kept 10 plus today's fetched list (both
+    // probed together in the fetch round). Everything else is
+    // auto-deleted (see pruneManagedToTop). The API's latency never
+    // decides the keep set.
+    private static final int MAX_PROXIES = 10;
+    // How many proxies to probe in parallel (10 threads; hundreds of
+    // candidates now — the gate connects on the first verified proxy,
+    // so the round never blocks connecting).
     private static final int PROBE_THREADS = 10;
     // SilentGram K6b: the continuous watcher. While the app is open it
     // re-probes the fastest candidates every few minutes and switches to
@@ -130,10 +151,10 @@ public class SilentProxyManager {
     // stuck on a slow proxy for up to an hour (see class Javadoc).
     private static final long WATCHER_FIRST_DELAY_MS = 60 * 1000L;
     private static final long WATCHER_INTERVAL_MS = 3 * 60 * 1000L;
-    // Watcher rounds probe only the fastest candidates (API order) — the
-    // daily live list is ~20-26 proxies, so 25 covers it while bounding
-    // each round to ~2 handshake waves.
-    private static final int WATCHER_MAX_CANDIDATES = 25;
+    // Watcher rounds probe only the kept candidates — the fastest 10 by
+    // on-device latency (lastCandidates after the fetch round prunes).
+    // The cap is only a guard for the first round before any prune ran.
+    private static final int WATCHER_MAX_CANDIDATES = 10;
     // Watcher rounds in a row the current proxy must fail verification
     // before it is abandoned as unstable (see noteWatcherRound).
     private static final int WATCHER_UNSTABLE_ROUNDS = 2;
@@ -308,18 +329,16 @@ public class SilentProxyManager {
         fetching = true;
         new Thread(() -> {
             try {
-                // /api/live first (the full daily live list, fastest first,
-                // pre-checked by the API). Fall back to the full list,
-                // capped at MAX_PROXIES below (it is latency-sorted too,
-                // so the cap keeps the fastest ones).
+                // /api/live first (the FULL daily live list, fastest first
+                // by the API's latency). Fall back to the full list
+                // (also latency-sorted). No cap here — the whole list is
+                // fetched and probed; only the fastest 10 by on-device
+                // latency are kept (see pruneManagedToTop).
                 List<ProxySettings> proxies = fetchFromUrl(API_LIVE_URL);
                 if (proxies == null || proxies.isEmpty()) {
                     proxies = fetchFromUrl(API_URL);
                 }
                 if (proxies != null && !proxies.isEmpty()) {
-                    if (proxies.size() > MAX_PROXIES) {
-                        proxies = new ArrayList<>(proxies.subList(0, MAX_PROXIES));
-                    }
                     applyProxies(proxies);
                 }
             } catch (Throwable e) {
@@ -414,12 +433,14 @@ public class SilentProxyManager {
     }
 
     /**
-     * Keep at most MAX_PROXIES managed proxies saved (the fastest live ones
-     * from the API). Old managed proxies that are no longer in the top 50
-     * are removed, so the list never floods to hundreds and the network
-     * never chokes on parallel checks. Proxies the user added by hand are
-     * never touched. Then probe the candidates and connect to the
-     * fastest live one.
+     * SilentGram S: build the probe-round candidate list and probe it.
+     * Nothing is saved here — the keep decision is made AFTER the round
+     * (see pruneManagedToTop), by ON-DEVICE measured latency, never by
+     * the API's latency. Candidates are today's fetched list PLUS
+     * yesterday's kept managed proxies (so the top 10 is chosen across
+     * both days) PLUS the current proxy. Fetched proxies are probed in
+     * memory (a ProxyInfo that is not saved yet); only the winners are
+     * saved. Proxies the user added by hand are never touched.
      */
     private static void applyProxies(List<ProxySettings> proxies) {
         SharedConfig.loadProxyList();
@@ -433,57 +454,46 @@ public class SilentProxyManager {
                 if (!k.isEmpty()) managed.add(k);
             }
         }
-        HashSet<String> wanted = new HashSet<>();
-        for (ProxySettings s : proxies) {
-            wanted.add(s.getAddress() + ":" + s.getPort());
-        }
-        // Remove managed proxies that are no longer in the top 50 (but never
-        // the one currently active).
-        String activeKey = SharedConfig.currentProxy != null
-                ? SharedConfig.currentProxy.settings.getAddress() + ":" + SharedConfig.currentProxy.settings.getPort()
-                : null;
-        ArrayList<SharedConfig.ProxyInfo> toRemove = new ArrayList<>();
+        // Yesterday's kept managed proxies — candidates again today.
+        ArrayList<SharedConfig.ProxyInfo> savedManagedInfos = new ArrayList<>();
         for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
             String key = info.settings.getAddress() + ":" + info.settings.getPort();
-            if (managed.contains(key) && !wanted.contains(key) && !key.equals(activeKey)) {
-                toRemove.add(info);
+            if (managed.contains(key)) {
+                savedManagedInfos.add(info);
             }
         }
-        for (SharedConfig.ProxyInfo info : toRemove) {
-            SharedConfig.deleteProxy(info);
-            managed.remove(info.settings.getAddress() + ":" + info.settings.getPort());
-        }
-        // Add the new top proxies (managed).
+        // Candidate list: today's fetched proxies (dedup), then yesterday's
+        // kept ones not in today's fetch, then the current proxy. A fetched
+        // proxy that is already saved reuses its saved ProxyInfo; a new one
+        // gets an in-memory ProxyInfo (saved later only if it makes the
+        // top 10 — see pruneManagedToTop).
         HashSet<String> seen = new HashSet<>();
-        for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
-            seen.add(info.settings.getAddress() + ":" + info.settings.getPort());
-        }
-        List<SharedConfig.ProxyInfo> all = new ArrayList<>();
+        ArrayList<SharedConfig.ProxyInfo> candidates = new ArrayList<>();
         for (ProxySettings settings : proxies) {
             String key = settings.getAddress() + ":" + settings.getPort();
-            if (seen.contains(key)) {
-                for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
-                    if ((info.settings.getAddress() + ":" + info.settings.getPort()).equals(key)) {
-                        all.add(info);
-                        break;
-                    }
-                }
+            if (!seen.add(key)) {
                 continue;
             }
-            seen.add(key);
-            SharedConfig.ProxyInfo info = new SharedConfig.ProxyInfo(settings);
-            SharedConfig.addProxy(info);
-            managed.add(key);
-            all.add(info);
+            SharedConfig.ProxyInfo existing = null;
+            for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
+                if ((info.settings.getAddress() + ":" + info.settings.getPort()).equals(key)) {
+                    existing = info;
+                    break;
+                }
+            }
+            candidates.add(existing != null ? existing : new SharedConfig.ProxyInfo(settings));
         }
-        // Remember which proxies are managed.
-        StringBuilder sb = new StringBuilder();
-        for (String k : managed) {
-            if (sb.length() > 0) sb.append(',');
-            sb.append(k);
+        for (SharedConfig.ProxyInfo info : savedManagedInfos) {
+            String key = info.settings.getAddress() + ":" + info.settings.getPort();
+            if (seen.add(key)) {
+                candidates.add(info);
+            }
         }
-        prefs.edit().putString("managed_proxies", sb.toString()).apply();
-        if (all.isEmpty()) {
+        SharedConfig.ProxyInfo current = SharedConfig.currentProxy;
+        if (current != null && seen.add(current.settings.getAddress() + ":" + current.settings.getPort())) {
+            candidates.add(current);
+        }
+        if (candidates.isEmpty()) {
             return;
         }
 
@@ -503,24 +513,22 @@ public class SilentProxyManager {
         SharedPreferences mainPrefs = MessagesController.getGlobalMainSettings();
         mainPrefs.edit().putBoolean("proxyRotationEnabled", false).apply();
 
-        lastCandidates = new ArrayList<>(all);
-        probeAndConnect(all, false);
+        lastCandidates = new ArrayList<>(candidates);
+        probeAndConnect(candidates, false);
     }
 
     /**
-     * Probe every proxy in parallel (fast TCP connect) and connect to the
-     * FASTEST live one — lowest latency first, never just the first probe
-     * that happens to finish.
+     * Probe every proxy in parallel (fast TCP connect + MTProto handshake)
+     * and connect to the FIRST one that verifies live — in probe-finish
+     * order, whatever its ms. The rest keep being probed in the
+     * background, and the gate switches to the fastest verified proxy
+     * once it is known (see tryConnectFastest).
      *
      * How: candidates are sorted fastest-first by effective latency (the
      * API's latency_ms when present, else the app's own probe time), and
-     * each probe records its result in that same order. As soon as the
-     * fastest still-undecided candidate is known to be live, the gate
-     * connects to it — so the user still gets connected in milliseconds
-     * (the fastest proxy usually answers first anyway) while slower
-     * candidates can no longer win the race by finishing first. A dead
-     * candidate simply falls through to the next-fastest, and a proxy the
-     * download watchdog blocked is skipped the same way.
+     * each probe records its result. A dead candidate simply falls
+     * through to the next one, and a proxy the download watchdog blocked
+     * is skipped the same way.
      */
     private static void probeAndConnect(List<SharedConfig.ProxyInfo> candidates, boolean watcherRound) {
         // One probe round at a time: the hourly fetch round and the
@@ -574,9 +582,30 @@ public class SilentProxyManager {
         final long activeLatency = currentLatencyMs.get();
         CountDownLatch done = new CountDownLatch(n);
         ExecutorService pool = Executors.newFixedThreadPool(PROBE_THREADS);
+        // SilentGram S: submit the CURRENT proxy's probe first — the gate
+        // needs to know quickly whether it is dead (so it can switch right
+        // away) or alive. The ranked order (gate scan order) is unchanged.
+        ArrayList<Integer> submitOrder = new ArrayList<>();
+        int curIdx = -1;
+        if (current != null) {
+            for (int i = 0; i < n; i++) {
+                if (sameProxy(ranked.get(i), current)) {
+                    curIdx = i;
+                    break;
+                }
+            }
+        }
+        if (curIdx >= 0) {
+            submitOrder.add(curIdx);
+        }
         for (int i = 0; i < n; i++) {
-            final int index = i;
-            final SharedConfig.ProxyInfo info = ranked.get(i);
+            if (i != curIdx) {
+                submitOrder.add(i);
+            }
+        }
+        for (int idx : submitOrder) {
+            final int index = idx;
+            final SharedConfig.ProxyInfo info = ranked.get(index);
             pool.execute(() -> {
                 try {
                     String key = proxyKey(info);
@@ -654,13 +683,14 @@ public class SilentProxyManager {
         pool.shutdown();
         // Wait for all probes in the background so we can log the outcome
         // and clean up dead proxies; the user is NOT blocked on this — the
-        // fastest live proxy already connected through the gate above.
-        // Await long enough for every wave (up to 50 candidates, 10
-        // threads, ~8s handshake check each).
+        // first live proxy already connected through the gate above.
+        // Await long enough for every wave (hundreds of candidates now,
+        // 10 threads, ~8s handshake check each — a full round usually
+        // lands inside this budget since most handshakes are fast).
         new Thread(() -> {
             try {
                 try {
-                    done.await(60, TimeUnit.SECONDS);
+                    done.await(120, TimeUnit.SECONDS);
                 } catch (InterruptedException ignored) {
                 }
                 // Safety net: if the last probe's gate call was missed, decide
@@ -669,6 +699,12 @@ public class SilentProxyManager {
                 // SilentGram K7: drop proxies that are dead this round — only
                 // when the round proves the user's own network is fine.
                 cleanupDeadProxies(ranked, state);
+                // SilentGram S: keep only the fastest MAX_PROXIES by
+                // on-device measured latency (fetch rounds only — the
+                // watcher re-probes the kept set).
+                if (!watcherRound) {
+                    pruneManagedToTop(ranked, state);
+                }
                 // SilentGram K6b: a watcher round reports back so an
                 // unstable current proxy can be abandoned (see
                 // noteWatcherRound). Fetch rounds do not need this — the
@@ -754,20 +790,138 @@ public class SilentProxyManager {
     }
 
     /**
-     * The connect gate: walk the ranked list from the fastest down and
-     * connect to the first LIVE proxy. Dead, watchdog-blocked or failed
-     * proxies are skipped (fall through to the next-fastest).
+     * SilentGram S: keep only the fastest MAX_PROXIES managed proxies, by
+     * ON-DEVICE measured latency (MTProto handshake time on this phone) —
+     * yesterday's kept proxies and today's fetched list were probed
+     * together in this round, so the top 10 spans both days. The API's
+     * latency never decides the keep set: the app decides which proxy is
+     * live and which is fastest. Only handshake-verified proxies (state 1)
+     * can enter the top 10. Guarded like K7: if this round did not prove
+     * the network is fine (fewer than 3 verified), nothing is pruned — a
+     * dead network must never mass-delete the list. A managed proxy still
+     * probing when the round's wait expires is never deleted either — its
+     * verdict is not in yet. The active proxy and hand-added proxies are
+     * never removed.
+     */
+    private static void pruneManagedToTop(List<SharedConfig.ProxyInfo> ranked, int[] state) {
+        // Verified candidates with a measured on-device latency.
+        ArrayList<SharedConfig.ProxyInfo> verified = new ArrayList<>();
+        HashSet<String> pendingKeys = new HashSet<>();
+        for (int i = 0; i < ranked.size(); i++) {
+            if (state[i] == 0) {
+                pendingKeys.add(proxyKey(ranked.get(i)));
+                continue;
+            }
+            if (state[i] != 1) {
+                continue;
+            }
+            long ms = measuredLatencyMs(proxyKey(ranked.get(i)));
+            if (ms < 0) {
+                continue;
+            }
+            verified.add(ranked.get(i));
+        }
+        if (verified.size() < 3) {
+            FileLog.d("SilentProxy: S prune skipped (verified=" + verified.size() + " — network not proven OK)");
+            return;
+        }
+        Collections.sort(verified, new Comparator<SharedConfig.ProxyInfo>() {
+            @Override
+            public int compare(SharedConfig.ProxyInfo a, SharedConfig.ProxyInfo b) {
+                return Long.compare(measuredLatencyMs(proxyKey(a)), measuredLatencyMs(proxyKey(b)));
+            }
+        });
+        HashSet<String> keep = new HashSet<>();
+        for (int i = 0; i < verified.size() && i < MAX_PROXIES; i++) {
+            keep.add(proxyKey(verified.get(i)));
+        }
+        SharedPreferences prefs = ApplicationLoader.applicationContext
+                .getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
+        HashSet<String> managed = new HashSet<>();
+        String savedManaged = prefs.getString("managed_proxies", "");
+        if (savedManaged != null && !savedManaged.isEmpty()) {
+            for (String k : savedManaged.split(",")) {
+                if (!k.isEmpty()) managed.add(k);
+            }
+        }
+        String activeKey = SharedConfig.currentProxy != null
+                ? proxyKey(SharedConfig.currentProxy) : null;
+        // Save winners that are not saved yet (in-memory candidates).
+        boolean changed = false;
+        HashSet<String> savedKeys = new HashSet<>();
+        for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
+            savedKeys.add(proxyKey(info));
+        }
+        for (String key : keep) {
+            if (!savedKeys.contains(key)) {
+                for (SharedConfig.ProxyInfo info : ranked) {
+                    if (proxyKey(info).equals(key)) {
+                        SharedConfig.addProxy(info);
+                        managed.add(key);
+                        savedKeys.add(key);
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+        // Delete managed proxies outside the top 10 — never the active
+        // one, and never one still probing (its verdict is not in yet).
+        ArrayList<SharedConfig.ProxyInfo> toRemove = new ArrayList<>();
+        for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
+            String key = proxyKey(info);
+            if (managed.contains(key) && !keep.contains(key) && !key.equals(activeKey)
+                    && !pendingKeys.contains(key)) {
+                toRemove.add(info);
+            }
+        }
+        for (SharedConfig.ProxyInfo info : toRemove) {
+            SharedConfig.deleteProxy(info);
+            managed.remove(proxyKey(info));
+            lastCandidates.remove(info);
+            changed = true;
+            FileLog.d("SilentProxy: S pruned proxy " + proxyKey(info));
+        }
+        if (changed) {
+            StringBuilder sb = new StringBuilder();
+            for (String k : managed) {
+                if (sb.length() > 0) sb.append(',');
+                sb.append(k);
+            }
+            prefs.edit().putString("managed_proxies", sb.toString()).apply();
+        }
+        // The watcher + rotate fallbacks work from the kept set now.
+        ArrayList<SharedConfig.ProxyInfo> kept = new ArrayList<>();
+        for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
+            if (keep.contains(proxyKey(info))) {
+                kept.add(info);
+            }
+        }
+        if (SharedConfig.currentProxy != null && !keep.contains(proxyKey(SharedConfig.currentProxy))) {
+            kept.add(SharedConfig.currentProxy);
+        }
+        lastCandidates = kept;
+        FileLog.d("SilentProxy: S kept top " + keep.size() + " proxies by on-device latency");
+    }
+
+    /**
+     * The connect gate: connect to a LIVE proxy. Dead, watchdog-blocked or
+     * failed proxies are skipped (fall through to the next-fastest).
      *
-     * Two modes. Not connected yet: connect ASAP to the first verified
-     * live proxy in API-latency order — the user needs a connection in
-     * milliseconds (a later refresh re-evaluates with measured
-     * latencies). Already connected (SilentGram K6 re-evaluation): do
-     * NOT decide on the first candidate — wait until EVERY candidate
-     * resolved, then judge the verified-live proxy with the LOWEST
-     * measured on-device latency. Judging the first one in API order
-     * could switch to a proxy that is fast from the API server but slow
-     * from this phone, and judging before the round finished could keep
-     * a slow proxy because the faster one had not resolved yet.
+     * Two modes. Not connected yet (SilentGram S): connect to the FIRST
+     * proxy that verifies live — in probe-finish order, whatever its ms.
+     * A faster-ranked proxy still probing must NOT hold up the
+     * connection; the background rounds keep probing and switch to the
+     * fastest verified proxy once it is known. The same fast path runs
+     * when the current proxy already proved dead or handshake-failed
+     * this round — there is no connection to protect. Already connected
+     * (SilentGram K6 re-evaluation): do NOT decide on the first
+     * candidate — wait until EVERY candidate resolved, then judge the
+     * verified-live proxy with the LOWEST measured on-device latency.
+     * Judging the first one in API order could switch to a proxy that is
+     * fast from the API server but slow from this phone, and judging
+     * before the round finished could keep a slow proxy because the
+     * faster one had not resolved yet.
      * If a proxy is already active, only switch when the fastest live
      * one beats it by SWITCH_FASTER_BY_MS (or the current latency is
      * unknown, or the current proxy probed dead). SilentGram I6: state
@@ -793,7 +947,13 @@ public class SilentProxyManager {
             // re-measured — so the keep-current branch won almost every
             // round and the app stayed on the slowest proxy.
             long bar = currentProxyMeasuredLatency(ranked, state, activeLatency);
-            if (connectedOnce.get()) {
+            // SilentGram S: the current proxy already proved dead (state 2)
+            // or handshake-failed (state 3) this round — there is no
+            // connection to protect, so connect to the first verified
+            // proxy right away, like the not-connected branch below.
+            int curState = currentProxyState(ranked, state);
+            boolean currentUnusable = curState == 2 || curState == 3;
+            if (connectedOnce.get() && !currentUnusable) {
                 // SilentGram K6 (re-evaluation): already connected, so
                 // there is no rush — wait for the full picture.
                 for (int i = 0; i < ranked.size(); i++) {
@@ -846,15 +1006,18 @@ public class SilentProxyManager {
                 // on the current one; the next refresh tries again.
                 return;
             }
-            // Not connected yet: first verified live proxy in ranked
-            // order wins ASAP. Stops at the first slot whose probe is
-            // still pending — a faster proxy may still turn out live, so
-            // a slower one must not win by finishing first.
+            // Not connected yet (or the current proxy proved unusable
+            // above): the FIRST proxy that verifies live wins — in
+            // probe-finish order, whatever its ms. Pending slots are
+            // SKIPPED, not waited on: a faster-ranked proxy still probing
+            // must not hold up the connection, and the background rounds
+            // switch to the fastest verified proxy once it is known.
             int firstUnverified = -1;
             for (int i = 0; i < ranked.size(); i++) {
                 if (state[i] == 0) {
-                    // A faster proxy is still probing — wait for it.
-                    return;
+                    // Still probing — skip it; a verified proxy further
+                    // down the list connects right now.
+                    continue;
                 }
                 if (state[i] != 1 && state[i] != 3) {
                     // Dead or failed — fall through to the next-fastest.
