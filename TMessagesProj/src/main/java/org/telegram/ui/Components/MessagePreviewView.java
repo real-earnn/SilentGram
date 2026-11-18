@@ -1004,16 +1004,9 @@ public class MessagePreviewView extends FrameLayout {
 
             } else if (tab == TAB_FORWARD && messagePreviewParams.forwardMessages != null) {
 
-                boolean _canHideSenderName = true;
-                if (!UserConfig.getInstance(currentAccount).isPremium()) {
-                    for (int i = 0; i < messagePreviewParams.forwardMessages.messages.size(); ++i) {
-                        if (messagePreviewParams.forwardMessages.messages.get(i).type == MessageObject.TYPE_ARTICLE) {
-                            _canHideSenderName = false;
-                            break;
-                        }
-                    }
-                }
-                final boolean canHideSenderName = _canHideSenderName;
+                // SilentGram: Hide Sender Name is free for everyone, including
+                // rich (TYPE_ARTICLE) messages — the Premium gate is removed.
+                final boolean canHideSenderName = true;
 
                 ToggleButton sendersNameButton = new ToggleButton(
                     context,

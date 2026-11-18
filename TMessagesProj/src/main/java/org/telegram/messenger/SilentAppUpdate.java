@@ -28,7 +28,12 @@ public class SilentAppUpdate {
 
     private static final String REPO = "real-earnn/SilentGram";
     private static final String LATEST_RELEASE_API = "https://api.github.com/repos/" + REPO + "/releases/latest";
-    private static final String RELEASES_PAGE = "https://github.com/" + REPO + "/releases/latest";
+    // SilentGram: the Update button takes the user to the PLAY STORE listing,
+    // never to GitHub — the user taps Update there, in the Play Store itself.
+    // (The version CHECK still uses the GitHub releases API: the Play Store
+    // has no public "latest version" API, and every Play release is the same
+    // version as the GitHub release built from it.)
+    private static final String RELEASES_PAGE = "https://play.google.com/store/apps/details?id=com.silentgram.org";
 
     private static final String PREFS = "silentgram";
     private static final String KEY_LAST_CHECK_MS = "silent_update_last_check_ms";

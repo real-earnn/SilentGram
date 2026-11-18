@@ -10248,7 +10248,7 @@ public class ChatActivity extends BaseFragment implements
             row.setPadding(AndroidUtilities.dp(16), AndroidUtilities.dp(10), AndroidUtilities.dp(16), AndroidUtilities.dp(10));
             TextView title = new TextView(context);
             String titleText = "/" + t.trigger;
-            if (t.hasMedia()) {
+            if (t.mediaType != null && !t.mediaType.isEmpty()) {
                 String mediaLabel = org.telegram.messenger.SilentTemplates.MEDIA_VIDEO.equals(t.mediaType)
                         ? LocaleController.getString(R.string.SilentTemplateVideo)
                         : org.telegram.messenger.SilentTemplates.MEDIA_PHOTO.equals(t.mediaType)
@@ -10296,10 +10296,17 @@ public class ChatActivity extends BaseFragment implements
     }
 
     /**
-     * SilentGram K13 (d): tapping a template suggestion SENDS the whole
-     * post (text + media) to this chat. The "/trigger" text is cleared
-     * first. Text-only templates send as a plain message; photo / video /
-     * file templates send the stored media with the text as caption.
+     * SilentGram K13 (d): tapping a template suggestion SENDS the post to
+     * this chat. The "/trigger" text is cleared first.
+     *
+     * Link-based (Batch V): a template stores the post's exact t.me link.
+     * Sending resolves the LIVE post from that link and forwards Telegram's
+     * exact forward with the sender hidden — the rich post keeps its design
+     * (no re-made copy, no lost premium emoji, and rich messages work).
+     * If the post is gone, an error is shown and nothing is sent.
+     * Templates with no link (a DM) fetch the original post and copy it
+     * Telegram's own way. Hand-composed templates (no source post) fall
+     * through to the stored text/media path below.
      */
     private void sendSilentTemplate(org.telegram.messenger.SilentTemplates.Template t) {
         dismissSilentTemplatePopup();
@@ -10307,6 +10314,34 @@ public class ChatActivity extends BaseFragment implements
             return;
         }
         chatActivityEnterView.setFieldText("");
+        if (t.link != null && !t.link.isEmpty()) {
+            org.telegram.messenger.SilentTemplates.forwardPostFromLink(currentAccount, t.link, dialog_id, new org.telegram.messenger.SilentTemplates.PostResolveCallback() {
+                @Override
+                public void onPost(MessageObject post) {
+                    // Sent — Telegram's exact forward, sender hidden.
+                }
+
+                @Override
+                public void onError(int reason) {
+                    BulletinFactory.of(ChatActivity.this).createErrorBulletin("Post is not available").show();
+                }
+            });
+            return;
+        }
+        if (t.sourceDialogId != 0 && t.sourceMessageId != 0) {
+            org.telegram.messenger.SilentTemplates.copyOriginalPost(currentAccount, t.sourceDialogId, t.sourceMessageId, dialog_id, getSendMonoForumPeerId(), getSendMessageSuggestionParams(), new org.telegram.messenger.SilentTemplates.PostResolveCallback() {
+                @Override
+                public void onPost(MessageObject post) {
+                    // Sent — Telegram's own copy of the original post.
+                }
+
+                @Override
+                public void onError(int reason) {
+                    BulletinFactory.of(ChatActivity.this).createErrorBulletin("Post is not available").show();
+                }
+            });
+            return;
+        }
         String caption = t.text != null && !t.text.isEmpty() ? t.text : null;
         // SilentGram Batch U: the saved entities (bold / links / premium
         // custom emoji, ...) so the sent post keeps them.
@@ -10370,11 +10405,14 @@ public class ChatActivity extends BaseFragment implements
     }
 
     /**
-     * K13 (c): save a channel/chat post (text + media) as a template.
-     * The media file is copied into the app-private template store when
-     * it is already downloaded; when it is not downloaded yet, the
-     * expected cache path is remembered and the download is started, so
-     * a later send can still pick the media up.
+     * K13 (c): save a channel/chat post as a template.
+     *
+     * Link-based (Batch V): the template stores the post's exact t.me link
+     * (Telegram's own Copy Link), the source post location, and a short
+     * preview text. Nothing is copied and no file is re-made — sending
+     * resolves the live post from the link and forwards Telegram's exact
+     * forward. When the post has no link (a DM), the source location is
+     * stored instead and sending copies the original Telegram's own way.
      */
     private void saveSilentTemplateFromMessage(MessageObject message, String trigger) {
         if (message == null || message.messageOwner == null || trigger == null || trigger.isEmpty()) {
@@ -10392,69 +10430,28 @@ public class ChatActivity extends BaseFragment implements
         }
         // SilentGram Batch U: save the entities too (bold / links /
         // premium custom emoji, ...) so the template sends them back.
-        String entities = org.telegram.messenger.SilentTemplates.entitiesToBase64(message.messageOwner.entities);
+        final String entities = org.telegram.messenger.SilentTemplates.entitiesToBase64(message.messageOwner.entities);
+        // Media type is only a preview label now (the [Photo]/[Video]/[File]
+        // badge in the suggestion popup) — no file is copied or re-made.
         String mediaType = "";
-        String mediaName = "";
-        String mediaMime = "";
-        String mediaFile = "";
-        String mediaCache = "";
-        try {
-            TLRPC.Document document = message.getDocument();
-            if (message.isPhoto()) {
-                mediaType = org.telegram.messenger.SilentTemplates.MEDIA_PHOTO;
-            } else if (message.isVideo()) {
-                mediaType = org.telegram.messenger.SilentTemplates.MEDIA_VIDEO;
-            } else if (document != null) {
-                mediaType = org.telegram.messenger.SilentTemplates.MEDIA_DOCUMENT;
-                mediaMime = document.mime_type == null ? "" : document.mime_type;
-            }
-            if (!mediaType.isEmpty()) {
-                mediaName = message.getFileName();
-                if (mediaName == null) {
-                    mediaName = "";
-                }
-                File local = FileLoader.getInstance(currentAccount).getPathToMessage(message.messageOwner);
-                if (local != null && local.exists() && getParentActivity() != null) {
-                    File stored = org.telegram.messenger.SilentTemplates.copyMediaIntoStore(getParentActivity(), local, mediaName);
-                    if (stored != null) {
-                        mediaFile = stored.getName();
-                    }
-                } else {
-                    // Not downloaded yet: remember where it will land and
-                    // start the download, so a later send can pick it up.
-                    // SilentGram Batch U: for a photo, remember the path of
-                    // the size actually being downloaded — getPathToMessage
-                    // can point at a different size that never lands, which
-                    // is why a saved file was "dropped" on send.
-                    if (message.isPhoto() && message.messageOwner.media instanceof TLRPC.TL_messageMediaPhoto) {
-                        TLRPC.PhotoSize size = FileLoader.getClosestPhotoSizeWithSize(message.photoThumbs, AndroidUtilities.getPhotoSize());
-                        if (size != null) {
-                            java.io.File sizePath = FileLoader.getInstance(currentAccount).getPathToAttach(size.location, true);
-                            if (sizePath != null) {
-                                mediaCache = sizePath.getAbsolutePath();
-                            }
-                            FileLoader.getInstance(currentAccount).loadFile(ImageLocation.getForMessage(size, message.messageOwner), message, "jpg", FileLoader.PRIORITY_HIGH, 0);
-                        } else if (local != null) {
-                            mediaCache = local.getAbsolutePath();
-                        }
-                    } else {
-                        if (local != null) {
-                            mediaCache = local.getAbsolutePath();
-                        }
-                        if (document != null) {
-                            FileLoader.getInstance(currentAccount).loadFile(document, message, FileLoader.PRIORITY_HIGH, 0);
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            // Media lookup must never block saving the text.
-            mediaType = "";
-            mediaFile = "";
-            mediaCache = "";
+        if (message.isPhoto()) {
+            mediaType = org.telegram.messenger.SilentTemplates.MEDIA_PHOTO;
+        } else if (message.isVideo()) {
+            mediaType = org.telegram.messenger.SilentTemplates.MEDIA_VIDEO;
+        } else if (message.getDocument() != null) {
+            mediaType = org.telegram.messenger.SilentTemplates.MEDIA_DOCUMENT;
         }
-        org.telegram.messenger.SilentTemplates.addTemplate(trigger, text, mediaType, mediaFile, mediaName, mediaMime, mediaCache, entities);
-        BulletinFactory.of(this).createSimpleBulletin(R.drawable.msg_saved, LocaleController.getString(R.string.SilentTemplateSaved)).show();
+        final String previewText = text;
+        final String mediaTypeFinal = mediaType;
+        final long sourceDialogId = message.getDialogId();
+        final int sourceMessageId = message.getId();
+        // Export the exact link (Telegram's own Copy Link). Async: the
+        // template is stored once the link comes back (or with no link
+        // when the post has none, e.g. a DM).
+        org.telegram.messenger.SilentTemplates.exportMessageLink(currentAccount, message, link -> {
+            org.telegram.messenger.SilentTemplates.addTemplate(currentAccount, trigger, previewText, link, sourceDialogId, sourceMessageId, mediaTypeFinal, entities);
+            BulletinFactory.of(ChatActivity.this).createSimpleBulletin(R.drawable.msg_saved, LocaleController.getString(R.string.SilentTemplateSaved)).show();
+        });
     }
 
     /**
@@ -16441,6 +16438,13 @@ public class ChatActivity extends BaseFragment implements
                     messagePreviewParams.attach(forwardingPreviewView);
                 }
                 messagePreviewParams.updateForward(messageObjectsToForward, dialog_id);
+                // SilentGram: FWQ — the forward preview opens with the sender
+                // name already hidden, so the user never has to tap it.
+                // Consumed here so a later ordinary forward is unaffected.
+                if (forwardingWithoutQuote && messagePreviewParams != null) {
+                    messagePreviewParams.hideForwardSendersName = true;
+                    forwardingWithoutQuote = false;
+                }
                 if (messagePreviewParams.isEmpty() && editingMessageObject == null) {
                     messagePreviewParams = null;
                 }
@@ -35495,12 +35499,16 @@ public class ChatActivity extends BaseFragment implements
             case OPTION_SILENT_STICKER_RESIZE: {
                 // SilentGram: resize this sticker (1 = tiny, 20 = full screen).
                 if (selectedObject != null && selectedObject.isSticker()) {
+                    final MessageObject stickerMessage = selectedObject;
                     org.telegram.messenger.SilentStickerResize.showPicker(getParentActivity(), currentAccount, selectedObject, () -> {
-                        // SilentGram Batch U: a resize must re-MEASURE the
-                        // row, not just redraw it — invalidateViews() only
-                        // redraws and updateVisibleRows() rebinds without
-                        // notifying the adapter, so the row kept its old
-                        // height while the sticker image resized.
+                        // SilentGram: the cell SKIPS its layout recompute when
+                        // the SAME MessageObject is rebound (messageChanged is
+                        // false), so a plain notifyDataSetChanged() never
+                        // re-measures the sticker — the row kept its old
+                        // height and the sticker its old size. forceUpdate
+                        // forces the full layout path (it is consumed/reset
+                        // by ChatMessageCell), so the new scale is applied.
+                        stickerMessage.forceUpdate = true;
                         if (chatAdapter != null) {
                             chatAdapter.notifyDataSetChanged();
                         }
@@ -36645,17 +36653,11 @@ public class ChatActivity extends BaseFragment implements
                         params.suggestionParams = messageSuggestionParams;
                         getSendMessagesHelper().sendMessage(params);
                     }
-                    if (forwardingWithoutQuote) {
-                        // SilentGram Batch U: FWQ sends each message as a fresh
-                        // copy (no "Forwarded from" tag at all) — the server
-                        // ignores drop_author for channel posts / rich
-                        // messages, so a forward can never be tag-free there.
-                        for (int i = 0; i < fmessages.size(); i++) {
-                            getSendMessagesHelper().processForwardFromMyName(fmessages.get(i), did, price == null ? 0 : price, getSendMonoForumPeerId(), getSendMessageSuggestionParams(), notify, scheduleDate, scheduleRepeatPeriod);
-                        }
-                    } else {
-                        getSendMessagesHelper().sendMessage(fmessages, did, false, false, notify, scheduleDate, scheduleRepeatPeriod, null, -1, price == null ? 0 : price, getSendMonoForumPeerId(), getSendMessageSuggestionParams());
-                    }
+                    // SilentGram: FWQ uses Telegram's exact forward with the
+                    // sender hidden (drop_author = forwardingWithoutQuote) —
+                    // no self-made copy, so rich posts keep their exact
+                    // design (premium emoji, lines, profile picture).
+                    getSendMessagesHelper().sendMessage(fmessages, did, forwardingWithoutQuote, false, notify, scheduleDate, scheduleRepeatPeriod, null, -1, price == null ? 0 : price, getSendMonoForumPeerId(), getSendMessageSuggestionParams());
                 }
                 forwardingWithoutQuote = false;
                 fragment.finishFragment();
@@ -36743,6 +36745,7 @@ public class ChatActivity extends BaseFragment implements
                         };
                         chatActivity.showFieldPanelForReplyQuote(replyingMessageObject, replyingQuote);
                     } else {
+                        chatActivity.forwardingWithoutQuote = forwardingWithoutQuote;
                         chatActivity.showFieldPanelForForward(true, fmessages);
                     }
                     if (chatActivity.getDialogId() == getDialogId() && !AndroidUtilities.isTablet()) {
