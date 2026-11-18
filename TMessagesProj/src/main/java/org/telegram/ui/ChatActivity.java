@@ -28003,25 +28003,97 @@ public class ChatActivity extends BaseFragment implements
                 TLRPC.TL_peerUser from = new TLRPC.TL_peerUser();
                 from.user_id = dialog_id;
                 msg.from_id = from;
+            } else if (e.senderId > 0) {
+                // SilentGram Batch Q: the sender id was stored when the
+                // message was shown — restore it, so the cell resolves the
+                // author name + avatar from it exactly like the live
+                // message did (updateCurrentUserAndChat / setAvatar).
+                msg.out = false;
+                TLRPC.TL_peerUser from = new TLRPC.TL_peerUser();
+                from.user_id = e.senderId;
+                msg.from_id = from;
             } else {
                 // Group/channel message whose sender id was never stored
-                // (only the display name) — from_id stays null, so the
-                // tombstone shows no author name, only the delete icon,
-                // the text and the arrival time.
+                // (only the display name) — from_id stays null; the stored
+                // name is shown as plain text instead (customName below),
+                // so the tombstone still shows its author.
                 msg.out = false;
             }
             MessageObject obj = new MessageObject(currentAccount, msg, false, false);
             obj.silentTombstone = true;
+            // SilentGram Batch Q: legacy entries carry only the display
+            // name (senderId 0, from_id null above) — show it as plain
+            // text through customName, which the cell's name layout
+            // already prefers over the resolved author name
+            // (ChatMessageCell setMessageObject). Same fallback when the
+            // sender id is stored but the user is no longer resolvable,
+            // so the cell never falls back to its "DELETED" placeholder.
+            if (e.sender != null && !e.sender.isEmpty() && !"You".equals(e.sender)
+                    && (msg.from_id == null || (e.senderId > 0 && getMessagesController().getUser(e.senderId) == null))) {
+                obj.customName = e.sender;
+            }
             // SilentGram I14: mark it deleted exactly like the in-place
             // tombstone from processDeletedMessages, so the cell (no time in
-            // groups, no name, no share button) and the long-press guard
+            // groups, no share button) and the long-press guard
             // treat a restored tombstone identically — it can never be
-            // copied, forwarded or replied to.
+            // copied, forwarded or replied to. (Batch Q: name + avatar now
+            // resolve from the stored sender, so a tombstone DOES show its
+            // author again — only copying / forwarding / replying stays blocked.)
             obj.deleted = true;
             silentApplyDeletedTombstone(obj);
             return obj;
         } catch (Exception ex) {
             return null;
+        }
+    }
+
+    // SilentGram Q-B: "Delete for me" ids.
+    //
+    // AlertsCreator registers a (dialogId, msgId) here BEFORE calling
+    // MessagesController.deleteMessages() when the user ticked
+    // "Delete for me". deleteMessages() posts messagesDeleted
+    // synchronously, so processDeletedMessages() below sees the entry
+    // and removes the row for real instead of standing it as an
+    // H5 tombstone. Entries carry a registration time and expire after
+    // 10 minutes: the server echo re-delivers the same delete (and an
+    // open thread view may process it too), so an entry must survive
+    // its first use — but a stale entry must never linger. Message ids
+    // are never reused, and the history purge means nothing can
+    // restore the row afterwards anyway.
+    private static final java.util.HashMap<String, Long> silentDeleteForMeIds = new java.util.HashMap<>();
+    private static final long SILENT_DELETE_FOR_ME_TTL_MS = 10 * 60 * 1000L;
+
+    /** SilentGram Q-B: register one id for local removal (see above). Called from AlertsCreator. */
+    public static void silentRegisterDeleteForMe(long dialogId, int msgId) {
+        String key = dialogId + ":" + msgId;
+        synchronized (silentDeleteForMeIds) {
+            long now = System.currentTimeMillis();
+            java.util.Iterator<java.util.Map.Entry<String, Long>> it = silentDeleteForMeIds.entrySet().iterator();
+            while (it.hasNext()) {
+                if (now - it.next().getValue() > SILENT_DELETE_FOR_ME_TTL_MS) {
+                    it.remove();
+                }
+            }
+            if (silentDeleteForMeIds.size() > 1024) {
+                silentDeleteForMeIds.clear();
+            }
+            silentDeleteForMeIds.put(key, now);
+        }
+    }
+
+    /** SilentGram Q-B: true if this id was registered for local removal and has not expired. Does not consume the entry. */
+    private static boolean silentIsDeleteForMe(long dialogId, int msgId) {
+        String key = dialogId + ":" + msgId;
+        synchronized (silentDeleteForMeIds) {
+            Long at = silentDeleteForMeIds.get(key);
+            if (at == null) {
+                return false;
+            }
+            if (System.currentTimeMillis() - at > SILENT_DELETE_FOR_ME_TTL_MS) {
+                silentDeleteForMeIds.remove(key);
+                return false;
+            }
+            return true;
         }
     }
 
@@ -28150,7 +28222,16 @@ public class ChatActivity extends BaseFragment implements
                     // removed exactly as before (see silentCanTombstone).
                     // Pinned removal, reply-owner clearing and reply
                     // counts above still run for tombstones too.
-                    if (silentCanTombstone(obj, mid)) {
+                    // SilentGram Q-B: "Delete for me" was ticked — remove
+                    // the row for real instead of tombstoning it. The
+                    // entry survives its first use (the server echo and
+                    // an open thread view re-deliver the same delete) and
+                    // expires after 10 minutes. The effective dialog is
+                    // mergeDialogId for loadIndex 1, exactly as
+                    // AlertsCreator registered it.
+                    long silentDeleteDialogId = loadIndex == 1 ? mergeDialogId : dialog_id;
+                    boolean silentDeleteForMe = silentIsDeleteForMe(silentDeleteDialogId, mid);
+                    if (!silentDeleteForMe && silentCanTombstone(obj, mid)) {
                         if (selectedMessagesIds[loadIndex].indexOfKey(mid) >= 0) {
                             updatedSelected = true;
                             addToSelectedMessages(obj, false, updatedSelectedLast = (a == size - 1));

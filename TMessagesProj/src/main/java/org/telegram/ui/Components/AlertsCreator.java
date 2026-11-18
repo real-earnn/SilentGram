@@ -7722,6 +7722,66 @@ public class AlertsCreator {
         void didPressedNewCard();
     }
 
+    // SilentGram Q-B: the delete dialog's two options. "Delete for me"
+    // starts checked (a plain Delete removes the row locally, as before);
+    // "Delete for everyone" starts unchecked and is only offered when
+    // revoke is allowed (showForAll). Unchecking "Delete for me" while
+    // "Delete for everyone" is ticked keeps the row standing as an H5
+    // tombstone with its history kept; ticking it removes the row for
+    // real and purges its history. The arrays are mutated, never
+    // reassigned, so the deleteAction lambda may capture them.
+    private static android.view.View silentCreateDeleteOptionsView(Activity activity, Theme.ResourcesProvider resourcesProvider, boolean[] deleteForMe, boolean[] deleteForAll, boolean showForAll) {
+        LinearLayout layout = new LinearLayout(activity);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        CheckBoxCell cellMe = new CheckBoxCell(activity, 1, resourcesProvider);
+        cellMe.setBackgroundDrawable(Theme.getSelectorDrawable(false));
+        cellMe.setText(LocaleController.getString(R.string.SilentDeleteForMe), "", false, false);
+        cellMe.setPadding(LocaleController.isRTL ? dp(16) : dp(8), 0, LocaleController.isRTL ? dp(8) : dp(16), 0);
+        cellMe.setChecked(true, false);
+        deleteForMe[0] = true;
+        cellMe.setOnClickListener(v -> {
+            CheckBoxCell clickedMeCell = (CheckBoxCell) v;
+            deleteForMe[0] = !deleteForMe[0];
+            clickedMeCell.setChecked(deleteForMe[0], true);
+        });
+        layout.addView(cellMe, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48));
+        if (showForAll) {
+            CheckBoxCell cellAll = new CheckBoxCell(activity, 1, resourcesProvider);
+            cellAll.setBackgroundDrawable(Theme.getSelectorDrawable(false));
+            cellAll.setText(LocaleController.getString(R.string.SilentDeleteForEveryone), "", false, false);
+            cellAll.setPadding(LocaleController.isRTL ? dp(16) : dp(8), 0, LocaleController.isRTL ? dp(8) : dp(16), 0);
+            cellAll.setChecked(false, false);
+            cellAll.setOnClickListener(v -> {
+                CheckBoxCell clickedAllCell = (CheckBoxCell) v;
+                deleteForAll[0] = !deleteForAll[0];
+                clickedAllCell.setChecked(deleteForAll[0], true);
+            });
+            layout.addView(cellAll, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, 48));
+        }
+        return layout;
+    }
+
+    // SilentGram Q-B: register ids for local removal (ChatActivity
+    // consults the registry in processDeletedMessages) and purge their
+    // SilentMessageHistory entries. No-ops on empty input.
+    private static void silentRegisterDeleteForMe(long dialogId, ArrayList<Integer> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return;
+        }
+        for (int a = 0; a < ids.size(); a++) {
+            org.telegram.ui.ChatActivity.silentRegisterDeleteForMe(dialogId, ids.get(a));
+        }
+    }
+
+    private static void silentPurgeDeleteForMeHistory(long dialogId, ArrayList<Integer> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return;
+        }
+        for (int a = 0; a < ids.size(); a++) {
+            org.telegram.messenger.SilentMessageHistory.removeEntry(dialogId, ids.get(a));
+        }
+    }
+
     public static void createDeleteMessagesAlert(BaseFragment fragment, TLRPC.User user, TLRPC.Chat chat, TLRPC.EncryptedChat encryptedChat, TLRPC.ChatFull chatInfo, long mergeDialogId, MessageObject selectedMessage, SparseArray<MessageObject>[] selectedMessages, MessageObject.GroupedMessages selectedGroup, int topicId, int mode, TLRPC.ChannelParticipant[] channelParticipants, Runnable onDelete, Runnable hideDim, Theme.ResourcesProvider resourcesProvider) {
         final boolean scheduled = mode == ChatActivity.MODE_SCHEDULED;
         final boolean isSavedMessages = mode == ChatActivity.MODE_SAVED;
@@ -7894,6 +7954,10 @@ public class AlertsCreator {
         }
 
         final boolean[] deleteForAll = new boolean[1];
+        // SilentGram Q-B: "Delete for me" — local-only choice. False
+        // unless its checkbox is shown (then it starts checked); it only
+        // affects local state, so unlike revoke it needs no gating.
+        final boolean[] deleteForMe = new boolean[]{false};
         boolean canRevokeInbox = user != null && MessagesController.getInstance(currentAccount).canRevokePmInbox;
         int revokeTimeLimit;
         if (user != null) {
@@ -8027,22 +8091,9 @@ public class AlertsCreator {
                 return;
             } else if (!hasNotOut && myMessagesCount > 0 && hasNonDiceMessages) {
                 hasDeleteForAllCheck = true;
-                FrameLayout frameLayout = new FrameLayout(activity);
-                CheckBoxCell cell = new CheckBoxCell(activity, 1, resourcesProvider);
-                cell.setBackgroundDrawable(Theme.getSelectorDrawable(false));
-                if (chat != null && hasNotOut) {
-                    cell.setText(LocaleController.getString(R.string.DeleteForAll), "", false, false);
-                } else {
-                    cell.setText(LocaleController.getString(R.string.DeleteMessagesOption), "", false, false);
-                }
-                cell.setPadding(LocaleController.isRTL ? dp(16) : dp(8), 0, LocaleController.isRTL ? dp(8) : dp(16), 0);
-                frameLayout.addView(cell, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 48, Gravity.TOP | Gravity.LEFT, 0, 0, 0, 0));
-                cell.setOnClickListener(v -> {
-                    CheckBoxCell cell12 = (CheckBoxCell) v;
-                    deleteForAll[0] = !deleteForAll[0];
-                    cell12.setChecked(deleteForAll[0], true);
-                });
-                builder.setView(frameLayout);
+                // SilentGram Q-B: both options — "Delete for me" (checked)
+                // and "Delete for everyone" (unchecked).
+                builder.setView(silentCreateDeleteOptionsView(activity, resourcesProvider, deleteForMe, deleteForAll, true));
                 builder.setCustomViewOffset(9);
             }
         } else if (!scheduled && !isSavedMessages && !ChatObject.isChannel(chat) && encryptedChat == null) {
@@ -8084,26 +8135,21 @@ public class AlertsCreator {
             }
             if (myMessagesCount > 0 && hasNonDiceMessages && (user == null || !UserObject.isDeleted(user))) {
                 hasDeleteForAllCheck = true;
-                FrameLayout frameLayout = new FrameLayout(activity);
-                CheckBoxCell cell = new CheckBoxCell(activity, 1, resourcesProvider);
-                cell.setBackgroundDrawable(Theme.getSelectorDrawable(false));
-                if (canDeleteInbox) {
-                    cell.setText(LocaleController.formatString("DeleteMessagesOptionAlso", R.string.DeleteMessagesOptionAlso, UserObject.getFirstName(user)), "", false, false);
-                } else if (chat != null && (hasNotOut || myMessagesCount == count)) {
-                    cell.setText(LocaleController.getString(R.string.DeleteForAll), "", false, false);
-                } else {
-                    cell.setText(LocaleController.getString(R.string.DeleteMessagesOption), "", false, false);
-                }
-                cell.setPadding(LocaleController.isRTL ? dp(16) : dp(8), 0, LocaleController.isRTL ? dp(8) : dp(16), 0);
-                frameLayout.addView(cell, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 48, Gravity.TOP | Gravity.LEFT, 0, 0, 0, 0));
-                cell.setOnClickListener(v -> {
-                    CheckBoxCell cell1 = (CheckBoxCell) v;
-                    deleteForAll[0] = !deleteForAll[0];
-                    cell1.setChecked(deleteForAll[0], true);
-                });
-                builder.setView(frameLayout);
+                // SilentGram Q-B: both options — "Delete for me" (checked)
+                // and "Delete for everyone" (unchecked).
+                builder.setView(silentCreateDeleteOptionsView(activity, resourcesProvider, deleteForMe, deleteForAll, true));
                 builder.setCustomViewOffset(9);
             }
+        }
+
+        // SilentGram Q-B: no revoke checkbox above (channels, deleting
+        // only other people's messages, ...). "Delete for me" still
+        // applies — it only affects local state. Normal chats only;
+        // scheduled / saved / quick-reply / secret chats keep their
+        // existing behaviour (no checkbox, deleteForMe stays false).
+        if (!hasDeleteForAllCheck && count > 0 && mode == ChatActivity.MODE_DEFAULT && !scheduled && !isSavedMessages && !quickReplies && encryptedChat == null) {
+            builder.setView(silentCreateDeleteOptionsView(activity, resourcesProvider, deleteForMe, deleteForAll, false));
+            builder.setCustomViewOffset(9);
         }
 
         AlertDialog.OnButtonClickListener deleteAction = (dialogInterface, i) -> {
@@ -8147,7 +8193,17 @@ public class AlertsCreator {
                     thisDialogId = mergeDialogId;
                 }
                 if (!ids.isEmpty()) {
+                    // SilentGram Q-B: register BEFORE the call — the
+                    // messagesDeleted notification fires synchronously
+                    // inside deleteMessages() — and purge history AFTER
+                    // it, once the E7 hook has moved the text to history.
+                    if (deleteForMe[0]) {
+                        silentRegisterDeleteForMe(thisDialogId, ids);
+                    }
                     MessagesController.getInstance(currentAccount).deleteMessages(ids, random_ids, encryptedChat, thisDialogId, topicId, deleteForAll[0], mode);
+                    if (deleteForMe[0]) {
+                        silentPurgeDeleteForMeHistory(thisDialogId, ids);
+                    }
                 }
                 for (MessageObject msg: ephemeralMessages) {
                     MessagesController.getInstance(currentAccount).deleteEphemeralMessage(thisDialogId, topicId, msg);
@@ -8168,7 +8224,15 @@ public class AlertsCreator {
                             }
                         }
                     }
-                    MessagesController.getInstance(currentAccount).deleteMessages(ids, random_ids, encryptedChat, (a == 1 && mergeDialogId != 0) ? mergeDialogId : thisDialogId, topicId, deleteForAll[0], mode);
+                    long silentDeleteDialogId = (a == 1 && mergeDialogId != 0) ? mergeDialogId : thisDialogId;
+                    // SilentGram Q-B: see the single-message branch above.
+                    if (deleteForMe[0]) {
+                        silentRegisterDeleteForMe(silentDeleteDialogId, ids);
+                    }
+                    MessagesController.getInstance(currentAccount).deleteMessages(ids, random_ids, encryptedChat, silentDeleteDialogId, topicId, deleteForAll[0], mode);
+                    if (deleteForMe[0]) {
+                        silentPurgeDeleteForMeHistory(silentDeleteDialogId, ids);
+                    }
                     selectedMessages[a].clear();
                 }
             }

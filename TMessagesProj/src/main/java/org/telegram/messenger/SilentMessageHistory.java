@@ -29,14 +29,23 @@ public class SilentMessageHistory {
         public int msgId;
         public String text;
         public String sender;
+        // SilentGram Batch Q: Telegram user id of the sender. 0 = unknown
+        // / legacy entry recorded before the id was stored (name string
+        // only) — such entries still render the name as plain text.
+        public long senderId;
         public long time;
         public String kind; // "deleted" or "edited"
 
         public Entry(long dialogId, int msgId, String text, String sender, long time, String kind) {
+            this(dialogId, msgId, text, sender, 0, time, kind);
+        }
+
+        public Entry(long dialogId, int msgId, String text, String sender, long senderId, long time, String kind) {
             this.dialogId = dialogId;
             this.msgId = msgId;
             this.text = text;
             this.sender = sender;
+            this.senderId = senderId;
             this.time = time;
             this.kind = kind;
         }
@@ -45,7 +54,10 @@ public class SilentMessageHistory {
     private static final int MAX_CACHE = 1000;
     private static final int MAX_HISTORY_PER_CHAT = 200;
 
-    // In-memory LRU cache: key "dialogId:msgId" -> {text, sender, time}.
+    // In-memory LRU cache: key "dialogId:msgId" -> {text, sender, time, senderId}.
+    // SilentGram Batch Q: the 4th element is new — entries cached before this
+    // change have only 3 elements and read back with senderId 0 (see
+    // silentCacheSenderId); loadCache always builds 4-element arrays.
     private static final LinkedHashMap<String, String[]> cache = new LinkedHashMap<String, String[]>(MAX_CACHE, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Map.Entry<String, String[]> eldest) {
@@ -69,7 +81,7 @@ public class SilentMessageHistory {
             while (keys.hasNext()) {
                 String key = keys.next();
                 JSONObject v = obj.getJSONObject(key);
-                cache.put(key, new String[]{v.optString("t"), v.optString("s"), String.valueOf(v.optLong("time"))});
+                cache.put(key, new String[]{v.optString("t"), v.optString("s"), String.valueOf(v.optLong("time")), String.valueOf(v.optLong("sid"))});
             }
         } catch (Exception e) {
             // Start fresh on corrupt data.
@@ -85,6 +97,9 @@ public class SilentMessageHistory {
                     v.put("t", e.getValue()[0]);
                     v.put("s", e.getValue()[1]);
                     v.put("time", Long.parseLong(e.getValue()[2]));
+                    // SilentGram Batch Q: sender id as the 4th element.
+                    // Length-guarded for any 3-element entry that predates it.
+                    v.put("sid", e.getValue().length > 3 ? Long.parseLong(e.getValue()[3]) : 0);
                     obj.put(e.getKey(), v);
                 }
             }
@@ -94,11 +109,25 @@ public class SilentMessageHistory {
         }
     }
 
+    // SilentGram Batch Q: sender id stored as the cache array's 4th
+    // element. Entries cached before this change have only 3 elements
+    // (or a corrupt 4th) and read back as 0 = unknown / legacy.
+    private static long silentCacheSenderId(String[] cached) {
+        if (cached == null || cached.length <= 3 || cached[3] == null) {
+            return 0;
+        }
+        try {
+            return Long.parseLong(cached[3]);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     /**
      * Called whenever a message is shown. If the text changed since we last
      * saw it, the OLD text is saved as edit history.
      */
-    public static void onMessageShown(long dialogId, int msgId, String text, String sender, long time) {
+    public static void onMessageShown(long dialogId, int msgId, String text, String sender, long senderId, long time) {
         if (text == null || text.isEmpty()) {
             return;
         }
@@ -109,11 +138,11 @@ public class SilentMessageHistory {
             old = cache.get(key);
         }
         if (old != null && !text.equals(old[0])) {
-            // Edited — keep the old text.
-            addHistory(new Entry(dialogId, msgId, old[0], old[1], Long.parseLong(old[2]), "edited"));
+            // Edited — keep the old text (and its sender, id included).
+            addHistory(new Entry(dialogId, msgId, old[0], old[1], silentCacheSenderId(old), Long.parseLong(old[2]), "edited"));
         }
         synchronized (cache) {
-            cache.put(key, new String[]{text, sender == null ? "" : sender, String.valueOf(time)});
+            cache.put(key, new String[]{text, sender == null ? "" : sender, String.valueOf(time), String.valueOf(senderId)});
         }
         saveCache();
     }
@@ -131,7 +160,7 @@ public class SilentMessageHistory {
                 old = cache.remove(key);
             }
             if (old != null && old[0] != null && !old[0].isEmpty()) {
-                addHistory(new Entry(dialogId, id, old[0], old[1], Long.parseLong(old[2]), "deleted"));
+                addHistory(new Entry(dialogId, id, old[0], old[1], silentCacheSenderId(old), Long.parseLong(old[2]), "deleted"));
             }
         }
         saveCache();
@@ -158,7 +187,7 @@ public class SilentMessageHistory {
             JSONArray arr = new JSONArray(prefs().getString("msg_history_" + dialogId, "[]"));
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject o = arr.getJSONObject(i);
-                out.add(new Entry(dialogId, o.optInt("id"), o.optString("t"), o.optString("s"), o.optLong("time"), o.optString("k")));
+                out.add(new Entry(dialogId, o.optInt("id"), o.optString("t"), o.optString("s"), o.optLong("sid"), o.optLong("time"), o.optString("k")));
             }
         } catch (Exception e) {
             // Return what we have.
@@ -190,6 +219,7 @@ public class SilentMessageHistory {
                 o.put("id", e.msgId);
                 o.put("t", e.text);
                 o.put("s", e.sender);
+                o.put("sid", e.senderId);
                 o.put("time", e.time);
                 o.put("k", e.kind);
                 arr.put(o);
@@ -202,6 +232,42 @@ public class SilentMessageHistory {
 
     public static void clearHistory(long dialogId) {
         prefs().edit().remove("msg_history_" + dialogId).apply();
+    }
+
+    /**
+     * SilentGram Q-B: purge ONE message completely — remove every history
+     * entry for it (kind "deleted" or "edited") AND its cached text, so
+     * "Delete for me" leaves no backup behind. Called after a delete-for-me
+     * is issued; the E7 hook may already have moved the cached text into
+     * history during the delete, so both stores must be cleared. Never
+     * throws.
+     */
+    public static void removeEntry(long dialogId, int msgId) {
+        try {
+            List<Entry> list = getHistory(dialogId);
+            boolean changed = false;
+            Iterator<Entry> it = list.iterator();
+            while (it.hasNext()) {
+                if (it.next().msgId == msgId) {
+                    it.remove();
+                    changed = true;
+                }
+            }
+            if (changed) {
+                saveHistory(dialogId, list);
+            }
+        } catch (Exception e) {
+            // Never crash on a purge failure.
+        }
+        loadCache();
+        String key = dialogId + ":" + msgId;
+        boolean removedFromCache;
+        synchronized (cache) {
+            removedFromCache = cache.remove(key) != null;
+        }
+        if (removedFromCache) {
+            saveCache();
+        }
     }
 
     /** All dialogIds that have any deleted/edited history. */

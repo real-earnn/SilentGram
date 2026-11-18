@@ -16238,11 +16238,19 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
         try {
             if (messageObject != null && !messageObject.silentTombstone && messageObject.messageText != null && messageObject.messageText.length() > 0) {
                 String sender = "";
+                // SilentGram Batch Q: also remember WHO sent it, so a
+                // deleted tombstone can later show the author name +
+                // avatar exactly like the live message did. Out-owner
+                // messages are the client user; otherwise the peer id
+                // already computed below (0 when unknown / a channel post).
+                long senderId = 0;
                 if (messageObject.isOutOwner()) {
                     sender = "You";
+                    senderId = UserConfig.getInstance(currentAccount).getClientUserId();
                 } else {
                     long fromId = org.telegram.messenger.DialogObject.getPeerDialogId(messageObject.messageOwner.from_id);
                     if (fromId > 0) {
+                        senderId = fromId;
                         org.telegram.tgnet.TLRPC.User u = MessagesController.getInstance(currentAccount).getUser(fromId);
                         if (u != null) {
                             sender = org.telegram.messenger.UserObject.getUserName(u);
@@ -16257,7 +16265,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                 }
                 org.telegram.messenger.SilentMessageHistory.onMessageShown(
                         messageObject.getDialogId(), messageObject.getId(),
-                        shownText, sender,
+                        shownText, sender, senderId,
                         (long) messageObject.messageOwner.date * 1000);
             }
         } catch (Exception e) {
