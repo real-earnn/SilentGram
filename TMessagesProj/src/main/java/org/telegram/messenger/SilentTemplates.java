@@ -1,7 +1,7 @@
 package org.telegram.messenger;
 
 import android.util.Base64;
-import android.util.LongSparseArray;
+import androidx.collection.LongSparseArray;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
