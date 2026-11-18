@@ -10240,32 +10240,51 @@ public class ChatActivity extends BaseFragment implements
         layout.setOrientation(android.widget.LinearLayout.VERTICAL);
         layout.setBackgroundColor(Theme.getColor(Theme.key_windowBackgroundWhite));
         for (org.telegram.messenger.SilentTemplates.Template t : matches) {
-            TextView row = new TextView(context);
-            String label = "/" + t.trigger;
+            // SilentGram Batch U: a post-preview strip (Telegram theme) —
+            // trigger name on the first line, the post's text on the
+            // second, so the user sees which post each trigger sends.
+            android.widget.LinearLayout row = new android.widget.LinearLayout(context);
+            row.setOrientation(android.widget.LinearLayout.VERTICAL);
+            row.setPadding(AndroidUtilities.dp(16), AndroidUtilities.dp(10), AndroidUtilities.dp(16), AndroidUtilities.dp(10));
+            TextView title = new TextView(context);
+            String titleText = "/" + t.trigger;
             if (t.hasMedia()) {
                 String mediaLabel = org.telegram.messenger.SilentTemplates.MEDIA_VIDEO.equals(t.mediaType)
                         ? LocaleController.getString(R.string.SilentTemplateVideo)
                         : org.telegram.messenger.SilentTemplates.MEDIA_PHOTO.equals(t.mediaType)
                                 ? LocaleController.getString(R.string.SilentTemplatePhoto)
                                 : LocaleController.getString(R.string.SilentTemplateFile);
-                label += " [" + mediaLabel + "]";
+                titleText += "  [" + mediaLabel + "]";
             }
+            title.setText(titleText);
+            title.setTextSize(15);
+            title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+            title.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
+            row.addView(title);
             if (t.text != null && !t.text.isEmpty()) {
-                String preview = t.text.length() > 60 ? t.text.substring(0, 60) + "…" : t.text;
-                label += " — " + preview;
+                TextView preview = new TextView(context);
+                String previewText = t.text.length() > 80 ? t.text.substring(0, 80) + "…" : t.text;
+                preview.setText(previewText);
+                preview.setTextSize(14);
+                preview.setSingleLine(true);
+                preview.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                preview.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText));
+                row.addView(preview);
             }
-            row.setText(label);
-            row.setTextSize(15);
-            row.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
-            row.setPadding(AndroidUtilities.dp(16), AndroidUtilities.dp(12), AndroidUtilities.dp(16), AndroidUtilities.dp(12));
             // K13 (d): tapping the suggestion SENDS the post (with media),
             // it no longer just inserts the text.
             row.setOnClickListener(v -> sendSilentTemplate(t));
             layout.addView(row);
         }
+        // SilentGram Batch U: NOT focusable — a focusable popup steals
+        // focus from the input and closes the keyboard every time the
+        // user types a trigger letter. Non-focusable keeps the keyboard
+        // open; rows still get taps, and tapping outside dismisses it.
         silentTemplatePopup = new android.widget.PopupWindow(layout,
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                android.view.ViewGroup.LayoutParams.WRAP_CONTENT, true);
+                android.view.ViewGroup.LayoutParams.WRAP_CONTENT, false);
+        silentTemplatePopup.setTouchable(true);
+        silentTemplatePopup.setOutsideTouchable(true);
         silentTemplatePopup.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Theme.getColor(Theme.key_windowBackgroundWhite)));
         silentTemplatePopup.setElevation(AndroidUtilities.dp(8));
         // Show above the input: measure first, then drop down with a
@@ -10289,21 +10308,29 @@ public class ChatActivity extends BaseFragment implements
         }
         chatActivityEnterView.setFieldText("");
         String caption = t.text != null && !t.text.isEmpty() ? t.text : null;
+        // SilentGram Batch U: the saved entities (bold / links / premium
+        // custom emoji, ...) so the sent post keeps them.
+        java.util.ArrayList<TLRPC.MessageEntity> entities = org.telegram.messenger.SilentTemplates.entitiesFromBase64(t.entities);
         java.io.File mediaFile = null;
         if (t.hasMedia() && getParentActivity() != null) {
             mediaFile = org.telegram.messenger.SilentTemplates.resolveMediaFile(getParentActivity(), t);
         }
         if (mediaFile != null && org.telegram.messenger.SilentTemplates.MEDIA_PHOTO.equals(t.mediaType)) {
-            SendMessagesHelper.prepareSendingPhoto(getAccountInstance(), mediaFile.getAbsolutePath(), null, dialog_id, null, getThreadMessage(), null, caption, null, null, null, 0, null, true, 0, chatMode, getMessageChatSendParams());
+            SendMessagesHelper.prepareSendingPhoto(getAccountInstance(), mediaFile.getAbsolutePath(), null, dialog_id, null, getThreadMessage(), null, caption, entities, null, null, 0, null, true, 0, chatMode, getMessageChatSendParams());
             return;
         }
         if (mediaFile != null && org.telegram.messenger.SilentTemplates.MEDIA_VIDEO.equals(t.mediaType)) {
-            SendMessagesHelper.prepareSendingVideo(getAccountInstance(), mediaFile.getAbsolutePath(), null, null, null, dialog_id, null, getThreadMessage(), null, null, null, 0, null, true, 0, 0, false, false, caption, getMessageChatSendParams(), 0, 0, getSendMonoForumPeerId(), getSendMessageSuggestionParams());
+            SendMessagesHelper.prepareSendingVideo(getAccountInstance(), mediaFile.getAbsolutePath(), null, null, null, dialog_id, null, getThreadMessage(), null, null, entities, 0, null, true, 0, 0, false, false, caption, getMessageChatSendParams(), 0, 0, getSendMonoForumPeerId(), getSendMessageSuggestionParams());
             return;
         }
         if (mediaFile != null && org.telegram.messenger.SilentTemplates.MEDIA_DOCUMENT.equals(t.mediaType)) {
             String mime = t.mediaMime != null && !t.mediaMime.isEmpty() ? t.mediaMime : "application/octet-stream";
-            SendMessagesHelper.prepareSendingDocument(getAccountInstance(), mediaFile.getAbsolutePath(), mediaFile.getAbsolutePath(), null, caption, mime, dialog_id, null, getThreadMessage(), null, null, null, true, 0, null, getMessageChatSendParams(), false);
+            // SilentGram Batch U: the plural form carries the caption
+            // entities (the singular prepareSendingDocument has no
+            // entities parameter); a single path sends one document.
+            java.util.ArrayList<String> docPaths = new java.util.ArrayList<>();
+            docPaths.add(mediaFile.getAbsolutePath());
+            SendMessagesHelper.prepareSendingDocuments(getAccountInstance(), docPaths, docPaths, null, caption, entities, mime, dialog_id, null, getThreadMessage(), null, null, null, true, 0, 0, null, getMessageChatSendParams(), 0, false, 0, getSendMonoForumPeerId(), getSendMessageSuggestionParams());
             return;
         }
         if (t.hasMedia()) {
@@ -10312,7 +10339,7 @@ public class ChatActivity extends BaseFragment implements
             BulletinFactory.of(this).createSimpleBulletin(R.drawable.msg_saved, LocaleController.getString(R.string.SilentTemplateMediaMissing)).show();
         }
         if (caption != null) {
-            getSendMessagesHelper().sendMessage(SendMessagesHelper.SendMessageParams.of(caption, dialog_id, replyingMessageObject, getThreadMessage(), null, false, null, null, null, true, 0, 0, null, false));
+            getSendMessagesHelper().sendMessage(SendMessagesHelper.SendMessageParams.of(caption, dialog_id, replyingMessageObject, getThreadMessage(), null, false, entities, null, null, true, 0, 0, null, false));
         }
     }
 
@@ -10357,6 +10384,15 @@ public class ChatActivity extends BaseFragment implements
         if (text == null) {
             text = "";
         }
+        // SilentGram Batch U: a rich message (TL_iv.RichMessage) keeps its
+        // content in rich blocks, not in messageOwner.message — without
+        // this fallback the template was saved empty and "did nothing".
+        if (text.isEmpty() && message.messageText != null) {
+            text = message.messageText.toString();
+        }
+        // SilentGram Batch U: save the entities too (bold / links /
+        // premium custom emoji, ...) so the template sends them back.
+        String entities = org.telegram.messenger.SilentTemplates.entitiesToBase64(message.messageOwner.entities);
         String mediaType = "";
         String mediaName = "";
         String mediaMime = "";
@@ -10386,15 +10422,27 @@ public class ChatActivity extends BaseFragment implements
                 } else {
                     // Not downloaded yet: remember where it will land and
                     // start the download, so a later send can pick it up.
-                    if (local != null) {
-                        mediaCache = local.getAbsolutePath();
-                    }
-                    if (document != null) {
-                        FileLoader.getInstance(currentAccount).loadFile(document, message, FileLoader.PRIORITY_HIGH, 0);
-                    } else if (message.isPhoto() && message.messageOwner.media instanceof TLRPC.TL_messageMediaPhoto) {
+                    // SilentGram Batch U: for a photo, remember the path of
+                    // the size actually being downloaded — getPathToMessage
+                    // can point at a different size that never lands, which
+                    // is why a saved file was "dropped" on send.
+                    if (message.isPhoto() && message.messageOwner.media instanceof TLRPC.TL_messageMediaPhoto) {
                         TLRPC.PhotoSize size = FileLoader.getClosestPhotoSizeWithSize(message.photoThumbs, AndroidUtilities.getPhotoSize());
                         if (size != null) {
+                            java.io.File sizePath = FileLoader.getInstance(currentAccount).getPathToAttach(size.location, true);
+                            if (sizePath != null) {
+                                mediaCache = sizePath.getAbsolutePath();
+                            }
                             FileLoader.getInstance(currentAccount).loadFile(ImageLocation.getForMessage(size, message.messageOwner), message, "jpg", FileLoader.PRIORITY_HIGH, 0);
+                        } else if (local != null) {
+                            mediaCache = local.getAbsolutePath();
+                        }
+                    } else {
+                        if (local != null) {
+                            mediaCache = local.getAbsolutePath();
+                        }
+                        if (document != null) {
+                            FileLoader.getInstance(currentAccount).loadFile(document, message, FileLoader.PRIORITY_HIGH, 0);
                         }
                     }
                 }
@@ -10405,7 +10453,7 @@ public class ChatActivity extends BaseFragment implements
             mediaFile = "";
             mediaCache = "";
         }
-        org.telegram.messenger.SilentTemplates.addTemplate(trigger, text, mediaType, mediaFile, mediaName, mediaMime, mediaCache);
+        org.telegram.messenger.SilentTemplates.addTemplate(trigger, text, mediaType, mediaFile, mediaName, mediaMime, mediaCache, entities);
         BulletinFactory.of(this).createSimpleBulletin(R.drawable.msg_saved, LocaleController.getString(R.string.SilentTemplateSaved)).show();
     }
 
@@ -28160,7 +28208,11 @@ public class ChatActivity extends BaseFragment implements
             // messages / messagesDict / messagesByDays for real. The
             // reply-count decrement below is not idempotent either, so the
             // guard sits before any mutation for this id.
-            if (obj != null && obj.silentTombstone) {
+            // SilentGram Batch U: a tombstone the user is deleting "for me"
+            // must NOT be skipped by this guard — it has to fall through
+            // to the Q-B delete-for-me removal below, or it stays standing
+            // until the user leaves and re-enters the chat.
+            if (obj != null && obj.silentTombstone && !silentIsDeleteForMe(loadIndex == 1 ? mergeDialogId : dialog_id, mid)) {
                 continue;
             }
             if (PhotoViewer.isPlayingMessage(obj)) {
@@ -35444,10 +35496,14 @@ public class ChatActivity extends BaseFragment implements
                 // SilentGram: resize this sticker (1 = tiny, 20 = full screen).
                 if (selectedObject != null && selectedObject.isSticker()) {
                     org.telegram.messenger.SilentStickerResize.showPicker(getParentActivity(), currentAccount, selectedObject, () -> {
-                        if (chatListView != null) {
-                            chatListView.invalidateViews();
+                        // SilentGram Batch U: a resize must re-MEASURE the
+                        // row, not just redraw it — invalidateViews() only
+                        // redraws and updateVisibleRows() rebinds without
+                        // notifying the adapter, so the row kept its old
+                        // height while the sticker image resized.
+                        if (chatAdapter != null) {
+                            chatAdapter.notifyDataSetChanged();
                         }
-                        updateVisibleRows();
                     });
                 }
                 break;
@@ -36589,7 +36645,17 @@ public class ChatActivity extends BaseFragment implements
                         params.suggestionParams = messageSuggestionParams;
                         getSendMessagesHelper().sendMessage(params);
                     }
-                    getSendMessagesHelper().sendMessage(fmessages, did, forwardingWithoutQuote, false, notify, scheduleDate, scheduleRepeatPeriod, null, -1, price == null ? 0 : price, getSendMonoForumPeerId(), getSendMessageSuggestionParams());
+                    if (forwardingWithoutQuote) {
+                        // SilentGram Batch U: FWQ sends each message as a fresh
+                        // copy (no "Forwarded from" tag at all) — the server
+                        // ignores drop_author for channel posts / rich
+                        // messages, so a forward can never be tag-free there.
+                        for (int i = 0; i < fmessages.size(); i++) {
+                            getSendMessagesHelper().processForwardFromMyName(fmessages.get(i), did, price == null ? 0 : price, getSendMonoForumPeerId(), getSendMessageSuggestionParams(), notify, scheduleDate, scheduleRepeatPeriod);
+                        }
+                    } else {
+                        getSendMessagesHelper().sendMessage(fmessages, did, false, false, notify, scheduleDate, scheduleRepeatPeriod, null, -1, price == null ? 0 : price, getSendMonoForumPeerId(), getSendMessageSuggestionParams());
+                    }
                 }
                 forwardingWithoutQuote = false;
                 fragment.finishFragment();

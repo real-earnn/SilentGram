@@ -265,6 +265,8 @@ public class EmojiView extends FrameLayout implements
     private RecyclerListView.OnItemClickListener stickersOnItemClickListener;
     // SilentGram: Favorites tab — favorited packs, loaded by short_name.
     private FrameLayout favoritesContainer;
+    private ImageView addFavoritePackButton;
+    private boolean favoritesStripHidden;
     private RecyclerListView favoritesGridView;
     private GridLayoutManager favoritesLayoutManager;
     private ScrollSlidingTabStrip favoritesTabStrip;
@@ -2674,6 +2676,22 @@ public class EmojiView extends FrameLayout implements
                     if (tab >= 0) {
                         favoritesTabStrip.onPageScrolled(tab, 0);
                     }
+                    // SilentGram Batch U: the pack strip (and the "+" in
+                    // it) slides away when scrolling up through the list
+                    // and comes back when scrolling down toward the top.
+                    if (dy > 0 && !favoritesStripHidden) {
+                        favoritesStripHidden = true;
+                        favoritesTabStrip.animate().translationY(-AndroidUtilities.dp(36)).setDuration(150).setInterpolator(CubicBezierInterpolator.EASE_OUT_QUINT).start();
+                        if (addFavoritePackButton != null) {
+                            addFavoritePackButton.animate().translationY(-AndroidUtilities.dp(36)).setDuration(150).setInterpolator(CubicBezierInterpolator.EASE_OUT_QUINT).start();
+                        }
+                    } else if (dy < 0 && favoritesStripHidden) {
+                        favoritesStripHidden = false;
+                        favoritesTabStrip.animate().translationY(0).setDuration(150).setInterpolator(CubicBezierInterpolator.EASE_OUT_QUINT).start();
+                        if (addFavoritePackButton != null) {
+                            addFavoritePackButton.animate().translationY(0).setDuration(150).setInterpolator(CubicBezierInterpolator.EASE_OUT_QUINT).start();
+                        }
+                    }
                 }
             });
             ThemeBind.listGlowColor(favoritesGridView, Theme.key_chat_emojiPanelBackground, resourcesProvider);
@@ -2719,6 +2737,14 @@ public class EmojiView extends FrameLayout implements
             favoritesTabStrip.setType(ScrollSlidingTabStrip.Type.TAB);
             favoritesTabStrip.setIndicatorColor(getThemedColor(Theme.key_chat_emojiPanelStickerPackSelectorLine));
             favoritesTabStrip.setUnderlineColor(getThemedColor(Theme.key_chat_emojiPanelShadowLine));
+            // SilentGram Batch U: the strip must be OPAQUE — with a
+            // transparent background the emojis underneath showed through
+            // while scrolling up. Mirrors the Stickers tab.
+            if (shouldDrawBackground) {
+                favoritesTabStrip.setBackgroundColor(getThemedColor(Theme.key_chat_emojiPanelBackground));
+            } else {
+                favoritesTabStrip.setBackground(null);
+            }
             favoritesTabStrip.setDelegate(page -> {
                 if (favoritePacksAdapter == null) {
                     return;
@@ -2729,19 +2755,19 @@ public class EmojiView extends FrameLayout implements
                 }
             });
             favoritesContainer.addView(favoritesTabStrip, LayoutHelper.createFrame(LayoutHelper.MATCH_PARENT, 36, Gravity.LEFT | Gravity.TOP));
-            // SilentGram (H20b): "+" in the top-right corner of the
-            // Favorites tab — add a pack by pasting its link, without
-            // needing the long-press. Same icon/tint/press treatment as
-            // the other panel icon buttons (backspaceButton below).
-            ImageView addFavoritePackButton = new ImageView(context);
+            // SilentGram (H20b): "+" at the right end of the Favorites
+            // strip — add a pack by pasting its link, without needing the
+            // long-press. SilentGram Batch U: it sits INSIDE the 36dp
+            // strip row (0 top margin, no pill background), not floating
+            // on top of the switch area and spilling into the grid.
+            addFavoritePackButton = new ImageView(context);
             addFavoritePackButton.setImageResource(R.drawable.msg_add);
             addFavoritePackButton.setColorFilter(new PorterDuffColorFilter(getThemedColor(Theme.key_chat_emojiPanelIcon), PorterDuff.Mode.MULTIPLY));
             addFavoritePackButton.setScaleType(ImageView.ScaleType.CENTER);
-            addFavoritePackButton.setBackground(Theme.createRoundRectDrawable(dp(18), getThemedColor(Theme.key_chat_emojiPanelBackground)));
             addFavoritePackButton.setContentDescription(getString(R.string.SilentAddPackToFavorites));
             addFavoritePackButton.setOnClickListener(v -> showAddPackByLinkDialog());
             ScaleStateListAnimator.apply(addFavoritePackButton);
-            favoritesContainer.addView(addFavoritePackButton, LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.END, 0, 8, 8, 0));
+            favoritesContainer.addView(addFavoritePackButton, LayoutHelper.createFrame(36, 36, Gravity.TOP | Gravity.END, 0, 0, 8, 0));
             Tab favoritesTab = new Tab();
             favoritesTab.type = TAB_FAVORITES;
             favoritesTab.view = favoritesContainer;

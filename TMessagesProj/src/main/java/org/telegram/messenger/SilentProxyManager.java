@@ -169,6 +169,54 @@ public class SilentProxyManager {
     // Watcher rounds in a row the current proxy must fail verification
     // before it is abandoned as unstable (see noteWatcherRound).
     private static final int WATCHER_UNSTABLE_ROUNDS = 2;
+    // SilentGram U: the connecting watchdog. If the app is stuck on
+    // "Connecting" (or "Connecting to proxy") for more than this long,
+    // the current proxy is not delivering — switch to OUR proxy
+    // immediately (see onConnectingStall) and let the background rounds
+    // find the fastest verified one. 3s: our proxy connects in
+    // milliseconds, so anything still connecting after 3s is a dead or
+    // slow proxy, not a slow network — a dead network shows "Waiting
+    // for network", not "Connecting", and the watchdog never fires for
+    // that. The watchdog only watches while the app is in the
+    // foreground (like the K6b watcher — switching in the background
+    // suppresses push notifications).
+    private static final long CONNECTING_WATCHDOG_TIMEOUT_MS = 3 * 1000L;
+    private static final long CONNECTING_WATCHDOG_POLL_MS = 500L;
+    // SilentGram U: flapping. A proxy that connects and then drops, over
+    // and over, is not useful — remove it from the managed list (see
+    // noteFlapCycle / condemnFlappingProxy). A flap cycle is counted
+    // only when the watchdog fires (stuck on Connecting > 3s) on a
+    // proxy that connected recently — a brief blip that recovers on its
+    // own is never counted, and a connection that lived longer than
+    // FLAP_CONNECTED_MIN_MS proves the proxy stable and clears its
+    // count. FLAP_MIN_CYCLES such cycles inside FLAP_WINDOW_MS condemn
+    // the proxy; it stays blocked for FLAP_BLOCK_MS so the next fetch
+    // does not re-add it.
+    private static final int FLAP_MIN_CYCLES = 3;
+    private static final long FLAP_WINDOW_MS = 10 * 60 * 1000L;
+    private static final long FLAP_CONNECTED_MIN_MS = 5 * 60 * 1000L;
+    private static final long FLAP_BLOCK_MS = 24 * 60 * 60 * 1000L;
+    // How soon after a Refresh tap the fresh API list is fetched (the
+    // fast saved-candidate round runs first — probeAndConnect only
+    // runs one round at a time, so an immediate fetch round would be
+    // skipped and the fresh list dropped).
+    private static final long REFRESH_FETCH_DELAY_MS = 30 * 1000L;
+
+    private static volatile boolean connectingWatchdogStarted;
+    // When the current "Connecting" stall started (0 = not stalled), and
+    // which proxy it is on. Re-armed whenever the proxy or the state
+    // changes.
+    private static volatile long connectingSinceMs;
+    private static volatile String connectingProxyKey;
+    // Connection-state machine for flap attribution: the last state the
+    // watchdog saw, which proxy was connected, and when it connected.
+    private static volatile int watchdogLastState = -1;
+    private static volatile String watchdogLastConnectedKey;
+    private static volatile long watchdogLastConnectedAtMs;
+    // Flap cycles per proxy key: [cycles in the current window, window
+    // start ms]. In-memory only — a condemned proxy's block is persisted
+    // in prefs (see condemnFlappingProxy).
+    private static final ConcurrentHashMap<String, long[]> flapByKey = new ConcurrentHashMap<>();
 
     private static volatile boolean started;
     private static volatile boolean fetching;
@@ -370,6 +418,7 @@ public class SilentProxyManager {
         fastOpenRound();
         startDownloadWatchdog();
         startProxyWatcher();
+        startConnectingWatchdog();
         AndroidUtilities.runOnUIThread(SilentProxyManager::refreshAsync, REFRESH_INTERVAL_MS);
     }
 
@@ -579,6 +628,12 @@ public class SilentProxyManager {
         for (ProxySettings settings : proxies) {
             String key = settings.getAddress() + ":" + settings.getPort();
             if (!seen.add(key)) {
+                continue;
+            }
+            // SilentGram U: a proxy condemned for flapping stays out of
+            // the candidate list for FLAP_BLOCK_MS, so the next fetch
+            // does not re-add it straight after it was removed.
+            if (isFlapBlocked(key)) {
                 continue;
             }
             SharedConfig.ProxyInfo existing = null;
@@ -1415,17 +1470,39 @@ public class SilentProxyManager {
     }
 
     /**
-     * SilentGram I8: manual proxy switch (the chat-list "Refresh" button).
-     * Marks the current proxy bad for an hour — the same as the download
-     * watchdog does — connects to the next-fastest candidate, then fetches
-     * a fresh list in the background. Unlike the watchdog this is never
-     * throttled by the switch cooldown: the user asked for it.
-     * Returns true if the app switched to a different proxy.
+     * SilentGram U: manual proxy switch (the chat-list "Refresh" button).
+     * The old behaviour marked the current proxy bad and connected to
+     * the next-fastest saved candidate — which was often a dead or slow
+     * proxy, so Refresh just left the app stuck on "Connecting" (and it
+     * even marked OUR proxy bad when the user had connected to it by
+     * hand). Now: switch to OUR proxy IMMEDIATELY — it connects in
+     * milliseconds, so Refresh never stalls — then re-probe the saved
+     * candidates in the background so the gate can switch to the
+     * fastest verified one, and fetch a fresh list shortly after for
+     * the next cycle. Nothing is marked bad: Refresh is a "get me
+     * connected now" button, not a complaint about the current proxy.
+     * Returns true if the app is now on our proxy (or was already).
      */
     public static boolean rotateProxy() {
-        boolean switched = switchToNextProxy(true);
-        refreshAsync();
-        return switched;
+        try {
+            SharedConfig.ProxyInfo current = SharedConfig.currentProxy;
+            if (current == null || !isOwnProxy(current)) {
+                enableProxy(ownProxyInfo(), -1);
+                FileLog.d("SilentProxy: U Refresh: switched to our proxy immediately");
+            }
+        } catch (Throwable e) {
+            FileLog.e(e);
+            return false;
+        }
+        // Background re-evaluation over the saved candidates (fast —
+        // the kept top 10), so the gate can switch to the fastest
+        // verified proxy. The fresh API list is fetched shortly after,
+        // once this round has finished (probeAndConnect only runs one
+        // round at a time, so an immediate fetch round would be
+        // skipped and the fresh list dropped).
+        runWatcherRound();
+        AndroidUtilities.runOnUIThread(SilentProxyManager::refreshAsync, REFRESH_FETCH_DELAY_MS);
+        return true;
     }
 
     /**
@@ -1618,5 +1695,241 @@ public class SilentProxyManager {
         }
         FileLog.d("SilentProxy: K6b watcher: no verified proxy to abandon to");
         return false;
+    }
+
+    // ------------------------------------------------------------------
+    // SilentGram U: the connecting watchdog + flapping-proxy removal.
+    //
+    // The open round (Batch T) connects to OUR proxy first, but a proxy
+    // can still go stale mid-session — and the old Refresh just switched
+    // to another possibly-dead candidate. This watchdog polls the real
+    // connection state: any time the app sits on "Connecting" (or
+    // "Connecting to proxy") for more than 3 seconds, it switches to
+    // OUR proxy right away, then re-probes the saved candidates so the
+    // gate can move to the fastest verified one. It never fires while
+    // the connection is healthy (Connected / Updating), while there is
+    // no network ("Waiting for network" — a proxy switch cannot fix
+    // that), while no account is signed in, or while the app is in the
+    // background. It does not fight the open round: the open round
+    // enables OUR proxy first, so the watchdog sees our proxy as
+    // current and stays quiet — and a mid-round switch to ours is
+    // exactly what the gate would do anyway (it reads
+    // SharedConfig.currentProxy fresh on every decision).
+    // ------------------------------------------------------------------
+
+    private static void startConnectingWatchdog() {
+        if (connectingWatchdogStarted) {
+            return;
+        }
+        connectingWatchdogStarted = true;
+        new Thread(() -> {
+            while (true) {
+                try {
+                    Thread.sleep(CONNECTING_WATCHDOG_POLL_MS);
+                } catch (InterruptedException ignored) {
+                    return;
+                }
+                try {
+                    pollConnectingWatchdog();
+                } catch (Throwable e) {
+                    FileLog.e(e);
+                }
+            }
+        }, "silent-proxy-connect-watchdog").start();
+    }
+
+    /** One watchdog poll: track the connection state and fire on a >3s stall. */
+    private static void pollConnectingWatchdog() {
+        if (!started) {
+            return;
+        }
+        if (ForegroundDetector.getInstance().isBackground()) {
+            connectingSinceMs = 0;
+            return;
+        }
+        int account = UserConfig.selectedAccount;
+        if (!UserConfig.getInstance(account).isClientActivated()) {
+            connectingSinceMs = 0;
+            return;
+        }
+        if (!SharedConfig.isProxyEnabled() || SharedConfig.currentProxy == null) {
+            connectingSinceMs = 0;
+            return;
+        }
+        int state = ConnectionsManager.getInstance(account).getConnectionState();
+        long now = System.currentTimeMillis();
+        String curKey = proxyKey(SharedConfig.currentProxy);
+        if (state == ConnectionsManager.ConnectionStateConnected
+                || state == ConnectionsManager.ConnectionStateUpdating) {
+            // Healthy (Updating is still connected) — the stall timer
+            // is reset, and the connection is recorded for flap
+            // attribution. A proxy that has now stayed connected
+            // longer than FLAP_CONNECTED_MIN_MS has proven itself
+            // stable, so its flap count is cleared.
+            if (watchdogLastState != ConnectionsManager.ConnectionStateConnected
+                    && watchdogLastState != ConnectionsManager.ConnectionStateUpdating) {
+                watchdogLastConnectedKey = curKey;
+                watchdogLastConnectedAtMs = now;
+            } else if (!curKey.equals(watchdogLastConnectedKey)) {
+                // The gate switched proxies while connected — re-attribute
+                // the connection to the new proxy.
+                watchdogLastConnectedKey = curKey;
+                watchdogLastConnectedAtMs = now;
+            }
+            if (!isOwnProxyKey(curKey) && now - watchdogLastConnectedAtMs > FLAP_CONNECTED_MIN_MS) {
+                flapByKey.remove(curKey);
+            }
+            watchdogLastState = state;
+            connectingSinceMs = 0;
+            return;
+        }
+        if (state == ConnectionsManager.ConnectionStateWaitingForNetwork) {
+            // No network at all — a proxy switch cannot help, and our
+            // proxy failing is the signal the user's own net is the
+            // problem. Do not count a flap, do not switch.
+            watchdogLastState = state;
+            connectingSinceMs = 0;
+            return;
+        }
+        if (state == ConnectionsManager.ConnectionStateConnecting
+                || state == ConnectionsManager.ConnectionStateConnectingToProxy) {
+            if (connectingSinceMs == 0 || !curKey.equals(connectingProxyKey)) {
+                connectingSinceMs = now;
+                connectingProxyKey = curKey;
+            }
+            watchdogLastState = state;
+            if (now - connectingSinceMs >= CONNECTING_WATCHDOG_TIMEOUT_MS) {
+                onConnectingStall(now, curKey);
+                // Re-arm: the switch below moves us to our proxy, and
+                // the next poll starts a fresh stall timer on it if it
+                // also fails to connect.
+                connectingSinceMs = 0;
+                connectingProxyKey = null;
+            }
+            return;
+        }
+        watchdogLastState = state;
+        connectingSinceMs = 0;
+    }
+
+    /**
+     * The app has been stuck on "Connecting" for more than 3 seconds on
+     * stalledKey. Count a flap cycle for it when it connected recently
+     * (a short-lived connection that dropped — the "connect disconnect
+     * connect disconnect" proxy), then switch to OUR proxy immediately
+     * and re-probe the saved candidates in the background so the gate
+     * can move to the fastest verified one.
+     */
+    private static void onConnectingStall(long now, String stalledKey) {
+        if (!isOwnProxyKey(stalledKey) && isManagedProxyKey(stalledKey)
+                && stalledKey.equals(watchdogLastConnectedKey)
+                && now - watchdogLastConnectedAtMs < FLAP_CONNECTED_MIN_MS) {
+            noteFlapCycle(stalledKey, now);
+        }
+        // Re-read the current proxy: condemning a flapping proxy (above)
+        // already switched to ours.
+        SharedConfig.ProxyInfo current = SharedConfig.currentProxy;
+        if (current != null && !isOwnProxy(current)) {
+            try {
+                enableProxy(ownProxyInfo(), -1);
+                FileLog.d("SilentProxy: U connecting watchdog: stuck on Connecting >3s on " + stalledKey + " — switched to our proxy");
+            } catch (Throwable e) {
+                FileLog.e(e);
+            }
+        }
+        // Background re-evaluation so the fastest verified proxy takes
+        // over from ours. Safe while a round is already running — the
+        // round guard skips it and the running round's gate decides.
+        runWatcherRound();
+    }
+
+    /** One flap cycle for key; condemn it once it hits FLAP_MIN_CYCLES inside the window. */
+    private static void noteFlapCycle(String key, long now) {
+        long[] slot = flapByKey.get(key);
+        if (slot == null || now - slot[1] > FLAP_WINDOW_MS) {
+            slot = new long[]{1, now};
+        } else {
+            slot[0]++;
+        }
+        flapByKey.put(key, slot);
+        FileLog.d("SilentProxy: U flap cycle " + slot[0] + "/" + FLAP_MIN_CYCLES + " for " + key);
+        if (slot[0] >= FLAP_MIN_CYCLES) {
+            condemnFlappingProxy(key);
+        }
+    }
+
+    /**
+     * Remove a flapping proxy from the managed list for good (for
+     * FLAP_BLOCK_MS). The app switches to OUR proxy first, so the
+     * condemned proxy is never the active one when it is deleted
+     * (deleting the active proxy would disable the proxy entirely).
+     * Never our own proxy, never a hand-added one — the managed check
+     * below is the guard (hand-added proxies are not in the managed
+     * set). The next fetch cannot re-add it while the block holds
+     * (see isFlapBlocked in applyProxies).
+     */
+    private static void condemnFlappingProxy(String key) {
+        flapByKey.remove(key);
+        if (isOwnProxyKey(key)) {
+            return;
+        }
+        if (!isManagedProxyKey(key)) {
+            return;
+        }
+        try {
+            enableProxy(ownProxyInfo(), -1);
+        } catch (Throwable e) {
+            FileLog.e(e);
+            return;
+        }
+        SharedPreferences prefs = ApplicationLoader.applicationContext
+                .getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
+        prefs.edit().putLong("proxy_flap_" + key, System.currentTimeMillis()).apply();
+        SharedConfig.ProxyInfo target = null;
+        for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
+            if (proxyKey(info).equals(key)) {
+                target = info;
+                break;
+            }
+        }
+        if (target != null) {
+            SharedConfig.deleteProxy(target);
+            lastCandidates.remove(target);
+        }
+        HashSet<String> managed = managedKeys();
+        managed.remove(key);
+        StringBuilder sb = new StringBuilder();
+        for (String k : managed) {
+            if (sb.length() > 0) sb.append(',');
+            sb.append(k);
+        }
+        prefs.edit().putString("managed_proxies", sb.toString()).apply();
+        FileLog.d("SilentProxy: U removed flapping proxy " + key);
+    }
+
+    /** Keys of the proxies this manager added (hand-added ones are not in the set). */
+    private static HashSet<String> managedKeys() {
+        SharedPreferences prefs = ApplicationLoader.applicationContext
+                .getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
+        HashSet<String> managed = new HashSet<>();
+        String savedManaged = prefs.getString("managed_proxies", "");
+        if (savedManaged != null && !savedManaged.isEmpty()) {
+            for (String k : savedManaged.split(",")) {
+                if (!k.isEmpty()) managed.add(k);
+            }
+        }
+        return managed;
+    }
+
+    private static boolean isManagedProxyKey(String key) {
+        return key != null && managedKeys().contains(key);
+    }
+
+    /** True while this proxy is blocked for flapping (FLAP_BLOCK_MS after condemnation). */
+    private static boolean isFlapBlocked(String key) {
+        SharedPreferences prefs = ApplicationLoader.applicationContext
+                .getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
+        long blockedAt = prefs.getLong("proxy_flap_" + key, 0);
+        return blockedAt > 0 && System.currentTimeMillis() - blockedAt < FLAP_BLOCK_MS;
     }
 }

@@ -50,6 +50,16 @@ public class DownloadController extends BaseController implements NotificationCe
     public static final int AUTODOWNLOAD_TYPE_VIDEO = 4;
     public static final int AUTODOWNLOAD_TYPE_DOCUMENT = 8;
 
+    // SilentGram: auto-download OFF by default — no media type selected,
+    // toggle off. This is the fresh-install default for all three
+    // connection types (mobile / Wi-Fi / roaming) and what "Reset
+    // auto-download settings" restores. Same shape as the Medium
+    // preset, but masks 0 and enabled 0.
+    public static final String SILENT_AUTODL_OFF_PRESET = "0_0_0_0_1048576_10485760_1048576_524288_1_1_0_0_100_1";
+    public static Preset getSilentAutodlOffPreset() {
+        return new Preset(SILENT_AUTODL_OFF_PRESET, SILENT_AUTODL_OFF_PRESET);
+    }
+
     public static final int PRESET_NUM_CONTACT = 0;
     public static final int PRESET_NUM_PM = 1;
     public static final int PRESET_NUM_GROUP = 2;
@@ -267,9 +277,11 @@ public class DownloadController extends BaseController implements NotificationCe
         highPreset = new Preset(preferences.getString("preset2", defaultHigh), defaultHigh);
         boolean newConfig;
         if ((newConfig = preferences.contains("newConfig")) || !getUserConfig().isClientActivated()) {
-            mobilePreset = new Preset(preferences.getString("mobilePreset", defaultMedium), defaultMedium);
-            wifiPreset = new Preset(preferences.getString("wifiPreset", defaultHigh), defaultHigh);
-            roamingPreset = new Preset(preferences.getString("roamingPreset", defaultLow), defaultLow);
+            // SilentGram: fresh installs start with auto-download OFF for
+            // all three connection types (see SILENT_AUTODL_OFF_PRESET).
+            mobilePreset = new Preset(preferences.getString("mobilePreset", SILENT_AUTODL_OFF_PRESET), SILENT_AUTODL_OFF_PRESET);
+            wifiPreset = new Preset(preferences.getString("wifiPreset", SILENT_AUTODL_OFF_PRESET), SILENT_AUTODL_OFF_PRESET);
+            roamingPreset = new Preset(preferences.getString("roamingPreset", SILENT_AUTODL_OFF_PRESET), SILENT_AUTODL_OFF_PRESET);
             currentMobilePreset = preferences.getInt("currentMobilePreset", 3);
             currentWifiPreset = preferences.getInt("currentWifiPreset", 3);
             currentRoamingPreset = preferences.getInt("currentRoamingPreset", 3);
@@ -287,9 +299,10 @@ public class DownloadController extends BaseController implements NotificationCe
             for (int a = 0; a < 4; a++) {
                 String key = "mobileDataDownloadMask" + (a == 0 ? "" : a);
                 if (a == 0 || preferences.contains(key)) {
-                    mobileDataDownloadMask[a] = preferences.getInt(key, AUTODOWNLOAD_TYPE_PHOTO | AUTODOWNLOAD_TYPE_VIDEO | AUTODOWNLOAD_TYPE_DOCUMENT);
-                    wifiDownloadMask[a] = preferences.getInt("wifiDownloadMask" + (a == 0 ? "" : a), AUTODOWNLOAD_TYPE_PHOTO | AUTODOWNLOAD_TYPE_VIDEO | AUTODOWNLOAD_TYPE_DOCUMENT);
-                    roamingDownloadMask[a] = preferences.getInt("roamingDownloadMask" + (a == 0 ? "" : a), AUTODOWNLOAD_TYPE_PHOTO);
+                    // SilentGram: no saved mask → auto-download OFF (0).
+                    mobileDataDownloadMask[a] = preferences.getInt(key, 0);
+                    wifiDownloadMask[a] = preferences.getInt("wifiDownloadMask" + (a == 0 ? "" : a), 0);
+                    roamingDownloadMask[a] = preferences.getInt("roamingDownloadMask" + (a == 0 ? "" : a), 0);
                 } else {
                     mobileDataDownloadMask[a] = mobileDataDownloadMask[0];
                     wifiDownloadMask[a] = wifiDownloadMask[0];
@@ -308,6 +321,11 @@ public class DownloadController extends BaseController implements NotificationCe
             mobilePreset = new Preset(mobileDataDownloadMask, mediumPreset.sizes[PRESET_SIZE_NUM_PHOTO], mobileMaxFileSize[2], mobileMaxFileSize[3], true, true, globalAutodownloadEnabled, false, 100, false);
             wifiPreset = new Preset(wifiDownloadMask, highPreset.sizes[PRESET_SIZE_NUM_PHOTO], wifiMaxFileSize[2], wifiMaxFileSize[3], true, true, globalAutodownloadEnabled, false, 100, true);
             roamingPreset = new Preset(roamingDownloadMask, lowPreset.sizes[PRESET_SIZE_NUM_PHOTO], roamingMaxFileSize[2], roamingMaxFileSize[3], false, false, globalAutodownloadEnabled, true, 50, true);
+            // SilentGram: a migrated preset with no media selected is OFF
+            // (so the toggle never shows ON while nothing downloads).
+            if (!mobilePreset.isEnabled()) mobilePreset.enabled = false;
+            if (!wifiPreset.isEnabled()) wifiPreset.enabled = false;
+            if (!roamingPreset.isEnabled()) roamingPreset.enabled = false;
 
             SharedPreferences.Editor editor = preferences.edit();
             editor.putBoolean("newConfig", true);

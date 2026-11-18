@@ -2909,6 +2909,11 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
         additionNavigationBarHeight = hasMainTabs ? dp(MAIN_TABS_HEIGHT_WITH_MARGINS) : 0;
         additionFloatingButtonOffset = hasMainTabs ? dp(DialogsActivity.MAIN_TABS_HEIGHT + DialogsActivity.MAIN_TABS_MARGIN) : 0;
 
+        // SilentGram Batch U: show the "update available" banner when a
+        // newer SilentGram release is out (checked at most once a day,
+        // never blocks startup).
+        org.telegram.messenger.SilentAppUpdate.checkAndPrompt(this);
+
         return true;
     }
 
@@ -13612,15 +13617,26 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             args.putLong("user_id", UserConfig.getInstance(currentAccount).getClientUserId());
             presentFragment(new ChatActivity(args));
         });
-        // SilentGram I8: switch to a different proxy. Some proxies accept
-        // a connection but never deliver data, so chats, emoji and files
-        // stall — tapping Refresh marks the current proxy bad and connects
-        // to the next-fastest one (see SilentProxyManager.rotateProxy).
-        // SilentGram K9: no "Switched to a different proxy" success toast
-        // any more — the tap shows ONLY a brief themed "Refreshing..."
-        // toast. The failure toast is kept (themed) for when there is no
-        // other proxy to switch to.
-        io.add(R.drawable.msg_reset, getString(R.string.Refresh), () -> {
+        // SilentGram U: Refresh now switches to OUR proxy immediately
+        // (see SilentProxyManager.rotateProxy) — it never stalls on
+        // "Connecting" any more. SilentGram K9: no "Switched to a
+        // different proxy" success toast — the tap shows ONLY a brief
+        // themed "Refreshing..." toast. The failure toast is kept
+        // (themed) for when even our proxy cannot be enabled.
+        // Owner gesture: HOLD Refresh for 5 seconds and the hidden
+        // proxy settings page opens, so the owner can inspect the proxy
+        // state when needed. Normal users never see it — a plain tap
+        // still just refreshes, and a short hold does nothing. The row
+        // is built with io.add() (same look as io.add(icon, text)) so
+        // the touch listener for the 5-second hold can be attached.
+        ActionBarMenuSubItem refreshItem = io.add();
+        refreshItem.setTextAndIcon(getString(R.string.Refresh), R.drawable.msg_reset);
+        final boolean[] refreshHoldFired = new boolean[1];
+        refreshItem.setOnClickListener(v -> {
+            if (refreshHoldFired[0]) {
+                io.dismiss();
+                return;
+            }
             if (getParentActivity() != null) {
                 org.telegram.messenger.SilentToast.show(getParentActivity(), "Refreshing...");
             }
@@ -13630,6 +13646,31 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
                         "No other proxy available right now — try again in a moment",
                         android.widget.Toast.LENGTH_LONG);
             }
+            io.dismiss();
+        });
+        final Runnable openProxySettings = () -> {
+            refreshHoldFired[0] = true;
+            if (getParentActivity() == null) {
+                return;
+            }
+            try {
+                io.dismiss();
+            } catch (Throwable ignored) {
+            }
+            try {
+                presentFragment(new org.telegram.ui.ProxyListActivity());
+            } catch (Throwable ignored) {
+            }
+        };
+        refreshItem.setOnTouchListener((v, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                refreshHoldFired[0] = false;
+                org.telegram.messenger.AndroidUtilities.runOnUIThread(openProxySettings, 5000);
+            } else if (event.getAction() == MotionEvent.ACTION_UP
+                    || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                org.telegram.messenger.AndroidUtilities.cancelRunOnUIThread(openProxySettings);
+            }
+            return false;
         });
         // SilentGram H3: the 3-dot menu toggles what the strip above search
         // shows — "My Status" (stories, as now) or "My Accounts" (one

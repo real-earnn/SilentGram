@@ -150,11 +150,13 @@ public class DataSettingsActivity extends BaseFragment {
         wifiRow = rowCount++;
         roamingRow = rowCount++;
         DownloadController dc = getDownloadController();
-        boolean isDefault = !(
-            !dc.lowPreset.equals(dc.getCurrentRoamingPreset()) || dc.lowPreset.isEnabled() != dc.roamingPreset.enabled ||
-            !dc.mediumPreset.equals(dc.getCurrentMobilePreset()) || dc.mediumPreset.isEnabled() != dc.mobilePreset.enabled ||
-            !dc.highPreset.equals(dc.getCurrentWiFiPreset()) || dc.highPreset.isEnabled() != dc.wifiPreset.enabled
-        );
+        // SilentGram: our default is auto-download OFF for all three
+        // (no media selected, toggle off) — not Telegram's ON defaults.
+        // The Reset row shows only when the current settings differ
+        // from that OFF default.
+        boolean isDefault = !dc.getCurrentMobilePreset().isEnabled() && !dc.getCurrentMobilePreset().enabled
+                && !dc.getCurrentWiFiPreset().isEnabled() && !dc.getCurrentWiFiPreset().enabled
+                && !dc.getCurrentRoamingPreset().isEnabled() && !dc.getCurrentRoamingPreset().enabled;
         int wasResetDownloadRow = resetDownloadRow;
         resetDownloadRow = isDefault ? -1 : rowCount++;
         if (listAdapter != null && !fullNotify) {
@@ -358,6 +360,13 @@ public class DataSettingsActivity extends BaseFragment {
                     }
                     if (!checked && preset.enabled) {
                         preset.set(defaultPreset);
+                    } else if (!checked && !preset.isEnabled()) {
+                        // SilentGram: turning ON a preset whose masks are
+                        // all 0 (our OFF default) restores the default
+                        // preset first — otherwise the toggle would be on
+                        // but nothing would ever download.
+                        preset.set(defaultPreset);
+                        preset.enabled = true;
                     } else {
                         preset.enabled = !preset.enabled;
                     }
@@ -394,26 +403,24 @@ public class DataSettingsActivity extends BaseFragment {
                 builder.setMessage(LocaleController.getString(R.string.ResetAutomaticMediaDownloadAlert));
                 builder.setPositiveButton(LocaleController.getString(R.string.Reset), (dialogInterface, i) -> {
                     DownloadController.Preset preset;
-                    DownloadController.Preset defaultPreset;
                     String key;
 
                     SharedPreferences.Editor editor = MessagesController.getMainSettings(currentAccount).edit();
                     for (int a = 0; a < 3; a++) {
                         if (a == 0) {
                             preset = DownloadController.getInstance(currentAccount).mobilePreset;
-                            defaultPreset = DownloadController.getInstance(currentAccount).mediumPreset;
                             key = "mobilePreset";
                         } else if (a == 1) {
                             preset = DownloadController.getInstance(currentAccount).wifiPreset;
-                            defaultPreset = DownloadController.getInstance(currentAccount).highPreset;
                             key = "wifiPreset";
                         } else {
                             preset = DownloadController.getInstance(currentAccount).roamingPreset;
-                            defaultPreset = DownloadController.getInstance(currentAccount).lowPreset;
                             key = "roamingPreset";
                         }
-                        preset.set(defaultPreset);
-                        preset.enabled = defaultPreset.isEnabled();
+                        // SilentGram: Reset restores OUR default — auto-download
+                        // OFF (no media, toggle off), not Telegram's ON defaults.
+                        preset.set(DownloadController.getSilentAutodlOffPreset());
+                        preset.enabled = false;
                         editor.putInt("currentMobilePreset", DownloadController.getInstance(currentAccount).currentMobilePreset = 3);
                         editor.putInt("currentWifiPreset", DownloadController.getInstance(currentAccount).currentWifiPreset = 3);
                         editor.putInt("currentRoamingPreset", DownloadController.getInstance(currentAccount).currentRoamingPreset = 3);

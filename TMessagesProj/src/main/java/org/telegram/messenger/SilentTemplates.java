@@ -1,7 +1,11 @@
 package org.telegram.messenger;
 
+import android.util.Base64;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.telegram.tgnet.SerializedData;
+import org.telegram.tgnet.TLRPC;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -47,13 +51,22 @@ public class SilentTemplates {
         public String mediaMime;
         /** Telegram cache path of a not-yet-downloaded file, or "". */
         public String mediaCache;
+        /** Base64 of the serialized text/caption entities (bold, links,
+         * premium/custom emoji, mentions, ...), or "" for none. This is
+         * what keeps a premium emoji alive in a template (Batch U). */
+        public String entities;
 
         public Template(String trigger, String text) {
-            this(trigger, text, "", "", "", "", "");
+            this(trigger, text, "", "", "", "", "", "");
         }
 
         public Template(String trigger, String text, String mediaType, String mediaFile,
                         String mediaName, String mediaMime, String mediaCache) {
+            this(trigger, text, mediaType, mediaFile, mediaName, mediaMime, mediaCache, "");
+        }
+
+        public Template(String trigger, String text, String mediaType, String mediaFile,
+                        String mediaName, String mediaMime, String mediaCache, String entities) {
             this.trigger = trigger;
             this.text = text;
             this.mediaType = mediaType == null ? "" : mediaType;
@@ -61,6 +74,7 @@ public class SilentTemplates {
             this.mediaName = mediaName == null ? "" : mediaName;
             this.mediaMime = mediaMime == null ? "" : mediaMime;
             this.mediaCache = mediaCache == null ? "" : mediaCache;
+            this.entities = entities == null ? "" : entities;
         }
 
         /** True when this template carries media (stored copy or pending download). */
@@ -91,7 +105,8 @@ public class SilentTemplates {
                         o.optString("media_file"),
                         o.optString("media_name"),
                         o.optString("media_mime"),
-                        o.optString("media_cache")));
+                        o.optString("media_cache"),
+                        o.optString("entities")));
             }
         } catch (Exception e) {
             // Corrupt JSON — start fresh.
@@ -111,6 +126,7 @@ public class SilentTemplates {
                 o.put("media_name", t.mediaName);
                 o.put("media_mime", t.mediaMime);
                 o.put("media_cache", t.mediaCache);
+                o.put("entities", t.entities);
                 arr.put(o);
             }
             prefs().edit().putString(KEY, arr.toString()).apply();
@@ -126,6 +142,12 @@ public class SilentTemplates {
     /** Upsert by trigger (case-insensitive); replaces text AND media fields. */
     public static void addTemplate(String trigger, String text, String mediaType, String mediaFile,
                                    String mediaName, String mediaMime, String mediaCache) {
+        addTemplate(trigger, text, mediaType, mediaFile, mediaName, mediaMime, mediaCache, "");
+    }
+
+    /** Upsert by trigger (case-insensitive); replaces text, media AND entities. */
+    public static void addTemplate(String trigger, String text, String mediaType, String mediaFile,
+                                   String mediaName, String mediaMime, String mediaCache, String entities) {
         List<Template> list = getTemplates();
         for (Template t : list) {
             if (t.trigger.equalsIgnoreCase(trigger)) {
@@ -135,11 +157,12 @@ public class SilentTemplates {
                 t.mediaName = mediaName == null ? "" : mediaName;
                 t.mediaMime = mediaMime == null ? "" : mediaMime;
                 t.mediaCache = mediaCache == null ? "" : mediaCache;
+                t.entities = entities == null ? "" : entities;
                 saveTemplates(list);
                 return;
             }
         }
-        list.add(new Template(trigger, text, mediaType, mediaFile, mediaName, mediaMime, mediaCache));
+        list.add(new Template(trigger, text, mediaType, mediaFile, mediaName, mediaMime, mediaCache, entities));
         saveTemplates(list);
     }
 
@@ -187,6 +210,56 @@ public class SilentTemplates {
             }
         }
         return out;
+    }
+
+    // ---- entities (keeps bold / links / premium emoji alive) ----
+
+    /** Serialize entities to a Base64 string ("" when there are none). */
+    public static String entitiesToBase64(ArrayList<TLRPC.MessageEntity> entities) {
+        if (entities == null || entities.isEmpty()) {
+            return "";
+        }
+        try {
+            SerializedData calc = new SerializedData(true);
+            calc.writeInt32(entities.size());
+            for (TLRPC.MessageEntity e : entities) {
+                e.serializeToStream(calc);
+            }
+            SerializedData data = new SerializedData(calc.length());
+            data.writeInt32(entities.size());
+            for (TLRPC.MessageEntity e : entities) {
+                e.serializeToStream(data);
+            }
+            String out = Base64.encodeToString(data.toByteArray(), Base64.DEFAULT);
+            data.cleanup();
+            calc.cleanup();
+            return out;
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /** Deserialize entities from {@link #entitiesToBase64} (null when none / corrupt). */
+    public static ArrayList<TLRPC.MessageEntity> entitiesFromBase64(String b64) {
+        if (b64 == null || b64.isEmpty()) {
+            return null;
+        }
+        try {
+            SerializedData data = new SerializedData(Base64.decode(b64, Base64.DEFAULT));
+            int count = data.readInt32(false);
+            ArrayList<TLRPC.MessageEntity> out = new ArrayList<>(count);
+            for (int i = 0; i < count; i++) {
+                int constructor = data.readInt32(false);
+                TLRPC.MessageEntity e = TLRPC.MessageEntity.TLdeserialize(data, constructor, false);
+                if (e != null) {
+                    out.add(e);
+                }
+            }
+            data.cleanup();
+            return out.isEmpty() ? null : out;
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     // ---- media store (app-private files dir / silent_templates) ----

@@ -8961,6 +8961,19 @@ public class ChatActivityEnterView extends FrameLayout implements
         // hidden (attachVisible == 0, i.e. while typing) the base margin
         // is only 2dp, so the text would run underneath the icon — reserve
         // the full 98dp instead (48dp attach slot + 48dp icon + 2dp gap).
+        // SilentGram Batch U: when the attach cluster is hidden (no attach
+        // icon — it moved to the 3-dot menu), the translate icon must
+        // slide into the attach slot (right margin 0) instead of leaving
+        // a 48dp empty gap between it and the send button. When the
+        // attach icon is back, it goes back to sitting left of it.
+        if (silentTranslateButton != null) {
+            android.widget.FrameLayout.LayoutParams tlp = (android.widget.FrameLayout.LayoutParams) silentTranslateButton.getLayoutParams();
+            int wantRightMargin = attachVisible == 0 ? 0 : dp(DEFAULT_HEIGHT);
+            if (tlp.rightMargin != wantRightMargin) {
+                tlp.rightMargin = wantRightMargin;
+                silentTranslateButton.setLayoutParams(tlp);
+            }
+        }
         if (silentTranslateButton != null && silentTranslateButton.getVisibility() == View.VISIBLE) {
             if (attachVisible == 0) {
                 layoutParams.rightMargin = Math.max(layoutParams.rightMargin, dp(98));
