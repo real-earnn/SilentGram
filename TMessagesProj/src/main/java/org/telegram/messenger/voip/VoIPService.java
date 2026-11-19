@@ -184,6 +184,12 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 	public static final int STATE_ESTABLISHED = Instance.STATE_ESTABLISHED;
 	public static final int STATE_FAILED = Instance.STATE_FAILED;
 	public static final int STATE_RECONNECTING = Instance.STATE_RECONNECTING;
+
+	// SilentGram X: our SOCKS5 call relay (also used by the proxy-page probe).
+	public static final String SILENT_CALL_RELAY_HOST = "161.118.196.94";
+	public static final int SILENT_CALL_RELAY_PORT = 18080;
+	public static final String SILENT_CALL_RELAY_USER = "sgproxy";
+	public static final String SILENT_CALL_RELAY_PASSWORD = "206c14db11fa26fde81e01fd";
 	public static final int STATE_CREATING = 6;
 	public static final int STATE_ENDED = 11;
 	public static final String ACTION_HEADSET_PLUG = "android.intent.action.HEADSET_PLUG";
@@ -340,6 +346,8 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 	}
 
 	private long callStartTime;
+	// SilentGram X: elapsedRealtime() when makeInstance was called (for SG-CALL-RELAY timing).
+	private long sgCallMakeInstanceMs;
 	private boolean playingSound;
 	private boolean isOutgoing;
 	public boolean videoCall;
@@ -3584,7 +3592,16 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 			final String persistentStateFilePath = new File(ApplicationLoader.applicationContext.getCacheDir(), "voip_persistent_state.json").getAbsolutePath();
 
 			// endpoints
-			final boolean forceTcp = preferences.getBoolean("dbg_force_tcp_in_calls", false);
+			// SilentGram X: 1:1 calls ALWAYS use TCP reflector endpoints.
+			// UDP reflector + P2P UDP are blocked on our users' networks, and
+			// the vendored stack never routes UDP media through the SOCKS5
+			// proxy anyway (CreateUdpSocket takes no proxy; only TURN-over-TCP
+			// uses it) — so a UDP call just sits in "Connecting..." until the
+			// native 20s timeout. TCP reflector connects directly to Telegram
+			// (TCP works fine) and the reflector bridges TCP<->UDP, so the
+			// other side can stay on UDP. Quality is lower than UDP, but a
+			// working TCP call beats a failed one.
+			final boolean forceTcp = true;
 			final int endpointType = forceTcp ? Instance.ENDPOINT_TYPE_TCP_RELAY : Instance.ENDPOINT_TYPE_UDP_RELAY;
 			final Instance.Endpoint[] endpoints = new Instance.Endpoint[privateCall.connections.size()];
 			ArrayList<Long> reflectorIds = new ArrayList<>();
@@ -3605,10 +3622,6 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 					endpoints[i].reflectorId = reflectorIdMapping.getOrDefault(endpoints[i].id, 0);
 				}
 			}
-			if (forceTcp) {
-				AndroidUtilities.runOnUIThread(() -> Toast.makeText(VoIPService.this, "This call uses TCP which will degrade its quality.", Toast.LENGTH_SHORT).show());
-			}
-
 			// encryption key
 			final Instance.EncryptionKey encryptionKey = new Instance.EncryptionKey(authKey, isOutgoing);
 
@@ -3628,7 +3641,10 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 			}
 			// init
 			// SilentGram V: route private-call media through our own SOCKS5 relay (calls only; messages stay on MTProto).
-			tgVoip[CAPTURE_DEVICE_CAMERA] = Instance.makeInstance(privateCall.protocol.library_versions.get(0), config, persistentStateFilePath, endpoints, new Instance.Proxy("161.118.196.94", 18080, "sgproxy", "206c14db11fa26fde81e01fd"), getNetworkType(), encryptionKey, remoteSink[CAPTURE_DEVICE_CAMERA], captureDevice[CAPTURE_DEVICE_CAMERA], (uids, levels, voice) -> {
+			// SilentGram X: call-relay diagnostics (FileLog.e so release builds emit them).
+			sgCallMakeInstanceMs = SystemClock.elapsedRealtime();
+			FileLog.e("SG-CALL-RELAY init call=" + (privateCall != null ? privateCall.id : 0) + " proxy=161.118.196.94:18080 forceTcp=" + forceTcp + " endpoints=" + endpoints.length + " endpointType=" + endpointType + " p2pAllowed=" + privateCall.p2p_allowed);
+			tgVoip[CAPTURE_DEVICE_CAMERA] = Instance.makeInstance(privateCall.protocol.library_versions.get(0), config, persistentStateFilePath, endpoints, new Instance.Proxy(SILENT_CALL_RELAY_HOST, SILENT_CALL_RELAY_PORT, SILENT_CALL_RELAY_USER, SILENT_CALL_RELAY_PASSWORD), getNetworkType(), encryptionKey, remoteSink[CAPTURE_DEVICE_CAMERA], captureDevice[CAPTURE_DEVICE_CAMERA], (uids, levels, voice) -> {
 				if (sharedInstance == null || privateCall == null) {
 					return;
 				}
@@ -4106,6 +4122,17 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 			}
 		}
 		return audioRouteToSet;
+	}
+
+	private static String sgCallStateName(int state) {
+		switch (state) {
+			case STATE_WAIT_INIT: return "WAIT_INIT";
+			case STATE_WAIT_INIT_ACK: return "WAIT_INIT_ACK";
+			case STATE_ESTABLISHED: return "ESTABLISHED";
+			case STATE_FAILED: return "FAILED";
+			case STATE_RECONNECTING: return "RECONNECTING";
+			default: return "?" + state;
+		}
 	}
 
 	public String getDebugString() {
@@ -5546,6 +5573,15 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 			if (BuildVars.LOGS_ENABLED) {
 				FileLog.d("Discarding failed call");
 			}
+			// SilentGram X: call-relay diagnostics — first line of the native
+			// debug info names the transport/endpoint actually used.
+			String sgDbg = getDebugString();
+			if (sgDbg != null && !sgDbg.isEmpty()) {
+				int sgNl = sgDbg.indexOf('\n');
+				FileLog.e("SG-CALL-RELAY failed error=" + error + " debug=" + (sgNl >= 0 ? sgDbg.substring(0, sgNl) : sgDbg));
+			} else {
+				FileLog.e("SG-CALL-RELAY failed error=" + error);
+			}
 			final TL_phone.discardCall req = new TL_phone.discardCall();
 			req.peer = new TLRPC.TL_inputPhoneCall();
 			req.peer.access_hash = privateCall.access_hash;
@@ -5599,6 +5635,8 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 			if (convertingVoip != null) {
 				return;
 			}
+			// SilentGram X: call-relay diagnostics (FileLog.e so release builds emit them).
+			FileLog.e("SG-CALL-RELAY state=" + newState + " (" + sgCallStateName(newState) + ") elapsedMs=" + (sgCallMakeInstanceMs == 0 ? -1 : (SystemClock.elapsedRealtime() - sgCallMakeInstanceMs)));
 			if (newState == STATE_ESTABLISHED) {
 				if (callStartTime == 0) {
 					callStartTime = SystemClock.elapsedRealtime();

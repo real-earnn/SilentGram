@@ -104,6 +104,12 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
     private int rotationTimeoutRow;
     private int rotationTimeoutInfoRow;
     private int deleteAllRow;
+    // SilentGram X: synthetic call-relay status row (not a proxy-list entry —
+    // the relay is hardcoded, like the MTProto own-proxy, so it must never
+    // enter SharedConfig.proxyList or the rotation would use it for messages).
+    private int callRelayInfoRow = -1;
+    private String callRelayStatusText;
+    private boolean callRelayProbeStarted;
 
     private ItemTouchHelper itemTouchHelper;
     private ActionBarMenuItem shareMenuItem;
@@ -366,6 +372,13 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
 
         updateRows(true);
 
+        // SilentGram X: probe the call relay once per fragment create so the
+        // status line above shows whether it is actually reachable.
+        if (!callRelayProbeStarted) {
+            callRelayProbeStarted = true;
+            probeCallRelay();
+        }
+
         return true;
     }
 
@@ -609,6 +622,91 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         return super.onBackPressed(invoked);
     }
 
+    // SilentGram X: probe the hardcoded call relay (TCP SOCKS5 handshake +
+    // UDP ASSOCIATE + one UDP echo packet, same checks as the server-side
+    // probe). Runs off the UI thread; result lands in the status row above.
+    private void probeCallRelay() {
+        new Thread(() -> {
+            String status;
+            try {
+                String host = org.telegram.messenger.voip.VoIPService.SILENT_CALL_RELAY_HOST;
+                int port = org.telegram.messenger.voip.VoIPService.SILENT_CALL_RELAY_PORT;
+                java.net.Socket s = new java.net.Socket();
+                s.connect(new java.net.InetSocketAddress(host, port), 5000);
+                s.setSoTimeout(5000);
+                java.io.OutputStream out = s.getOutputStream();
+                java.io.InputStream in = s.getInputStream();
+                out.write(new byte[]{0x05, 0x02, 0x00, 0x02});
+                byte[] r = new byte[2];
+                sgReadFully(in, r);
+                if (r[1] != 0x02) {
+                    throw new Exception("no auth method");
+                }
+                byte[] u = org.telegram.messenger.voip.VoIPService.SILENT_CALL_RELAY_USER.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                byte[] p = org.telegram.messenger.voip.VoIPService.SILENT_CALL_RELAY_PASSWORD.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                byte[] auth = new byte[3 + u.length + p.length];
+                auth[0] = 0x01;
+                auth[1] = (byte) u.length;
+                System.arraycopy(u, 0, auth, 2, u.length);
+                auth[2 + u.length] = (byte) p.length;
+                System.arraycopy(p, 0, auth, 3 + u.length, p.length);
+                out.write(auth);
+                sgReadFully(in, r);
+                if (r[1] != 0x00) {
+                    throw new Exception("auth failed");
+                }
+                out.write(new byte[]{0x05, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
+                byte[] assoc = new byte[10];
+                sgReadFully(in, assoc);
+                if (assoc[1] != 0x00) {
+                    throw new Exception("UDP ASSOCIATE failed");
+                }
+                String bndIp = (assoc[4] & 0xff) + "." + (assoc[5] & 0xff) + "." + (assoc[6] & 0xff) + "." + (assoc[7] & 0xff);
+                int bndPort = ((assoc[8] & 0xff) << 8) | (assoc[9] & 0xff);
+                s.close();
+                // One UDP echo: DNS query for example.com to 8.8.8.8 via the relay.
+                byte[] dnsQ = new byte[]{(byte) 0xaa, (byte) 0xaa, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00, 0x00, 0x01, 0x00, 0x01};
+                byte[] pkt = new byte[10 + dnsQ.length];
+                pkt[2] = 0x00;
+                pkt[3] = 0x01;
+                pkt[4] = 8;
+                pkt[5] = 8;
+                pkt[6] = 8;
+                pkt[7] = 8;
+                pkt[8] = 0;
+                pkt[9] = 53;
+                System.arraycopy(dnsQ, 0, pkt, 10, dnsQ.length);
+                java.net.DatagramSocket udp = new java.net.DatagramSocket();
+                udp.setSoTimeout(4000);
+                udp.send(new java.net.DatagramPacket(pkt, pkt.length, java.net.InetAddress.getByName(bndIp), bndPort));
+                byte[] rx = new byte[2048];
+                udp.receive(new java.net.DatagramPacket(rx, rx.length));
+                udp.close();
+                status = "Call relay " + host + ":" + port + " — TCP+UDP OK (BND " + bndIp + ":" + bndPort + ")";
+            } catch (Exception e) {
+                status = "Call relay — unreachable (" + e.getMessage() + ")";
+            }
+            final String st = status;
+            AndroidUtilities.runOnUIThread(() -> {
+                callRelayStatusText = st;
+                if (listAdapter != null && callRelayInfoRow != -1) {
+                    listAdapter.notifyItemChanged(callRelayInfoRow);
+                }
+            });
+        }, "silent-call-relay-probe").start();
+    }
+
+    private static void sgReadFully(java.io.InputStream in, byte[] b) throws java.io.IOException {
+        int off = 0;
+        while (off < b.length) {
+            int n = in.read(b, off, b.length - off);
+            if (n < 0) {
+                throw new java.io.IOException("EOF");
+            }
+            off += n;
+        }
+    }
+
     private void updateRows(boolean notify) {
         rowCount = 0;
         useProxyRow = rowCount++;
@@ -632,6 +730,8 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
             useProxyShadowRow = -1;
         }
         connectionsHeaderRow = rowCount++;
+        // SilentGram X: call-relay status line right under the header.
+        callRelayInfoRow = rowCount++;
 
         if (notify) {
             proxyList.clear();
@@ -884,6 +984,9 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                     TextInfoPrivacyCell cell = (TextInfoPrivacyCell) holder.itemView;
                     if (position == rotationTimeoutInfoRow) {
                         cell.setText(getString(R.string.ProxyRotationTimeoutInfo));
+                    } else if (position == callRelayInfoRow) {
+                        // SilentGram X: call-relay status (synthetic row, not a proxy entry).
+                        cell.setText(callRelayStatusText != null ? callRelayStatusText : "Call relay 161.118.196.94:18080 — checking…");
                     }
                     break;
                 }

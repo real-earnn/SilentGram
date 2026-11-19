@@ -213,6 +213,17 @@ public class SilentProxyManager {
     // runs one round at a time, so an immediate fetch round would be
     // skipped and the fresh list dropped).
     private static final long REFRESH_FETCH_DELAY_MS = 30 * 1000L;
+    // SilentGram X: all-dead fetch refetch — if a fetched list verifies ZERO
+    // live public proxies (only our own proxy works), the list is stale/dead;
+    // fetch a fresh list instead of sitting on it. At most 2 refetches per
+    // hour (the API cache refreshes hourly server-side, so an immediate
+    // re-hit returns the identical list); the budget resets after an hour
+    // or as soon as any public proxy verifies.
+    private static final int MAX_FETCH_REFETCHES = 2;
+    private static final long FETCH_REFETCH_DELAY_MS = 5 * 60 * 1000L;
+    private static final long FETCH_REFETCH_WINDOW_MS = 60 * 60 * 1000L;
+    private static volatile int fetchRefetchAttempts;
+    private static volatile long lastFetchRefetchMs;
 
     private static volatile boolean connectingWatchdogStarted;
     // When the current "Connecting" stall started (0 = not stalled), and
@@ -534,6 +545,16 @@ public class SilentProxyManager {
 
     /** Fetch the list from our API and apply the best proxy. Runs off the UI thread. */
     public static void refreshAsync() {
+        refreshAsync(false);
+    }
+
+    /**
+     * SilentGram X: fullOnly=true fetches /api/proxies directly (the whole
+     * merged list, including the latency_ms 9999 entries) instead of
+     * /api/live first — used by the all-dead refetch, where /api/live just
+     * returned an all-dead non-empty list and would return it again.
+     */
+    public static void refreshAsync(boolean fullOnly) {
         if (fetching) {
             return;
         }
@@ -545,7 +566,7 @@ public class SilentProxyManager {
                 // (also latency-sorted). No cap here — the whole list is
                 // fetched and probed; only the fastest 10 by on-device
                 // latency are kept (see pruneManagedToTop).
-                List<ProxySettings> proxies = fetchFromUrl(API_LIVE_URL);
+                List<ProxySettings> proxies = fullOnly ? null : fetchFromUrl(API_LIVE_URL);
                 if (proxies == null || proxies.isEmpty()) {
                     proxies = fetchFromUrl(API_URL);
                 }
@@ -990,6 +1011,40 @@ public class SilentProxyManager {
             if (openRound && openVerifiedLive.get() < 3 && UserConfig.getInstance(UserConfig.selectedAccount).isClientActivated()) {
                 FileLog.d("SilentProxy: T open round found only " + openVerifiedLive.get() + " live saved proxies — fetching fresh list from API");
                 refreshAsync();
+            }
+            // SilentGram X: fetch round — the fetched list verified ZERO live
+            // public proxies (our own proxy is excluded: it always verifies,
+            // so counting it would mask an all-dead public list). The list is
+            // stale/dead: fetch a fresh one instead of sitting on it. At most
+            // MAX_FETCH_REFETCHES per hour; the budget resets after an hour
+            // or as soon as any public proxy verifies. Delayed 5 minutes so
+            // the API has a chance to refresh; an immediate re-hit returns
+            // the identical list. Kept behind the isClientActivated gate
+            // (SilentGram W): pre-login a refetch could switch the login
+            // handshake onto a dead public proxy.
+            if (!openRound && !watcherRound && UserConfig.getInstance(UserConfig.selectedAccount).isClientActivated()) {
+                int nonOwnLive = 0;
+                for (int i = 0; i < ranked.size(); i++) {
+                    if (state[i] == 1 && !isOwnProxy(ranked.get(i))) {
+                        nonOwnLive++;
+                    }
+                }
+                if (nonOwnLive > 0) {
+                    fetchRefetchAttempts = 0;
+                } else {
+                    long nowMs = System.currentTimeMillis();
+                    if (nowMs - lastFetchRefetchMs > FETCH_REFETCH_WINDOW_MS) {
+                        fetchRefetchAttempts = 0;
+                    }
+                    if (fetchRefetchAttempts < MAX_FETCH_REFETCHES) {
+                        fetchRefetchAttempts++;
+                        lastFetchRefetchMs = nowMs;
+                        FileLog.d("SilentProxy: X fetch round found 0 live public proxies — refetching full list in 5 min (attempt " + fetchRefetchAttempts + "/" + MAX_FETCH_REFETCHES + ")");
+                        AndroidUtilities.runOnUIThread(() -> refreshAsync(true), FETCH_REFETCH_DELAY_MS);
+                    } else {
+                        FileLog.d("SilentProxy: X fetch round found 0 live public proxies — refetch budget exhausted for this hour");
+                    }
+                }
             }
         }, "silent-proxy-probe-wait").start();
     }

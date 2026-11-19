@@ -8849,15 +8849,15 @@ public class ChatActivityEnterView extends FrameLayout implements
             layoutParams.rightMargin = Math.max(layoutParams.rightMargin, Math.max(0, doneButton.width() - dp(DEFAULT_HEIGHT)));
         }
         // SilentGram I12/K15: the translate icon is a 44dp button drawn
-        // while it is visible — reserve its width in the text field, like
-        // the other attachLayout extras above (+48dp per 44dp button).
-        // K15: the icon is a direct child of messageEditTextContainer at
-        // a 48dp right margin. When the attach cluster is shown it sits
-        // left of attachLayout, so +48dp on top of the base margin (which
-        // already covers the cluster) is right. When the cluster is
-        // hidden (attachVisible == 0, i.e. while typing) the base margin
-        // is only 2dp, so the text would run underneath the icon — reserve
-        // the full 98dp instead (48dp attach slot + 48dp icon + 2dp gap).
+        // while it is visible — reserve its width in the text field.
+        // SilentGram X: Batch U moved the icon INTO the attach slot while
+        // typing (right margin 0 when attachVisible == 0), so the old
+        // 98dp reservation (48dp attach slot + 48dp icon + 2dp gap)
+        // double-counted the slot and cut the line at ~half the screen.
+        // While typing the text only needs to clear the icon itself:
+        // 44dp (DEFAULT_HEIGHT) + 2dp gap. When the attach cluster is
+        // shown the icon sits left of it, so +48dp on top of the base
+        // margin (which already covers the cluster) stays right.
         // SilentGram Batch U: when the attach cluster is hidden (no attach
         // icon — it moved to the 3-dot menu), the translate icon must
         // slide into the attach slot (right margin 0) instead of leaving
@@ -8873,7 +8873,7 @@ public class ChatActivityEnterView extends FrameLayout implements
         }
         if (silentTranslateButton != null && silentTranslateButton.getVisibility() == View.VISIBLE) {
             if (attachVisible == 0) {
-                layoutParams.rightMargin = Math.max(layoutParams.rightMargin, dp(98));
+                layoutParams.rightMargin = Math.max(layoutParams.rightMargin, dp(DEFAULT_HEIGHT + 2));
             } else {
                 layoutParams.rightMargin += dp(48);
             }

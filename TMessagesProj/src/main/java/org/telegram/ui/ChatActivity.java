@@ -10279,6 +10279,22 @@ public class ChatActivity extends BaseFragment implements
             // K13 (d): tapping the suggestion SENDS the post (with media),
             // it no longer just inserts the text.
             row.setOnClickListener(v -> sendSilentTemplate(t));
+            // SilentGram X: long-press a suggestion to DELETE the template
+            // from the popup (no need to open it to delete it).
+            row.setOnLongClickListener(v -> {
+                AlertDialog.Builder builder = new AlertDialog.Builder(context);
+                builder.setTitle("/" + t.trigger);
+                builder.setPositiveButton(LocaleController.getString(R.string.Delete), (d, w) -> {
+                    org.telegram.messenger.SilentTemplates.deleteTemplate(t.trigger);
+                    dismissSilentTemplatePopup();
+                    if (chatActivityEnterView != null) {
+                        chatActivityEnterView.setFieldText("");
+                    }
+                });
+                builder.setNegativeButton(LocaleController.getString(R.string.Cancel), null);
+                builder.show();
+                return true;
+            });
             layout.addView(row);
         }
         // SilentGram Batch U: NOT focusable — a focusable popup steals
