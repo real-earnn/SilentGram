@@ -20,9 +20,10 @@ import java.util.Locale;
  * SilentGram sticker resize (1–20), like Plus Messenger.
  *
  * Long-press a sticker → "Resize" → a slider (1 = tiny, emoji-size;
- * 5 = normal; 20 = as big as the screen). The size is stored per message
- * (dialog + message id) and ChatMessageCell scales the sticker's
- * maxPhotoWidth by it, so only that sticker changes size.
+ * 5 = normal; 20 = as big as the screen). The size is ONE value per
+ * account: changing it from any sticker resizes every sticker shown
+ * anywhere in that account. ChatMessageCell scales the sticker by it
+ * (capped to the screen, so a sticker can never go off-screen).
  */
 public class SilentStickerResize {
 
@@ -36,8 +37,9 @@ public class SilentStickerResize {
         return Math.max(0.2f, Math.min(4.0f, level / (float) NORMAL_LEVEL));
     }
 
-    private static String key(long dialogId, int messageId) {
-        return "sticker_scale_" + dialogId + "_" + messageId;
+    /** One scale per account — shared by every sticker in that account. */
+    private static String key(int account) {
+        return "sticker_scale_account_" + account;
     }
 
     private static SharedPreferences prefs() {
@@ -45,30 +47,28 @@ public class SilentStickerResize {
                 .getSharedPreferences("silentgram", Context.MODE_PRIVATE);
     }
 
-    /** Stored scale for this sticker (1.0 = normal). */
-    public static float getScale(int account, long dialogId, int messageId) {
-        float scale = prefs().getFloat(key(dialogId, messageId), 1.0f);
+    /** Stored scale for this account (1.0 = normal). */
+    public static float getScale(int account) {
+        float scale = prefs().getFloat(key(account), 1.0f);
         return scale > 0 ? scale : 1.0f;
     }
 
-    /** Current level for this sticker (5 = normal). */
-    public static int getLevel(int account, long dialogId, int messageId) {
-        float scale = getScale(account, dialogId, messageId);
+    /** Current level for this account (5 = normal). */
+    public static int getLevel(int account) {
+        float scale = getScale(account);
         return Math.max(MIN_LEVEL, Math.min(MAX_LEVEL, Math.round(scale * NORMAL_LEVEL)));
     }
 
-    public static void setLevel(int account, long dialogId, int messageId, int level) {
-        prefs().edit().putFloat(key(dialogId, messageId), scaleForLevel(level)).apply();
+    public static void setLevel(int account, int level) {
+        prefs().edit().putFloat(key(account), scaleForLevel(level)).apply();
     }
 
-    /** Show the 1–20 slider for this sticker. onChanged runs after picking. */
+    /** Show the 1–20 slider for this account. onChanged runs after picking. */
     public static void showPicker(Context context, int account, MessageObject messageObject, Runnable onChanged) {
         if (context == null || messageObject == null) {
             return;
         }
-        long dialogId = messageObject.getDialogId();
-        int messageId = messageObject.getId();
-        int current = getLevel(account, dialogId, messageId);
+        int current = getLevel(account);
 
         LinearLayout layout = new LinearLayout(context);
         layout.setOrientation(LinearLayout.VERTICAL);
@@ -136,14 +136,14 @@ public class SilentStickerResize {
         builder.setView(layout);
         builder.setPositiveButton(LocaleController.getString(R.string.OK), (dialog, which) -> {
             int level = seekBar.getProgress() + MIN_LEVEL;
-            setLevel(account, dialogId, messageId, level);
+            setLevel(account, level);
             if (onChanged != null) {
                 onChanged.run();
             }
         });
         builder.setNegativeButton(LocaleController.getString(R.string.Cancel), null);
         builder.setNeutralButton(LocaleController.getString(R.string.SilentStickerResizeReset), (dialog, which) -> {
-            setLevel(account, dialogId, messageId, NORMAL_LEVEL);
+            setLevel(account, NORMAL_LEVEL);
             if (onChanged != null) {
                 onChanged.run();
             }

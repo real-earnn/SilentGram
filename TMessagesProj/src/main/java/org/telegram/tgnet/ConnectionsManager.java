@@ -671,8 +671,25 @@ public class ConnectionsManager extends BaseController {
 
     public void init(int version, int layer, int apiId, String deviceModel, String systemVersion, String appVersion, String langCode, String systemLangCode, String configPath, String logPath, String regId, String cFingerprint, int timezoneOffset, long userId, boolean userPremium, boolean enablePushConnection) {
         final SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
-        final ProxySettings proxySettings = ProxySettings.fromSharedPreferences(preferences);
-        if (preferences.getBoolean("proxy_enabled", false) && proxySettings.isValid()) {
+        ProxySettings proxySettings = ProxySettings.fromSharedPreferences(preferences);
+        boolean proxyEnabled = preferences.getBoolean("proxy_enabled", false);
+        // SilentGram W: a fresh install has no proxy saved yet — never
+        // let the first native init start direct. Fall back to OUR OWN
+        // proxy (same host/port/secret as SilentProxyManager.OWN_PROXY_*,
+        // hardcoded by design) so the first datacenter connection, and
+        // therefore the login, already goes through it.
+        if (!proxyEnabled || !proxySettings.isValid()) {
+            proxySettings = ProxySettings.builder()
+                    .setType(ProxySettings.Type.MTPROTO)
+                    .setAddress("161.118.196.94")
+                    .setPort(443)
+                    .setSecret("ee56b74aeebb050ff4c915539d4cba50d9676f6f676c652e636f6d")
+                    .setUser("")
+                    .setPassword("")
+                    .build();
+            proxyEnabled = true;
+        }
+        if (proxyEnabled && proxySettings.isValid()) {
             if (proxySettings.getType() == ProxySettings.Type.WEB) {
                 int localPort = WebProxyTransport.start(proxySettings.getAddress(), proxySettings.getSecret());
                 native_setProxySettings(currentAccount, "127.0.0.1", localPort != 0 ? localPort : 9, "", "",

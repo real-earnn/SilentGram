@@ -248,6 +248,13 @@ public class ApplicationLoader extends Application {
 
         SharedConfig.loadConfig();
         SharedPrefsHelper.init(applicationContext);
+        // SilentGram W: pin the login to OUR proxy BEFORE the first
+        // datacenter connection is made — apply it synchronously here,
+        // before ConnectionsManager is created for any account below, so
+        // a fresh-device login (intro screen → number screen) already
+        // goes through our proxy from the very start. Idempotent:
+        // Application.onCreate already applied it once (fastOpenRound).
+        SilentProxyManager.applyOwnProxyNow();
         for (int a = 0; a < UserConfig.MAX_ACCOUNT_COUNT; a++) { //TODO improve account
             UserConfig.getInstance(a).loadConfig();
             MessagesController.getInstance(a);

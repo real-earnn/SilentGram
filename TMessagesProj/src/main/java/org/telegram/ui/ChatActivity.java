@@ -35502,8 +35502,10 @@ public class ChatActivity extends BaseFragment implements
                 break;
             }
             case OPTION_SILENT_STICKER_RESIZE: {
-                // SilentGram: resize this sticker (1 = tiny, 20 = full screen).
-                if (selectedObject != null && selectedObject.isSticker()) {
+                // SilentGram W: resize stickers account-wide (1 = tiny,
+                // 20 = full screen). The scale is ONE value per account —
+                // changing it from any sticker resizes every sticker.
+                if (selectedObject != null && (selectedObject.isSticker() || selectedObject.isAnimatedSticker() || selectedObject.isAnimatedEmoji()) && !selectedObject.isDice()) {
                     final MessageObject stickerMessage = selectedObject;
                     org.telegram.messenger.SilentStickerResize.showPicker(getParentActivity(), currentAccount, selectedObject, () -> {
                         // SilentGram: the cell SKIPS its layout recompute when
@@ -48162,8 +48164,11 @@ public class ChatActivity extends BaseFragment implements
                     items.add(LocaleController.getString(R.string.SilentSaveToSaved));
                     options.add(OPTION_SILENT_SAVE_TO_SAVED);
                     icons.add(R.drawable.msg_saved);
-                    // SilentGram: resize a sticker (1 = tiny, 20 = full screen).
-                    if (selectedObject.isSticker()) {
+                    // SilentGram W: resize stickers (1 = tiny, 20 = full screen).
+                    // Per-account GLOBAL size — the menu is offered on EVERY
+                    // sticker kind (static, animated .tgs, animated-emoji),
+                    // except dice (a game, not a sticker).
+                    if ((selectedObject.isSticker() || selectedObject.isAnimatedSticker() || selectedObject.isAnimatedEmoji()) && !selectedObject.isDice()) {
                         items.add(LocaleController.getString(R.string.SilentStickerResize));
                         options.add(OPTION_SILENT_STICKER_RESIZE);
                         icons.add(R.drawable.msg_expand);

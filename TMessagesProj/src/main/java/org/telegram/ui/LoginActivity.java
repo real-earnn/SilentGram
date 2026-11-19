@@ -2058,6 +2058,33 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
             setOrientation(VERTICAL);
             setGravity(Gravity.CENTER);
 
+            // SilentGram W: hidden DEBUG entry (not a button) — the
+            // SilentGram mark, plain as-is above the "Your Phone Number"
+            // heading. A 5-SECOND hold opens the proxy page, so a login
+            // failure can be debugged on a fresh device without showing
+            // any proxy UI on the login screens (the G28-hidden button
+            // stays hidden). No background, no ripple, no click action.
+            ImageView debugProxyIcon = new ImageView(context);
+            debugProxyIcon.setImageResource(R.drawable.icon_plane_crescent);
+            addView(debugProxyIcon, LayoutHelper.createLinear(48, 48, Gravity.CENTER_HORIZONTAL, 0, 0, 0, 8));
+            final Runnable openProxyPageRunnable = () -> presentFragment(new ProxyListActivity());
+            debugProxyIcon.setOnTouchListener((v, event) -> {
+                if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                    v.postDelayed(openProxyPageRunnable, 5000);
+                    return true;
+                } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                    v.removeCallbacks(openProxyPageRunnable);
+                    return true;
+                } else if (event.getAction() == MotionEvent.ACTION_MOVE) {
+                    // Finger slid off the icon — cancel the hold.
+                    if (event.getX() < 0 || event.getX() > v.getWidth() || event.getY() < 0 || event.getY() > v.getHeight()) {
+                        v.removeCallbacks(openProxyPageRunnable);
+                    }
+                    return true;
+                }
+                return false;
+            });
+
             titleView = new TextView(context);
             titleView.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 18);
             titleView.setTypeface(AndroidUtilities.bold());

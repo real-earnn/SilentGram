@@ -293,6 +293,21 @@ public class SilentProxyManager {
         return new SharedConfig.ProxyInfo(settings);
     }
 
+    /**
+     * SilentGram W: synchronously apply OUR proxy right now (prefs +
+     * native layer). Idempotent — safe to call twice (Application
+     * onCreate already calls enableProxy(own) via fastOpenRound, and
+     * postInitApplication calls this before the first
+     * ConnectionsManager exists, so the login can never start direct).
+     */
+    public static void applyOwnProxyNow() {
+        try {
+            enableProxy(ownProxyInfo(), -1);
+        } catch (Throwable e) {
+            FileLog.e(e);
+        }
+    }
+
     /** Latency used for RANKING: API latency_ms if present, else the app's own probe RTT, else "unknown" (sorts last). */
     private static long effectiveLatencyMs(String key) {
         Long api = apiLatencyByKey.get(key);
@@ -965,7 +980,14 @@ public class SilentProxyManager {
             // and only when needed. It runs after roundRunning is
             // cleared, so the fetch round is not skipped as "already
             // running".
-            if (openRound && openVerifiedLive.get() < 3) {
+            // SilentGram W: never fetch (and therefore never switch to a
+            // public proxy) before login — pre-login the handshake check
+            // returns -2 (trust TCP), so a TCP-live/MTProto-dead public
+            // proxy scores "verified", the gate switches the login
+            // handshake onto it, and sendCode never returns. The login
+            // stays pinned to OUR proxy until the account is activated;
+            // the fetch resumes on the next round after login.
+            if (openRound && openVerifiedLive.get() < 3 && UserConfig.getInstance(UserConfig.selectedAccount).isClientActivated()) {
                 FileLog.d("SilentProxy: T open round found only " + openVerifiedLive.get() + " live saved proxies — fetching fresh list from API");
                 refreshAsync();
             }
@@ -1209,6 +1231,21 @@ public class SilentProxyManager {
             if (decisionMade.get()) {
                 return;
             }
+            // SilentGram W: before login, NEVER switch away from OUR
+            // proxy. Pre-login the handshake check returns -2 (trust
+            // TCP), so a public proxy that accepts TCP but never delivers
+            // MTProto data scores "verified" and the gate would switch
+            // the login handshake onto it — sendCode then never returns
+            // and the loader spins forever. Pin the login to ours until
+            // the account is activated; tryConnectCandidate below only
+            // ever enables OUR proxy pre-login.
+            if (!UserConfig.getInstance(UserConfig.selectedAccount).isClientActivated()) {
+                SharedConfig.ProxyInfo cur = SharedConfig.currentProxy;
+                if (cur != null && isOwnProxy(cur)) {
+                    decisionMade.set(true);
+                    return;
+                }
+            }
             // Fresh on-device latency of the current proxy, measured in
             // THIS round (Long.MAX_VALUE if it probed dead, -1 if
             // unknown). The old code compared the candidate's API latency
@@ -1333,6 +1370,14 @@ public class SilentProxyManager {
     private static boolean tryConnectCandidate(List<SharedConfig.ProxyInfo> ranked, int[] state, int index,
             AtomicBoolean decisionMade, AtomicBoolean connectedOnce, long bar) {
         SharedConfig.ProxyInfo info = ranked.get(index);
+        // SilentGram W: before login, only OUR proxy may be enabled —
+        // a public proxy that merely accepts TCP scores "verified"
+        // pre-login (handshake check returns -2) and would steal the
+        // login handshake onto a dead connection. Skip it; the next
+        // candidate is tried.
+        if (!UserConfig.getInstance(UserConfig.selectedAccount).isClientActivated() && !isOwnProxy(info)) {
+            return false;
+        }
         String key = proxyKey(info);
         long ms = latencyForDecision(key);
         if (connectedOnce.get()) {
@@ -1843,10 +1888,13 @@ public class SilentProxyManager {
             return;
         }
         int account = UserConfig.selectedAccount;
-        if (!UserConfig.getInstance(account).isClientActivated()) {
-            connectingSinceMs = 0;
-            return;
-        }
+        // SilentGram W: the stall rescue is NOT gated off pre-login
+        // anymore — a >3s "Connecting" stall during login switches back
+        // to OUR proxy (onConnectingStall only ever switches TO ours,
+        // and the gate can only enable ours pre-login). The pre-login
+        // blind spot (watchdog off + -2 trust-TCP) is what let the
+        // login spinner run forever on a dead public proxy.
+        // (Previously this early-returned here when not activated.)
         if (!SharedConfig.isProxyEnabled() || SharedConfig.currentProxy == null) {
             connectingSinceMs = 0;
             return;
