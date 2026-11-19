@@ -7332,6 +7332,26 @@ public class AlertsCreator {
         return builder;
     }
 
+    // SilentGram: floating window needs SYSTEM_ALERT_WINDOW. The permission
+    // itself is granted in system settings; the caller re-checks it on
+    // return (SettingsActivity.onResume) and turns the toggle on then.
+    public static AlertDialog createDrawOverlayFloatingPermissionDialog(Context context) {
+        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        builder.setTitle(LocaleController.getString(R.string.SilentFloatingPermissionTitle));
+        builder.setMessage(LocaleController.getString(R.string.SilentFloatingPermissionText));
+        builder.setPositiveButton(LocaleController.getString(R.string.Enable), (dialogInterface, i) -> {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    context.startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + context.getPackageName())));
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+        });
+        builder.setNegativeButton(LocaleController.getString(R.string.Cancel), null);
+        return builder.create();
+    }
+
     public static AlertDialog.Builder createDrawOverlayGroupCallPermissionDialog(Context context) {
         AlertDialog.Builder builder = new AlertDialog.Builder(context);
         String svg = AndroidUtilities.readRes(R.raw.pip_voice_request);

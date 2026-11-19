@@ -87,7 +87,10 @@ import org.telegram.ui.Cells.TextCell;
 import org.telegram.ui.Wallet.GramWallet;
 import org.telegram.ui.Wallet.WalletActivity;
 import org.telegram.utils.settings.SharedSettings;
+import org.telegram.utils.pip.PipEnvironment;
+import org.telegram.messenger.SilentFloatingWindow;
 import org.telegram.messenger.SilentPush;
+import org.telegram.messenger.SilentToast;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.UserObject;
 import org.telegram.messenger.browser.Browser;
@@ -192,6 +195,11 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
     private View actionBarFadeView;
 
     private int versionViewPressCount = 0;
+
+    // SilentGram: set while the user is in system settings granting the
+    // overlay permission for the floating window; onResume then turns the
+    // toggle on (or tells the user it is still needed).
+    private boolean silentPipPermissionPending;
 
     public SettingsActivity() {
         this(null);
@@ -611,6 +619,15 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
     @Override
     public void onResume() {
         super.onResume();
+        if (silentPipPermissionPending) {
+            silentPipPermissionPending = false;
+            if (PipEnvironment.canDrawOverlays(getParentActivity())) {
+                SharedSettings.silentPipEnabled.set(true);
+                SilentToast.show(getParentActivity(), LocaleController.getString(R.string.SilentFloatingEnabled));
+            } else {
+                SilentToast.show(getParentActivity(), LocaleController.getString(R.string.SilentFloatingNeedPermission));
+            }
+        }
         if (listView.adapter != null) {
             listView.adapter.update(false);
         }
@@ -1001,7 +1018,23 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
                 break;
 
             case 29:
-                SharedSettings.silentPipEnabled.set(!SharedSettings.silentPipEnabled.get());
+                // SilentGram: the toggle is the floating window now (same row
+                // and label). Turning it ON needs the overlay permission:
+                // ask for it first, and only turn the toggle on once it is
+                // granted (checked again in onResume). Turning it OFF also
+                // dismisses a live floating window.
+                if (!SharedSettings.silentPipEnabled.get()) {
+                    if (PipEnvironment.canDrawOverlays(getParentActivity())) {
+                        SharedSettings.silentPipEnabled.set(true);
+                        SilentToast.show(getParentActivity(), LocaleController.getString(R.string.SilentFloatingEnabled));
+                    } else {
+                        silentPipPermissionPending = true;
+                        showDialog(AlertsCreator.createDrawOverlayFloatingPermissionDialog(getParentActivity()));
+                    }
+                } else {
+                    SharedSettings.silentPipEnabled.set(false);
+                    SilentFloatingWindow.getInstance().dismiss();
+                }
                 listView.adapter.update(false);
                 break;
 

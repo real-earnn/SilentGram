@@ -142,6 +142,7 @@ import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.UserObject;
 import org.telegram.messenger.Utilities;
 import org.telegram.messenger.browser.Browser;
+import org.telegram.messenger.SilentFloatingWindow;
 import org.telegram.utils.pip.PipCoordinator;
 import org.telegram.utils.settings.SharedSettings;
 import org.telegram.messenger.utils.FrameMetricsOverlayView;
@@ -7220,9 +7221,24 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         if (actionBarLayout != null) {
             actionBarLayout.onUserLeaveHint();
         }
-        // SilentGram: whole-app Picture-in-Picture (Settings toggle) — Home
-        // shrinks the app into a corner window instead of just backgrounding.
-        tryEnterSilentPip();
+        // SilentGram: floating window (Settings toggle) replaces system PiP.
+        // Home shrinks the app into a usable floating window; if the overlay
+        // is unavailable, fall back to the old system PiP path.
+        if (!tryEnterSilentFloating()) {
+            tryEnterSilentPip();
+        }
+    }
+
+    /**
+     * SilentGram: enter the floating window instead of system PiP. Returns
+     * false when the toggle is off or the overlay cannot start, so the
+     * caller can fall back to system PiP.
+     */
+    private boolean tryEnterSilentFloating() {
+        if (!SharedSettings.silentPipEnabled.get() || isFinishing()) {
+            return false;
+        }
+        return SilentFloatingWindow.getInstance().start(this);
     }
 
     /**

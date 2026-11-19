@@ -311,6 +311,17 @@
                 <data android:mimeType="vnd.android.cursor.item/vnd.org.telegram.messenger.android.call.video"/>
             </intent-filter>
         </activity-alias>
+        <!-- SilentGram: floating-window host. A second LaunchActivity instance
+             (standard launch mode — LaunchActivity itself is singleTask) that
+             runs on the floating window's virtual display. Never enters PiP. -->
+        <activity
+            android:name="org.telegram.ui.SilentFloatingActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode|smallestScreenSize|screenLayout"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:hardwareAccelerated="true"
+            android:resizeableActivity="true"
+            android:windowSoftInputMode="adjustResize" />
         <activity
             android:name="org.telegram.ui.BubbleActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode|smallestScreenSize|screenLayout"

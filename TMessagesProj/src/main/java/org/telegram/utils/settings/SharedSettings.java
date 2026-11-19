@@ -41,6 +41,14 @@ public final class SharedSettings {
     public static final BooleanSetting silentPipEnabled =
         BooleanSetting.of("silent_pip_enabled", false);
 
+    /** SilentGram: floating window geometry (dp), persisted across sessions. 0 = default. */
+    public static final IntSetting silentFloatingWidthDp =
+        IntSetting.of("silent_floating_width_dp", 0);
+    public static final IntSetting silentFloatingXDp =
+        IntSetting.of("silent_floating_x_dp", 0);
+    public static final IntSetting silentFloatingYDp =
+        IntSetting.of("silent_floating_y_dp", 0);
+
     public static final EnumSetting<RoundVideoSession.CameraFacing> roundVideoLastCamera =
         EnumSetting.of("round_video_last_camera", RoundVideoSession.CameraFacing.FRONT);
 
