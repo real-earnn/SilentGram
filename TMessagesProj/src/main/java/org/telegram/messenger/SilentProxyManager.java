@@ -17,12 +17,16 @@ import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.URL;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.TimeZone;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -57,6 +61,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * verified-live proxy with the lowest measured latency when it beats the
  * current one by 50ms. The refresh is re-scheduled even when a fetch
  * fails, so one bad fetch can no longer stop all future re-evaluation.
+ * (SilentGram A: the hourly refresh is gone — the list is fetched once a
+ * day after 06:00 PKT; while the app is open the 3-minute watcher owns
+ * re-evaluation, and a failed fetch is retried on the next open.)
  *
  * SilentGram K7: proxies that fail the TCP probe in a round are removed
  * from the managed list — but only when that same round proves the
@@ -134,8 +141,24 @@ public class SilentProxyManager {
     private static final String OWN_PROXY_HOST = "161.118.196.94";
     private static final int OWN_PROXY_PORT = 443;
     private static final String OWN_PROXY_SECRET = "ee56b74aeebb050ff4c915539d4cba50d9676f6f676c652e636f6d";
-    // Refresh the list every 1 hour (the API itself refreshes every 1 hour).
-    private static final long REFRESH_INTERVAL_MS = 60 * 60 * 1000L;
+    // SilentGram A (2026-11-20): fetch the API list ONCE A DAY, not hourly.
+    // The bot posts a fresh list every morning at 06:00 PKT; the app
+    // fetches it on the first open after 06:00 PKT and keeps it all day.
+    // The persisted PKT calendar day is the guard — a fetch that already
+    // happened today is never repeated automatically. The safety nets
+    // still fetch: the open round finding <3 live saved proxies, the
+    // all-dead refetch, the manual Refresh button, and an empty
+    // candidate set. The hourly REFRESH_INTERVAL_MS schedule is gone.
+    private static final String DAILY_FETCH_DAY_KEY = "last_api_fetch_day_pkt";
+    private static final int DAILY_FETCH_HOUR_PKT = 6;
+    private static final TimeZone PKT = TimeZone.getTimeZone("Asia/Karachi");
+    // SilentGram A: when the current proxy is OUR proxy, any verified
+    // public proxy this fast (handshake ms) wins immediately — ours is
+    // first-connect + fallback only, never the permanent home (VPS
+    // bandwidth). Without this the 50ms bar below could never be beaten:
+    // ours usually has the lowest ms of all, so the app sat on ours
+    // forever and no public proxy ever took over.
+    private static final long OWN_SHED_MAX_MS = 1000;
     // A proxy must answer a TCP connect within this time to count as live.
     private static final int PROBE_TIMEOUT_MS = 1500;
     // Only switch to a faster proxy if it beats the current one by this much
@@ -216,9 +239,11 @@ public class SilentProxyManager {
     // SilentGram X: all-dead fetch refetch — if a fetched list verifies ZERO
     // live public proxies (only our own proxy works), the list is stale/dead;
     // fetch a fresh list instead of sitting on it. At most 2 refetches per
-    // hour (the API cache refreshes hourly server-side, so an immediate
-    // re-hit returns the identical list); the budget resets after an hour
-    // or as soon as any public proxy verifies.
+    // hour (the API list only changes once a day at 06:00 PKT, so a re-hit
+    // usually returns the identical list — the delay + cap just avoid
+    // hammering while leaving room for a mid-day re-post to be picked
+    // up); the budget resets after an hour or as soon as any public
+    // proxy verifies.
     private static final int MAX_FETCH_REFETCHES = 2;
     private static final long FETCH_REFETCH_DELAY_MS = 5 * 60 * 1000L;
     private static final long FETCH_REFETCH_WINDOW_MS = 60 * 60 * 1000L;
@@ -454,6 +479,63 @@ public class SilentProxyManager {
         return blockedAt > 0 && System.currentTimeMillis() - blockedAt < BAD_PROXY_BLOCK_MS;
     }
 
+    // SilentGram A: per-proxy download health — the last time a download
+    // made real progress while on this proxy. Abandon paths prefer a
+    // proxy where downloads actually work over a lower-ms one that never
+    // delivers (a proxy can have the best ms and still stall every file).
+    private static final ConcurrentHashMap<String, Long> downloadProgressByKey = new ConcurrentHashMap<>();
+    private static final long DOWNLOAD_HEALTHY_MS = 30 * 60 * 1000L;
+
+    /** 0 = a download made progress through this proxy recently, 1 = not (sorts after healthy ones). */
+    private static int downloadHealthRank(String key) {
+        Long last = downloadProgressByKey.get(key);
+        return (last != null && System.currentTimeMillis() - last < DOWNLOAD_HEALTHY_MS) ? 0 : 1;
+    }
+
+    private static SharedPreferences silentPrefs() {
+        return ApplicationLoader.applicationContext
+                .getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
+    }
+
+    /** Today's calendar date in PKT (yyyy-MM-dd), e.g. the day the bot posted at 06:00. */
+    private static String pktToday() {
+        SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd", Locale.US);
+        fmt.setTimeZone(PKT);
+        return fmt.format(new Date());
+    }
+
+    /** True when the app has not yet fetched the API list today and it is past 06:00 PKT (when the bot's fresh list lands). */
+    private static boolean isDailyFetchDue() {
+        try {
+            SimpleDateFormat hourFmt = new SimpleDateFormat("HH", Locale.US);
+            hourFmt.setTimeZone(PKT);
+            int hour = Integer.parseInt(hourFmt.format(new Date()));
+            if (hour < DAILY_FETCH_HOUR_PKT) {
+                return false;
+            }
+            String lastDay = silentPrefs().getString(DAILY_FETCH_DAY_KEY, "");
+            return !pktToday().equals(lastDay);
+        } catch (Throwable e) {
+            return false;
+        }
+    }
+
+    /** Record that today's API list was fetched (only called after a fetch actually delivered proxies). */
+    private static void markDailyFetchDone() {
+        try {
+            silentPrefs().edit().putString(DAILY_FETCH_DAY_KEY, pktToday()).apply();
+        } catch (Throwable e) {
+            FileLog.e(e);
+        }
+    }
+
+    /** Fetch the API list if the once-a-day rule says it is due; a no-op otherwise. */
+    private static void maybeDailyFetch() {
+        if (isDailyFetchDue()) {
+            refreshAsync();
+        }
+    }
+
     // Download watchdog: some proxies accept a TCP connect but never relay
     // real data — stickers, emoji and files just never download. The
     // watchdog watches active downloads; if one makes zero progress for
@@ -477,15 +559,15 @@ public class SilentProxyManager {
         SilentConfig.refreshAsync();
         // SilentGram T: fast open — connect to OUR proxy first (always
         // live), then the last-connected proxy and the saved top 10.
-        // The API is NOT hit on every open; it is fetched only when the
-        // saved proxies are mostly dead (see the open-round hook in
-        // probeAndConnect). The hourly freshness refresh still runs
-        // while the app stays open, starting one hour after open.
+        // The API is NOT hit on every open; it is fetched once a day
+        // after 06:00 PKT (see maybeDailyFetch), or when the saved
+        // proxies are mostly dead (see the open-round hook in
+        // probeAndConnect).
         fastOpenRound();
+        maybeDailyFetch();
         startDownloadWatchdog();
         startProxyWatcher();
         startConnectingWatchdog();
-        AndroidUtilities.runOnUIThread(SilentProxyManager::refreshAsync, REFRESH_INTERVAL_MS);
     }
 
     /**
@@ -560,6 +642,7 @@ public class SilentProxyManager {
         }
         fetching = true;
         new Thread(() -> {
+            boolean ok = false;
             try {
                 // /api/live first (the FULL daily live list, fastest first
                 // by the API's latency). Fall back to the full list
@@ -572,18 +655,20 @@ public class SilentProxyManager {
                 }
                 if (proxies != null && !proxies.isEmpty()) {
                     applyProxies(proxies);
+                    ok = true;
                 }
             } catch (Throwable e) {
                 FileLog.e(e);
             } finally {
                 fetching = false;
-                // SilentGram K6: ALWAYS schedule the next refresh, even
-                // when this fetch failed. The old code only scheduled it
-                // at the end of applyProxies, so one failed fetch (no
-                // network at startup, one API hiccup) silently stopped
-                // all future re-evaluation for the whole app session and
-                // the app never switched proxies again.
-                AndroidUtilities.runOnUIThread(SilentProxyManager::refreshAsync, REFRESH_INTERVAL_MS);
+                // SilentGram A: no hourly re-schedule anymore — the list
+                // is fetched once a day (see maybeDailyFetch). Only a
+                // fetch that actually delivered proxies counts as
+                // today's fetch, so a failed fetch is retried on the
+                // next open instead of blocking until tomorrow.
+                if (ok) {
+                    markDailyFetchDone();
+                }
             }
         }, "silent-proxy-fetch").start();
     }
@@ -769,11 +854,11 @@ public class SilentProxyManager {
      * is skipped the same way.
      */
     private static void probeAndConnect(List<SharedConfig.ProxyInfo> candidates, boolean watcherRound, boolean openRound) {
-        // One probe round at a time: the hourly fetch round and the
+        // One probe round at a time: the fetch round and the
         // watcher round share the latency maps and the gate, so a second
         // round starting mid-round would corrupt both decisions. The
         // skipped round is not lost — the watcher runs again in a few
-        // minutes and the fetch re-schedules hourly.
+        // minutes and the fetch is retried on the next open.
         if (!roundRunning.compareAndSet(false, true)) {
             FileLog.d("SilentProxy: probe round already running — skipping this " + (watcherRound ? "watcher" : "fetch") + " round");
             return;
@@ -1058,7 +1143,7 @@ public class SilentProxyManager {
      * NOTHING is cleared. Only state 2 (TCP connect failed) counts as
      * dead — state 3 (TCP live, handshake failed) and still-probing
      * slots never count. A removed proxy is not gone for good: the next
-     * hourly fetch re-adds it if the API lists it live again.
+     * daily fetch re-adds it if the API lists it live again.
      */
     private static void cleanupDeadProxies(List<SharedConfig.ProxyInfo> ranked, int[] state) {
         int live = 0;
@@ -1353,6 +1438,23 @@ public class SilentProxyManager {
                     }
                 }
                 if (bestVerified >= 0) {
+                    // SilentGram A: OUR proxy is first-connect + fallback
+                    // only — never the permanent home (VPS bandwidth).
+                    // It usually has the LOWEST measured ms, so the 50ms
+                    // bar in tryConnectCandidate below could never be
+                    // beaten by a public proxy and the app sat on ours
+                    // forever. When the current proxy is ours, ANY
+                    // verified public proxy with a sane latency wins
+                    // immediately (bar = dead, so any verified proxy
+                    // beats it); if none is sane, the normal bar below
+                    // keeps us on ours.
+                    if (SharedConfig.currentProxy != null && isOwnProxy(SharedConfig.currentProxy)
+                            && !sameProxy(ranked.get(bestVerified), SharedConfig.currentProxy)
+                            && bestVerifiedMs <= OWN_SHED_MAX_MS) {
+                        FileLog.d("SilentProxy: A shedding our proxy for fastest verified public " + proxyKey(ranked.get(bestVerified)) + " (" + bestVerifiedMs + "ms)");
+                        tryConnectCandidate(ranked, state, bestVerified, decisionMade, connectedOnce, Long.MAX_VALUE);
+                        return;
+                    }
                     tryConnectCandidate(ranked, state, bestVerified, decisionMade, connectedOnce, bar);
                 } else if (bestUnverified >= 0 && currentProxyState(ranked, state) == 2) {
                     // No verified proxy this round, and the current proxy
@@ -1624,11 +1726,25 @@ public class SilentProxyManager {
         HashMap<String, long[]> next = new HashMap<>();
         for (MessageObject msg : downloading) {
             try {
+                // SilentGram A: track photos too, not only documents — a
+                // photo message has no Document (getDocument() is null),
+                // so the old code skipped every photo download entirely.
+                // FileLoader.getPathToAttach handles a TLRPC.Photo (it
+                // picks the closest size), exactly like a document.
+                org.telegram.tgnet.TLObject attach = null;
                 TLRPC.Document doc = msg.getDocument();
-                if (doc == null) {
+                if (doc != null) {
+                    attach = doc;
+                } else if (msg.messageOwner != null && msg.messageOwner.media instanceof TLRPC.TL_messageMediaPhoto) {
+                    TLRPC.Photo photo = ((TLRPC.TL_messageMediaPhoto) msg.messageOwner.media).photo;
+                    if (photo != null) {
+                        attach = photo;
+                    }
+                }
+                if (attach == null) {
                     continue;
                 }
-                File file = FileLoader.getInstance(account).getPathToAttach(doc, true);
+                File file = FileLoader.getInstance(account).getPathToAttach(attach, true);
                 if (file == null) {
                     continue;
                 }
@@ -1636,12 +1752,34 @@ public class SilentProxyManager {
                 long size = file.exists() ? file.length() : 0;
                 long[] prev = tracked.get(path);
                 if (prev != null && prev[0] == size) {
-                    long stalls = prev[1] + 1;
-                    next.put(path, new long[]{size, stalls});
-                    if (stalls >= WATCHDOG_STALL_CHECKS) {
-                        anyStalled = true;
+                    // No growth. A file that never started (0 bytes and
+                    // FileLoader is not even loading it — still queued
+                    // behind other downloads) is NOT a stall: the loader
+                    // simply has not begun. A 0-byte file the loader IS
+                    // working on, or any started file that stopped
+                    // growing, is a genuine stall.
+                    boolean loading = false;
+                    try {
+                        String fileName = msg.getFileName();
+                        loading = fileName != null && FileLoader.getInstance(account).isLoadingFile(fileName);
+                    } catch (Throwable ignored) {
+                    }
+                    if (size > 0 || loading) {
+                        long stalls = prev[1] + 1;
+                        next.put(path, new long[]{size, stalls});
+                        if (stalls >= WATCHDOG_STALL_CHECKS) {
+                            anyStalled = true;
+                        }
+                    } else {
+                        next.put(path, new long[]{size, 0});
                     }
                 } else {
+                    // Progress (or first sight): if the file grew, a
+                    // download really works through the current proxy —
+                    // record its download health for the abandon paths.
+                    if (prev != null && size > prev[0] && SharedConfig.currentProxy != null) {
+                        downloadProgressByKey.put(proxyKey(SharedConfig.currentProxy), System.currentTimeMillis());
+                    }
                     next.put(path, new long[]{size, 0});
                 }
             } catch (Throwable ignored) {
@@ -1661,7 +1799,11 @@ public class SilentProxyManager {
         if (now - lastWatchdogSwitchMs < WATCHDOG_SWITCH_COOLDOWN_MS) {
             return;
         }
-        switchToNextProxy(true);
+        // SilentGram A: never mark OUR proxy bad — a stall on ours is
+        // the network / DC, not the proxy, and ours must stay the
+        // fallback. Switch away from it without the block.
+        boolean markBad = SharedConfig.currentProxy == null || !isOwnProxy(SharedConfig.currentProxy);
+        switchToNextProxy(markBad);
     }
 
     /**
@@ -1726,11 +1868,19 @@ public class SilentProxyManager {
         // blocked — fastest-first by ON-DEVICE measured latency (API
         // latency only as fallback), so the abandon path lands on the
         // proxy that is actually fastest from this phone, not the one
-        // that is fastest from the API server.
+        // that is fastest from the API server. SilentGram A: proxies
+        // where downloads were recently seen making progress sort first
+        // — a low-ms proxy that never delivers a file is worse than a
+        // slower one that does.
         List<SharedConfig.ProxyInfo> ranked = new ArrayList<>(candidates);
         Collections.sort(ranked, new Comparator<SharedConfig.ProxyInfo>() {
             @Override
             public int compare(SharedConfig.ProxyInfo a, SharedConfig.ProxyInfo b) {
+                int ha = downloadHealthRank(proxyKey(a));
+                int hb = downloadHealthRank(proxyKey(b));
+                if (ha != hb) {
+                    return Integer.compare(ha, hb);
+                }
                 return Long.compare(latencyForRank(proxyKey(a)), latencyForRank(proxyKey(b)));
             }
         });
@@ -1805,6 +1955,14 @@ public class SilentProxyManager {
                 refreshAsync();
                 return;
             }
+            // SilentGram A: the once-a-day fetch, for a session that
+            // started before 06:00 PKT and is still open when the fresh
+            // list lands — fetch it once, then the date guard stops any
+            // repeat today.
+            if (isDailyFetchDue()) {
+                refreshAsync();
+                return;
+            }
             List<SharedConfig.ProxyInfo> trimmed = new ArrayList<>(saved);
             Collections.sort(trimmed, new Comparator<SharedConfig.ProxyInfo>() {
                 @Override
@@ -1855,10 +2013,17 @@ public class SilentProxyManager {
         }
         watcherUnstableRounds = 0;
         String badKey = proxyKey(current);
-        SharedPreferences prefs = ApplicationLoader.applicationContext
-                .getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
-        prefs.edit().putLong("proxy_bad_" + badKey, System.currentTimeMillis()).apply();
-        FileLog.d("SilentProxy: K6b watcher: abandoning unstable proxy " + badKey);
+        // SilentGram A: never mark OUR proxy bad for an hour — it is the
+        // fallback the app must always be able to return to. Abandon to
+        // the best verified proxy without the block.
+        if (!isOwnProxy(current)) {
+            SharedPreferences prefs = ApplicationLoader.applicationContext
+                    .getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
+            prefs.edit().putLong("proxy_bad_" + badKey, System.currentTimeMillis()).apply();
+            FileLog.d("SilentProxy: K6b watcher: abandoning unstable proxy " + badKey);
+        } else {
+            FileLog.d("SilentProxy: K6b watcher: abandoning our proxy (not marking it bad) for the best verified proxy");
+        }
         switchToBestVerified(ranked, state);
     }
 
@@ -1880,6 +2045,13 @@ public class SilentProxyManager {
         Collections.sort(verifiedIdx, new Comparator<Integer>() {
             @Override
             public int compare(Integer a, Integer b) {
+                // SilentGram A: download-healthy proxies first (see
+                // switchToNextProxy) — then lowest latency.
+                int ha = downloadHealthRank(proxyKey(ranked.get(a)));
+                int hb = downloadHealthRank(proxyKey(ranked.get(b)));
+                if (ha != hb) {
+                    return Integer.compare(ha, hb);
+                }
                 return Long.compare(latencyForRank(proxyKey(ranked.get(a))), latencyForRank(proxyKey(ranked.get(b))));
             }
         });
@@ -1995,6 +2167,21 @@ public class SilentProxyManager {
                 connectingSinceMs = now;
                 connectingProxyKey = curKey;
             }
+            // SilentGram A: the connection JUST dropped — a proxy that
+            // connected and then dropped again within minutes is
+            // flapping, even if it reconnects before the 3s stall timer
+            // fires. Count one flap cycle on the drop itself (this runs
+            // once per drop: watchdogLastState is still the old
+            // Connected/Updating state on the first Connecting poll).
+            // A drop after a long stable connection proves nothing and
+            // is never counted (see FLAP_CONNECTED_MIN_MS).
+            if ((watchdogLastState == ConnectionsManager.ConnectionStateConnected
+                    || watchdogLastState == ConnectionsManager.ConnectionStateUpdating)
+                    && watchdogLastConnectedKey != null && watchdogLastConnectedKey.equals(curKey)
+                    && now - watchdogLastConnectedAtMs < FLAP_CONNECTED_MIN_MS
+                    && !isOwnProxyKey(curKey) && isManagedProxyKey(curKey)) {
+                noteFlapCycle(curKey, now);
+            }
             watchdogLastState = state;
             if (now - connectingSinceMs >= CONNECTING_WATCHDOG_TIMEOUT_MS) {
                 onConnectingStall(now, curKey);
@@ -2019,9 +2206,16 @@ public class SilentProxyManager {
      * can move to the fastest verified one.
      */
     private static void onConnectingStall(long now, String stalledKey) {
+        // SilentGram A: count a stall cycle for a proxy that NEVER
+        // connected (dead on arrival, stuck on Connecting every round) —
+        // the old code only counted a stall when the proxy had connected
+        // recently, so a proxy that never connects at all could stall
+        // forever without ever being condemned. A proxy that DID connect
+        // recently was already counted when its connection dropped (see
+        // pollConnectingWatchdog), so it is skipped here to avoid
+        // double-counting one flap.
         if (!isOwnProxyKey(stalledKey) && isManagedProxyKey(stalledKey)
-                && stalledKey.equals(watchdogLastConnectedKey)
-                && now - watchdogLastConnectedAtMs < FLAP_CONNECTED_MIN_MS) {
+                && !stalledKey.equals(watchdogLastConnectedKey)) {
             noteFlapCycle(stalledKey, now);
         }
         // Re-read the current proxy: condemning a flapping proxy (above)

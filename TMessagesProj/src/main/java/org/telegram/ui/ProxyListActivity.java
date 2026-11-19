@@ -110,6 +110,21 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
     private int callRelayInfoRow = -1;
     private String callRelayStatusText;
     private boolean callRelayProbeStarted;
+    // SilentGram A: the relay probe used to run exactly ONCE with a single
+    // UDP packet — one lost/delayed UDP reply (or the TCP socket being
+    // closed before the UDP echo, which tears the association down)
+    // flipped the row to "unreachable", and reopening the page probed
+    // from scratch. Now: 3 attempts, 2 UDP sends per attempt, the TCP
+    // control connection stays open during the UDP echo, and the last
+    // known-good result survives across page opens (static) — the row
+    // only flips to unreachable after every attempt fails, and even then
+    // it still shows when the relay was last OK.
+    private static String lastCallRelayOkText;
+    private static volatile long lastCallRelayOkMs;
+    private static final int CALL_RELAY_PROBE_ATTEMPTS = 3;
+    private static final int CALL_RELAY_TCP_TIMEOUT_MS = 4000;
+    private static final int CALL_RELAY_UDP_TIMEOUT_MS = 3000;
+    private static final int CALL_RELAY_UDP_SENDS = 2;
 
     private ItemTouchHelper itemTouchHelper;
     private ActionBarMenuItem shareMenuItem;
@@ -374,6 +389,12 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
 
         // SilentGram X: probe the call relay once per fragment create so the
         // status line above shows whether it is actually reachable.
+        // SilentGram A: while re-probing, keep showing the last known-good
+        // result instead of "checking…" — the row must not flicker on
+        // every open.
+        if (callRelayStatusText == null && lastCallRelayOkText != null) {
+            callRelayStatusText = lastCallRelayOkText + " — re-checking…";
+        }
         if (!callRelayProbeStarted) {
             callRelayProbeStarted = true;
             probeCallRelay();
@@ -625,68 +646,37 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
     // SilentGram X: probe the hardcoded call relay (TCP SOCKS5 handshake +
     // UDP ASSOCIATE + one UDP echo packet, same checks as the server-side
     // probe). Runs off the UI thread; result lands in the status row above.
+    // SilentGram A: retries (see CALL_RELAY_PROBE_ATTEMPTS) and keeps the
+    // last known-good result — a single lost UDP packet, one slow reply,
+    // or one closed association must never flip the row to unreachable.
     private void probeCallRelay() {
         new Thread(() -> {
-            String status;
-            try {
-                String host = org.telegram.messenger.voip.VoIPService.SILENT_CALL_RELAY_HOST;
-                int port = org.telegram.messenger.voip.VoIPService.SILENT_CALL_RELAY_PORT;
-                java.net.Socket s = new java.net.Socket();
-                s.connect(new java.net.InetSocketAddress(host, port), 5000);
-                s.setSoTimeout(5000);
-                java.io.OutputStream out = s.getOutputStream();
-                java.io.InputStream in = s.getInputStream();
-                out.write(new byte[]{0x05, 0x02, 0x00, 0x02});
-                byte[] r = new byte[2];
-                sgReadFully(in, r);
-                if (r[1] != 0x02) {
-                    throw new Exception("no auth method");
+            String status = null;
+            String lastError = null;
+            for (int attempt = 1; attempt <= CALL_RELAY_PROBE_ATTEMPTS && status == null; attempt++) {
+                try {
+                    status = probeCallRelayOnce();
+                } catch (Exception e) {
+                    lastError = e.getMessage();
+                    if (attempt < CALL_RELAY_PROBE_ATTEMPTS) {
+                        try {
+                            Thread.sleep(500);
+                        } catch (InterruptedException ignored) {
+                            break;
+                        }
+                    }
                 }
-                byte[] u = org.telegram.messenger.voip.VoIPService.SILENT_CALL_RELAY_USER.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                byte[] p = org.telegram.messenger.voip.VoIPService.SILENT_CALL_RELAY_PASSWORD.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-                byte[] auth = new byte[3 + u.length + p.length];
-                auth[0] = 0x01;
-                auth[1] = (byte) u.length;
-                System.arraycopy(u, 0, auth, 2, u.length);
-                auth[2 + u.length] = (byte) p.length;
-                System.arraycopy(p, 0, auth, 3 + u.length, p.length);
-                out.write(auth);
-                sgReadFully(in, r);
-                if (r[1] != 0x00) {
-                    throw new Exception("auth failed");
-                }
-                out.write(new byte[]{0x05, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
-                byte[] assoc = new byte[10];
-                sgReadFully(in, assoc);
-                if (assoc[1] != 0x00) {
-                    throw new Exception("UDP ASSOCIATE failed");
-                }
-                String bndIp = (assoc[4] & 0xff) + "." + (assoc[5] & 0xff) + "." + (assoc[6] & 0xff) + "." + (assoc[7] & 0xff);
-                int bndPort = ((assoc[8] & 0xff) << 8) | (assoc[9] & 0xff);
-                s.close();
-                // One UDP echo: DNS query for example.com to 8.8.8.8 via the relay.
-                byte[] dnsQ = new byte[]{(byte) 0xaa, (byte) 0xaa, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00, 0x00, 0x01, 0x00, 0x01};
-                byte[] pkt = new byte[10 + dnsQ.length];
-                pkt[2] = 0x00;
-                pkt[3] = 0x01;
-                pkt[4] = 8;
-                pkt[5] = 8;
-                pkt[6] = 8;
-                pkt[7] = 8;
-                pkt[8] = 0;
-                pkt[9] = 53;
-                System.arraycopy(dnsQ, 0, pkt, 10, dnsQ.length);
-                java.net.DatagramSocket udp = new java.net.DatagramSocket();
-                udp.setSoTimeout(4000);
-                udp.send(new java.net.DatagramPacket(pkt, pkt.length, java.net.InetAddress.getByName(bndIp), bndPort));
-                byte[] rx = new byte[2048];
-                udp.receive(new java.net.DatagramPacket(rx, rx.length));
-                udp.close();
-                status = "Call relay " + host + ":" + port + " — TCP+UDP OK (BND " + bndIp + ":" + bndPort + ")";
-            } catch (Exception e) {
-                status = "Call relay — unreachable (" + e.getMessage() + ")";
             }
-            final String st = status;
+            final String st;
+            if (status != null) {
+                lastCallRelayOkText = status;
+                lastCallRelayOkMs = System.currentTimeMillis();
+                st = status;
+            } else if (lastCallRelayOkText != null) {
+                st = lastCallRelayOkText + " — re-check failed (" + lastError + ", last OK " + formatCallRelayTime(lastCallRelayOkMs) + ")";
+            } else {
+                st = "Call relay — unreachable (" + lastError + ")";
+            }
             AndroidUtilities.runOnUIThread(() -> {
                 callRelayStatusText = st;
                 if (listAdapter != null && callRelayInfoRow != -1) {
@@ -694,6 +684,104 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                 }
             });
         }, "silent-call-relay-probe").start();
+    }
+
+    private static String formatCallRelayTime(long ms) {
+        try {
+            return new java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(new java.util.Date(ms));
+        } catch (Throwable e) {
+            return "";
+        }
+    }
+
+    // One probe attempt: TCP SOCKS5 handshake + UDP ASSOCIATE + UDP echo.
+    // Throws on any failure (the caller retries). The TCP control
+    // connection stays OPEN for the whole UDP echo — a SOCKS5 UDP
+    // association lives and dies with it, so the old code's s.close()
+    // before the echo made the result a race: sometimes the relay still
+    // forwarded the packet, sometimes the association was already gone.
+    private String probeCallRelayOnce() throws Exception {
+        String host = org.telegram.messenger.voip.VoIPService.SILENT_CALL_RELAY_HOST;
+        int port = org.telegram.messenger.voip.VoIPService.SILENT_CALL_RELAY_PORT;
+        java.net.Socket s = new java.net.Socket();
+        try {
+            s.connect(new java.net.InetSocketAddress(host, port), CALL_RELAY_TCP_TIMEOUT_MS);
+            s.setSoTimeout(CALL_RELAY_TCP_TIMEOUT_MS);
+            java.io.OutputStream out = s.getOutputStream();
+            java.io.InputStream in = s.getInputStream();
+            out.write(new byte[]{0x05, 0x02, 0x00, 0x02});
+            byte[] r = new byte[2];
+            sgReadFully(in, r);
+            if (r[1] != 0x02) {
+                throw new Exception("no auth method");
+            }
+            byte[] u = org.telegram.messenger.voip.VoIPService.SILENT_CALL_RELAY_USER.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] p = org.telegram.messenger.voip.VoIPService.SILENT_CALL_RELAY_PASSWORD.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            byte[] auth = new byte[3 + u.length + p.length];
+            auth[0] = 0x01;
+            auth[1] = (byte) u.length;
+            System.arraycopy(u, 0, auth, 2, u.length);
+            auth[2 + u.length] = (byte) p.length;
+            System.arraycopy(p, 0, auth, 3 + u.length, p.length);
+            out.write(auth);
+            sgReadFully(in, r);
+            if (r[1] != 0x00) {
+                throw new Exception("auth failed");
+            }
+            out.write(new byte[]{0x05, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
+            byte[] assoc = new byte[10];
+            sgReadFully(in, assoc);
+            if (assoc[1] != 0x00) {
+                throw new Exception("UDP ASSOCIATE failed");
+            }
+            if (assoc[3] != 0x01) {
+                throw new Exception("unexpected UDP ASSOCIATE address type " + assoc[3]);
+            }
+            String bndIp = (assoc[4] & 0xff) + "." + (assoc[5] & 0xff) + "." + (assoc[6] & 0xff) + "." + (assoc[7] & 0xff);
+            int bndPort = ((assoc[8] & 0xff) << 8) | (assoc[9] & 0xff);
+            // A 0.0.0.0 BND address is not a usable UDP target — send to
+            // the relay host itself instead.
+            String udpHost = "0.0.0.0".equals(bndIp) ? host : bndIp;
+            // One UDP echo: DNS query for example.com to 8.8.8.8 via the relay.
+            byte[] dnsQ = new byte[]{(byte) 0xaa, (byte) 0xaa, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00, 0x00, 0x01, 0x00, 0x01};
+            byte[] pkt = new byte[10 + dnsQ.length];
+            pkt[2] = 0x00;
+            pkt[3] = 0x01;
+            pkt[4] = 8;
+            pkt[5] = 8;
+            pkt[6] = 8;
+            pkt[7] = 8;
+            pkt[8] = 0;
+            pkt[9] = 53;
+            System.arraycopy(dnsQ, 0, pkt, 10, dnsQ.length);
+            java.net.DatagramSocket udp = new java.net.DatagramSocket();
+            try {
+                udp.setSoTimeout(CALL_RELAY_UDP_TIMEOUT_MS);
+                boolean ok = false;
+                for (int send = 0; send < CALL_RELAY_UDP_SENDS && !ok; send++) {
+                    udp.send(new java.net.DatagramPacket(pkt, pkt.length, java.net.InetAddress.getByName(udpHost), bndPort));
+                    try {
+                        byte[] rx = new byte[2048];
+                        udp.receive(new java.net.DatagramPacket(rx, rx.length));
+                        ok = true;
+                    } catch (java.net.SocketTimeoutException e) {
+                        // One lost UDP packet — send it again before
+                        // giving up on this attempt.
+                    }
+                }
+                if (!ok) {
+                    throw new Exception("UDP echo timeout");
+                }
+            } finally {
+                udp.close();
+            }
+            return "Call relay " + host + ":" + port + " — TCP+UDP OK (BND " + bndIp + ":" + bndPort + ")";
+        } finally {
+            try {
+                s.close();
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     private static void sgReadFully(java.io.InputStream in, byte[] b) throws java.io.IOException {

@@ -287,7 +287,9 @@ public class ChatAvatarContainer extends FrameLayout implements FactorAnimator.T
         titleTextView.setCanHideRightDrawable(false);
         titleTextView.setRightDrawableOutside(true);
         titleTextView.setPadding(0, dp(6), 0, dp(12));
-        // SilentGram: long-press the chat title (channel/group/user name) to copy it. Single press still opens the profile.
+        // SilentGram: long-press the chat title (channel/group/user name) to copy it.
+        // NOTE: a long-clickable child consumes short taps, so the title gets its own
+        // click listener below (next to the container click) that opens the profile.
         titleTextView.setOnLongClickListener(v -> {
             CharSequence name = titleTextView.getText();
             if (name != null && name.length() > 0 && AndroidUtilities.addToClipboard(name) && parentFragment != null) {
@@ -370,6 +372,11 @@ public class ChatAvatarContainer extends FrameLayout implements FactorAnimator.T
                 setOnClickListener(v -> {
                     openProfile(false);
                 });
+                // SilentGram: the title is long-clickable (copy name), so it consumes
+                // short taps instead of letting them bubble to the container above.
+                // Give it the exact same click, so a single tap on the name opens
+                // the profile just like a tap anywhere else on the header.
+                titleTextView.setOnClickListener(v -> openProfile(false));
             }
 
             TLRPC.Chat chat = parentFragment.getCurrentChat();

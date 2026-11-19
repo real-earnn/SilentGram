@@ -84,6 +84,7 @@
     <string name="SilentMenuHeader">Your SilentGram features — everything in one place.</string>
     <string name="SilentSettingsHeader">Silent Features</string>
     <string name="SilentPush">Push notifications via SilentGram</string>
+    <string name="SilentPictureInPicture">Picture-in-Picture mode</string>
     <string name="SilentMenuDeveloperSub">About, links &amp; credits</string>
     <string name="SilentMenuTemplatesSub">Slash-trigger quick replies</string>
     <string name="SilentMenuBotTesterSub">Test any Bot API method</string>

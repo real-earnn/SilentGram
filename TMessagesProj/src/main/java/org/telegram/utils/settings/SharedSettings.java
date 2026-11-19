@@ -37,6 +37,10 @@ public final class SharedSettings {
     public static final BooleanSetting silentPushEnabled =
         BooleanSetting.of("silent_push_enabled", true);
 
+    /** SilentGram: whole-app Picture-in-Picture on Home (Settings toggle). Default off. */
+    public static final BooleanSetting silentPipEnabled =
+        BooleanSetting.of("silent_pip_enabled", false);
+
     public static final EnumSetting<RoundVideoSession.CameraFacing> roundVideoLastCamera =
         EnumSetting.of("round_video_last_camera", RoundVideoSession.CameraFacing.FRONT);
 

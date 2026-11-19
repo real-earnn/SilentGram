@@ -92,6 +92,7 @@ import android.widget.Toast;
 
 import androidx.annotation.Nullable;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.telegram.messenger.AccountInstance;
 import org.telegram.messenger.AndroidUtilities;
@@ -1759,6 +1760,44 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 		}
 	}
 
+	// SilentGram Z: log the group-call transport the server hands us
+	// (transport.candidates: ip/port/protocol/type). Group media goes
+	// direct ICE to these candidates — GroupNetworkManager has no relay
+	// factory and makeGroup takes no proxy — so in Pakistan these
+	// candidates are the whole story. No secrets: ufrag/pwd are
+	// deliberately NOT logged.
+	private void logGroupJoinPayload(String payloadJson) {
+		try {
+			JSONObject object = new JSONObject(payloadJson);
+			JSONObject transport = object.optJSONObject("transport");
+			if (transport == null) {
+				FileLog.e("SG-CALL-RELAY group join: no transport object");
+				return;
+			}
+			JSONArray candidates = transport.optJSONArray("candidates");
+			if (candidates == null) {
+				FileLog.e("SG-CALL-RELAY group join: no candidates");
+				return;
+			}
+			StringBuilder summary = new StringBuilder();
+			for (int i = 0; i < candidates.length(); i++) {
+				JSONObject candidate = candidates.optJSONObject(i);
+				if (candidate == null) {
+					continue;
+				}
+				if (summary.length() > 0) {
+					summary.append(';');
+				}
+				summary.append(candidate.optString("ip")).append(':').append(candidate.optString("port"))
+					.append(" proto=").append(candidate.optString("protocol")).append(" type=").append(candidate.optString("type"))
+					.append(" tcptype=").append(candidate.optString("tcptype"));
+			}
+			FileLog.e("SG-CALL-RELAY group join candidates=[" + summary + "]");
+		} catch (Exception e) {
+			FileLog.e("SG-CALL-RELAY group join: payload parse failed", e);
+		}
+	}
+
 	private TLRPC.GroupCall lastGroupCallUpdate;
 	public void onGroupCallUpdated(TLRPC.GroupCall call) {
 		if (groupCall == null || groupCall.call.id != call.id) {
@@ -1795,6 +1834,7 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 				if (newModeStreaming) {
 					tgVoip[CAPTURE_DEVICE_CAMERA].prepareForStream(groupCall.call != null && groupCall.call.rtmp_stream);
 				} else {
+					logGroupJoinPayload(myParams.data);
 					tgVoip[CAPTURE_DEVICE_CAMERA].setJoinResponsePayload(myParams.data);
 				}
 				dispatchStateChanged(STATE_WAIT_INIT_ACK);
@@ -3592,15 +3632,29 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 			final String persistentStateFilePath = new File(ApplicationLoader.applicationContext.getCacheDir(), "voip_persistent_state.json").getAbsolutePath();
 
 			// endpoints
-			// SilentGram X: 1:1 calls ALWAYS use TCP reflector endpoints.
-			// UDP reflector + P2P UDP are blocked on our users' networks, and
-			// the vendored stack never routes UDP media through the SOCKS5
-			// proxy anyway (CreateUdpSocket takes no proxy; only TURN-over-TCP
-			// uses it) — so a UDP call just sits in "Connecting..." until the
-			// native 20s timeout. TCP reflector connects directly to Telegram
-			// (TCP works fine) and the reflector bridges TCP<->UDP, so the
-			// other side can stay on UDP. Quality is lower than UDP, but a
-			// working TCP call beats a failed one.
+			// SilentGram Z (verified 2026-11-20 from tgcalls 545f5ae source):
+			// endpointType below is a NO-OP on the live path. Every v2
+			// implementation (InstanceV2Impl 7/8/9/12/13, Reference 10/11,
+			// Compat 14) NEVER reads Descriptor.endpoints — the live
+			// transport is RtcServer.isTcp, which comes from
+			// Endpoint.tcp, which is TL_phoneConnection.tcp from the
+			// server. forceTcp=true only affects the legacy v1 stack
+			// (InstanceImpl 2.7.7/5.0.0), which the server no longer
+			// negotiates. Likewise the SOCKS5 proxy passed to
+			// makeInstance never reaches any socket on v2: v2 never
+			// calls _portAllocator->set_proxy(), ReflectorPort's TCP
+			// connect ignores its proxy_info argument, and the vendored
+			// WebRTC socket factory implements PROXY_HTTPS only (no
+			// SOCKS5 anywhere). So today a call is: UDP reflector
+			// (direct, blocked in Pakistan) or, where the server sent
+			// tcp=true, TCP reflector (direct to a Telegram IP, also
+			// blocked) — hence "Connecting..." until the ~20s native
+			// timeout. The real fix is the tgcalls-fork patch in
+			// docs/sg-call-relay-via-socks5.md (SOCKS5 for the TCP
+			// reflector + set_proxy wiring). Do NOT "fix" this by
+			// forcing Endpoint.tcp=true here: Compat/Reference SKIP
+			// TCP servers from their ICE server list, so that would
+			// leave them with zero relay ports — strictly worse.
 			final boolean forceTcp = true;
 			final int endpointType = forceTcp ? Instance.ENDPOINT_TYPE_TCP_RELAY : Instance.ENDPOINT_TYPE_UDP_RELAY;
 			final Instance.Endpoint[] endpoints = new Instance.Endpoint[privateCall.connections.size()];
@@ -3640,10 +3694,28 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 				}
 			}
 			// init
-			// SilentGram V: route private-call media through our own SOCKS5 relay (calls only; messages stay on MTProto).
-			// SilentGram X: call-relay diagnostics (FileLog.e so release builds emit them).
+			// SilentGram V/X: the SOCKS5 relay is passed to makeInstance
+			// below, but (verified — see the comment at forceTcp above)
+			// v2 never routes media through it; until the tgcalls-fork
+			// patch lands the arg is diagnostics-only.
+			// Call-relay diagnostics (FileLog.e so release builds emit them).
 			sgCallMakeInstanceMs = SystemClock.elapsedRealtime();
-			FileLog.e("SG-CALL-RELAY init call=" + (privateCall != null ? privateCall.id : 0) + " proxy=161.118.196.94:18080 forceTcp=" + forceTcp + " endpoints=" + endpoints.length + " endpointType=" + endpointType + " p2pAllowed=" + privateCall.p2p_allowed);
+			// SilentGram Z: log the facts the fork patch needs — the
+			// negotiated tgcalls version (decides which native impl
+			// runs: v1 / V2Impl / Reference / Compat) and, per
+			// endpoint, the server-sent tcp flag that actually picks
+			// the reflector transport on v2. No secrets: peerTag and
+			// username/password are deliberately NOT logged.
+			StringBuilder endpointSummary = new StringBuilder();
+			for (int i = 0; i < endpoints.length; i++) {
+				if (i > 0) {
+					endpointSummary.append(';');
+				}
+				endpointSummary.append(endpoints[i].id).append('@').append(endpoints[i].ipv4).append(':').append(endpoints[i].port)
+					.append(" tcp=").append(endpoints[i].tcp).append(" turn=").append(endpoints[i].turn).append(" stun=").append(endpoints[i].stun)
+					.append(" type=").append(endpoints[i].type).append(" reflectorId=").append(endpoints[i].reflectorId);
+			}
+			FileLog.e("SG-CALL-RELAY init call=" + (privateCall != null ? privateCall.id : 0) + " version=" + privateCall.protocol.library_versions.get(0) + " proxy=161.118.196.94:18080 forceTcp=" + forceTcp + " endpoints=[" + endpointSummary + "] p2pAllowed=" + privateCall.p2p_allowed);
 			tgVoip[CAPTURE_DEVICE_CAMERA] = Instance.makeInstance(privateCall.protocol.library_versions.get(0), config, persistentStateFilePath, endpoints, new Instance.Proxy(SILENT_CALL_RELAY_HOST, SILENT_CALL_RELAY_PORT, SILENT_CALL_RELAY_USER, SILENT_CALL_RELAY_PASSWORD), getNetworkType(), encryptionKey, remoteSink[CAPTURE_DEVICE_CAMERA], captureDevice[CAPTURE_DEVICE_CAMERA], (uids, levels, voice) -> {
 				if (sharedInstance == null || privateCall == null) {
 					return;

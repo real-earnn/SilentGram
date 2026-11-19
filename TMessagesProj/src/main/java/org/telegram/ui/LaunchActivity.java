@@ -28,6 +28,7 @@ import android.util.Log;
 import android.content.BroadcastReceiver;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.util.Rational;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.database.Cursor;
@@ -142,6 +143,7 @@ import org.telegram.messenger.UserObject;
 import org.telegram.messenger.Utilities;
 import org.telegram.messenger.browser.Browser;
 import org.telegram.utils.pip.PipCoordinator;
+import org.telegram.utils.settings.SharedSettings;
 import org.telegram.messenger.utils.FrameMetricsOverlayView;
 import org.telegram.messenger.utils.LeakDetector;
 import org.telegram.messenger.utils.WindowVisibilityManager;
@@ -7204,6 +7206,57 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         }
         if (actionBarLayout != null) {
             actionBarLayout.onUserLeaveHint();
+        }
+        // SilentGram: whole-app Picture-in-Picture (Settings toggle) — Home
+        // shrinks the app into a corner window instead of just backgrounding.
+        tryEnterSilentPip();
+    }
+
+    /**
+     * SilentGram: enter activity-level Picture-in-Picture with the current window
+     * aspect ratio. Content PiP (playing video / group call / live stream) always
+     * wins; a floating window above everything wins too. Any failure (old device,
+     * PiP disabled by the OEM, no window size yet) just backgrounds the app as
+     * before — never crash on Home. Back-button behavior is untouched: a
+     * finishing activity (isFinishing) never enters PiP.
+     */
+    private boolean tryEnterSilentPip() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || isFinishing()) {
+            return false;
+        }
+        if (!SharedSettings.silentPipEnabled.get()) {
+            return false;
+        }
+        if (AndroidUtilities.isInPictureInPictureMode(this)) {
+            return false;
+        }
+        if (!PipCoordinator.canEnterSystemPip()) {
+            return false;
+        }
+        final PipCoordinator coordinator = PipCoordinator.getInstance();
+        if (coordinator.hasSystemPipSession() || coordinator.findFloating() != null) {
+            return false;
+        }
+        final View decorView = getWindow().getDecorView();
+        final int width = decorView.getWidth();
+        final int height = decorView.getHeight();
+        if (width <= 0 || height <= 0) {
+            return false;
+        }
+        final Rational aspectRatio;
+        final float ratio = width / (float) height;
+        if (ratio < 0.45f) {
+            aspectRatio = new Rational(45, 100);
+        } else if (ratio > 2.35f) {
+            aspectRatio = new Rational(235, 100);
+        } else {
+            aspectRatio = new Rational(width, height);
+        }
+        try {
+            return enterPictureInPictureMode(new PictureInPictureParams.Builder().setAspectRatio(aspectRatio).build());
+        } catch (Exception e) {
+            FileLog.e(e);
+            return false;
         }
     }
 

@@ -97,6 +97,15 @@ final class SystemHost {
         return isOwner;
     }
 
+    /**
+     * SilentGram: a content session (playing video / group call / live stream) is
+     * in, entering, or set to auto-enter system PiP. The activity-level PiP must
+     * yield to it — the content owns the PiP window.
+     */
+    boolean hasSystemPipSession() {
+        return active != null || candidate != null;
+    }
+
     /* Params */
 
     void update() {

@@ -816,6 +816,9 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         if (!TextUtils.isEmpty(BuildConfig.SILENT_PUSH_RELAY)) {
             items.add(UItem.asCheck(30, LocaleController.getString(R.string.SilentPush)).setChecked(SharedSettings.silentPushEnabled.get()));
         }
+        // SilentGram: whole-app Picture-in-Picture on Home. Row id 29 (free:
+        // upstream uses 1-3, 5-13, 15-27; ours are 30-38).
+        items.add(UItem.asCheck(29, LocaleController.getString(R.string.SilentPictureInPicture)).setChecked(SharedSettings.silentPipEnabled.get()));
         items.add(UItem.asShadow(null));
 
         items.add(SettingCell.Factory.of(1, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_account, getString(R.string.SettingsAccount), getString(R.string.SettingsAccountInfo)));
@@ -995,6 +998,11 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
                 break;
             case 19:
                 Browser.openUrl(getParentActivity(), LocaleController.getString(R.string.PrivacyPolicyUrl));
+                break;
+
+            case 29:
+                SharedSettings.silentPipEnabled.set(!SharedSettings.silentPipEnabled.get());
+                listView.adapter.update(false);
                 break;
 
             case 30:

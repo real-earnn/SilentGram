@@ -101,6 +101,15 @@ public final class PipCoordinator {
         return PipEnvironment.canUseSystemPip(ApplicationLoader.applicationContext);
     }
 
+    /**
+     * SilentGram: true when a content session (playing video / group call / live
+     * stream) is in, entering, or set to auto-enter system PiP. Callers entering
+     * the whole activity into PiP must skip in that case — the content owns it.
+     */
+    public boolean hasSystemPipSession() {
+        return systemHost.hasSystemPipSession();
+    }
+
     void invalidateSystem() {
         systemHost.update();
     }
