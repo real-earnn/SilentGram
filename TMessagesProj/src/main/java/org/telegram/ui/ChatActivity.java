@@ -1436,7 +1436,9 @@ public class ChatActivity extends BaseFragment implements
 
     public void showHeaderItem(boolean show) {
         if (show) {
-            if (chatActivityEnterView.hasText() && TextUtils.isEmpty(chatActivityEnterView.getSlowModeTimer()) && !isSidebarAttach()) {
+            // SilentGram V: no isSidebarAttach() gate — Saved Messages shows
+            // the attach item in the ⋮ menu while typing, like other chats.
+            if (chatActivityEnterView.hasText() && TextUtils.isEmpty(chatActivityEnterView.getSlowModeTimer())) {
                 if (attachItem != null) {
                     attachItem.setVisibility(View.VISIBLE);
                 }
@@ -2263,7 +2265,10 @@ public class ChatActivity extends BaseFragment implements
 
         @Override
         public void onAttachButtonHidden() {
-            if (actionBar.isSearchFieldVisible() || isSidebarAttach()) {
+            // SilentGram V: attach moves to the ⋮ menu while typing even in
+            // Saved Messages (the old isSidebarAttach() early-return kept it
+            // in the input, where it stacked under the translate icon).
+            if (actionBar.isSearchFieldVisible()) {
                 return;
             }
             if (TextUtils.isEmpty(chatActivityEnterView.getSlowModeTimer())) {

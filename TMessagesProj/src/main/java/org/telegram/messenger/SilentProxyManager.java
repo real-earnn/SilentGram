@@ -1,6 +1,7 @@
 package org.telegram.messenger;
 
 import android.content.SharedPreferences;
+import android.os.SystemClock;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -156,6 +157,17 @@ public class SilentProxyManager {
     // candidates now — the gate connects on the first verified proxy,
     // so the round never blocks connecting).
     private static final int PROBE_THREADS = 10;
+    // SilentGram V: native MTProto handshake checks per probe round.
+    // Telegram's native layer allows only PROXY_CONNECTIONS_COUNT = 4
+    // concurrent proxy checks (FIFO queue, no timeout, no cancel). Our old
+    // code issued a native check for EVERY TCP-live candidate (hundreds
+    // per fetch round), flooding that queue — ProxyListActivity's own
+    // checks sat queued behind ours and their callbacks never arrived,
+    // so every row stuck on "Checking..." with no ms and nothing
+    // auto-switched. Now only this many candidates per round get a native
+    // check (the top ones by effective latency); the rest are TCP-only
+    // (state 3, fallback). 10 covers the whole kept set.
+    private static final int NATIVE_CHECK_BUDGET_PER_ROUND = 10;
     // SilentGram K6b: the continuous watcher. While the app is open it
     // re-probes the fastest candidates every few minutes and switches to
     // the lowest-ms verified proxy — the hourly fetch alone left the app
@@ -294,8 +306,36 @@ public class SilentProxyManager {
         return Long.MAX_VALUE;
     }
 
+    // SilentGram V: how long an upstream check's ping counts as fresh for
+    // the switch decision (availableCheckTime is elapsedRealtime, exactly
+    // like ProxyListActivity). 10 minutes: the watcher re-probes every 3,
+    // and the proxy page re-checks after 2.
+    private static final long UPSTREAM_PING_FRESH_MS = 10 * 60 * 1000L;
+
+    /** Saved ProxyInfo for "address:port", or null (a fetch candidate not saved yet). */
+    private static SharedConfig.ProxyInfo findSavedProxyInfo(String key) {
+        for (SharedConfig.ProxyInfo info : SharedConfig.proxyList) {
+            if (key.equals(proxyKey(info))) {
+                return info;
+            }
+        }
+        return null;
+    }
+
     /** This round's VERIFIED on-device latency for a proxy (MTProto handshake time), or -1 if it was not verified live this round. A bare TCP connect time is never stored here — a proxy that accepts TCP but fails the handshake has no usable latency. */
     private static long measuredLatencyMs(String key) {
+        // SilentGram V: prefer the latency Telegram's own upstream check
+        // reported for this proxy (ProxyInfo.ping, set by the checkProxy
+        // callback together with availableCheckTime) when it is fresh —
+        // that is the ms the proxy page shows, and the switcher is driven
+        // by it. Fall back to this round's probe map for proxies the
+        // upstream check never covered (e.g. in-memory fetch candidates
+        // not in the saved list) or when the upstream value is stale.
+        SharedConfig.ProxyInfo saved = findSavedProxyInfo(key);
+        if (saved != null && saved.available && saved.ping > 0 && saved.availableCheckTime > 0
+                && SystemClock.elapsedRealtime() - saved.availableCheckTime < UPSTREAM_PING_FRESH_MS) {
+            return saved.ping;
+        }
         Long ms = probeLatencyByKey.get(key);
         return ms != null && ms >= 0 ? ms : -1;
     }
@@ -744,6 +784,10 @@ public class SilentProxyManager {
         final long activeLatency = currentLatencyMs.get();
         CountDownLatch done = new CountDownLatch(n);
         ExecutorService pool = Executors.newFixedThreadPool(PROBE_THREADS);
+        // SilentGram V: native handshake checks are budgeted per round (see
+        // NATIVE_CHECK_BUDGET_PER_ROUND). Tasks are submitted fastest-first,
+        // so the budget lands on the top candidates.
+        final AtomicInteger nativeCheckBudget = new AtomicInteger(NATIVE_CHECK_BUDGET_PER_ROUND);
         // SilentGram T: submit OUR proxy's probe first (it is the
         // first-connect), then the CURRENT proxy's — the gate needs to
         // know quickly whether each is dead (so it can switch right
@@ -779,13 +823,19 @@ public class SilentProxyManager {
                     long tcpMs = probeLatency(info.settings.getAddress(), info.settings.getPort());
                     long ms = tcpMs;
                     boolean verified = false;
-                    if (tcpMs >= 0) {
+                    if (tcpMs >= 0 && nativeCheckBudget.getAndDecrement() > 0) {
                         // SilentGram I6: a bare TCP connect only proves the
                         // proxy accepts connections — some proxies do that
                         // and then never deliver MTProto data (premium emoji
                         // and files just never arrive). Verify with a real
                         // MTProto handshake before trusting the proxy.
-                        long checkMs = verifyProxyWithHandshake(info.settings);
+                        // SilentGram V: the budget above caps native checks
+                        // per round — without it the native 4-slot check
+                        // queue floods and ProxyListActivity's checks never
+                        // complete ("Checking..." forever). A TCP-live proxy
+                        // that gets no native check this round falls through
+                        // to state 3 (TCP-only, fallback) below.
+                        long checkMs = verifyProxyWithHandshake(info);
                         if (checkMs == -2) {
                             // No account signed in yet — nothing to check
                             // against; trust the TCP probe (as before).
@@ -861,6 +911,15 @@ public class SilentProxyManager {
             try {
                 try {
                     done.await(120, TimeUnit.SECONDS);
+                } catch (InterruptedException ignored) {
+                }
+                // SilentGram V: do not clear roundRunning while probe tasks
+                // are still issuing native checks — pool.shutdown() alone
+                // does not stop running tasks, and a new round starting on
+                // top of the old one's still-running checks re-floods the
+                // native check queue (see NATIVE_CHECK_BUDGET_PER_ROUND).
+                try {
+                    pool.awaitTermination(15, TimeUnit.SECONDS);
                 } catch (InterruptedException ignored) {
                 }
                 // Safety net: if the last probe's gate call was missed, decide
@@ -1343,19 +1402,51 @@ public class SilentProxyManager {
      * the handshake round-trip in ms, -1 if the handshake failed or timed
      * out, or -2 when no account is signed in yet and there is nothing
      * to check against. Never throws.
+     *
+     * SilentGram V: this fulfils the upstream check contract, exactly as
+     * ProxyListActivity.checkProxyList does — the proxy is marked
+     * checking, and the callback records the check time, clears checking,
+     * stores ping/available and posts proxyCheckDone. That post is the
+     * ONLY path by which the proxy page shows ms and re-checks: our old
+     * code wrote ping/available directly and never posted it, so even a
+     * successful probe could never clear a row's "Checking...".
      */
-    private static long verifyProxyWithHandshake(ProxySettings settings) {
+    private static long verifyProxyWithHandshake(SharedConfig.ProxyInfo info) {
         if (!UserConfig.getInstance(UserConfig.selectedAccount).isClientActivated()) {
             return -2;
         }
         final AtomicLong result = new AtomicLong(-1);
         final CountDownLatch latch = new CountDownLatch(1);
+        info.checking = true;
         try {
-            ConnectionsManager.getInstance(UserConfig.selectedAccount).checkProxy(settings, time -> {
+            ConnectionsManager.getInstance(UserConfig.selectedAccount).checkProxy(info.settings, time -> {
+                // Upstream contract (mirrors ProxyListActivity): always
+                // fulfilled, even for a late callback after our 8s wait
+                // gave up — otherwise this proxy's row would sit on
+                // "Checking..." forever. The round-state write below
+                // (result/latch) is harmless when late: nobody reads it
+                // after the wait expired.
+                AndroidUtilities.runOnUIThread(() -> {
+                    info.availableCheckTime = SystemClock.elapsedRealtime();
+                    info.checking = false;
+                    if (time == -1) {
+                        info.available = false;
+                        info.ping = 0;
+                    } else {
+                        info.ping = time;
+                        info.available = true;
+                    }
+                    NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyCheckDone, info);
+                });
                 result.set(time);
                 latch.countDown();
             });
         } catch (Throwable e) {
+            // No callback will ever fire — clear the checking flag so the
+            // proxy page never sticks on "Checking..." for this proxy.
+            info.checking = false;
+            info.availableCheckTime = SystemClock.elapsedRealtime();
+            NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxyCheckDone, info);
             return -1;
         }
         try {
@@ -1375,6 +1466,10 @@ public class SilentProxyManager {
         editor.putBoolean("proxy_enabled", true);
         editor.apply();
         ConnectionsManager.setProxySettings(true, info.settings);
+        // SilentGram V: tell the proxy page (and anything else observing)
+        // that the proxy changed, so it re-runs updateRows/checkProxyList
+        // promptly — setProxySettings itself posts no notification.
+        NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.proxySettingsChanged);
         FileLog.d("SilentProxy: enabled proxy " + info.settings.getAddress() + ":" + info.settings.getPort() + " (" + latencyMs + "ms)");
     }
 

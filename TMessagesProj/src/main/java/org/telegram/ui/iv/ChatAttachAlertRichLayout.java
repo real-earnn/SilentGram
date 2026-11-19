@@ -888,10 +888,8 @@ public class ChatAttachAlertRichLayout extends ChatAttachAlert.AttachAlertLayout
     private MessageSendPreview messageSendPreview;
 
     private boolean showSendPreview(View view) {
-        if (!UserConfig.getInstance(currentAccount).isPremium()) {
-            new PremiumFeatureBottomSheet(parentAlert.baseFragment, getContext(), currentAccount, PremiumPreviewFragment.PREMIUM_FEATURE_RICH_EDITOR, true).show();
-            return true;
-        }
+        // SilentGram V: rich preview is not Premium-gated (the old
+        // early-return showed the Premium sheet and blocked previewing).
         if (!listView.hasAnyText()) return false;
         if (listView.hasPendingUploads()) return false;
         if (!listView.isWithinLimits()) { updateSendButtonEnabled(); return false; }
@@ -1200,6 +1198,8 @@ public class ChatAttachAlertRichLayout extends ChatAttachAlert.AttachAlertLayout
     private void createEmojiView() {
         if (emojiView != null) return;
         emojiView = new EmojiView(parentAlert.baseFragment, true, false, false, getContext(), true, null, parentAlert.sizeNotifierFrameLayout, true, resourcesProvider, false);
+        // SilentGram V: premium emoji insertable for every account.
+        emojiView.allowEmojisForNonPremium(true);
         emojiView.setVisibility(GONE);
         emojiView.fixBottomTabContainerTranslation = false;
         emojiView.setBottomInset(AndroidUtilities.navigationBarHeight);

@@ -23872,15 +23872,9 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public boolean richEditorAllowed() {
-        switch (config.richMessagePosting.get()) {
-            case "premium":
-                return getUserConfig().isPremium();
-            case "enabled":
-                return true;
-            default:
-            case "disabled":
-                return false;
-        }
+        // SilentGram V: rich messages are unlocked for every account — the
+        // server-config "premium" gate is not applied client-side.
+        return true;
     }
 
     public boolean storyEntitiesAllowed() {

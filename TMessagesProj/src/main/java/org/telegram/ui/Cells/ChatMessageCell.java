@@ -9193,6 +9193,19 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                             photoHeight = (int) maxHeight;
                         }
                     }
+                    // SilentGram V: per-sticker resize. The scale read at :8226 sits in the
+                    // link-preview branch, which a standalone sticker never enters — so apply
+                    // the scale here, where stickers are actually sized. totalHeight (10008)
+                    // and setImageCoords (10073) both derive from photoWidth/photoHeight.
+                    // Dice / animated emoji share this branch with their own zoom above,
+                    // and the picker only ever stores a scale for real stickers.
+                    if (!messageObject.isDice() && !messageObject.isAnimatedEmoji()) {
+                        float stickerScale = org.telegram.messenger.SilentStickerResize.getScale(currentAccount, messageObject.getDialogId(), messageObject.getId());
+                        if (stickerScale != 1f) {
+                            photoWidth = Math.min((int) (photoWidth * stickerScale), getParentWidth());
+                            photoHeight = (int) (photoHeight * stickerScale);
+                        }
+                    }
                     Object parentObject = messageObject;
                     int w = (int) (photoWidth / AndroidUtilities.density);
                     int h = (int) (photoHeight / AndroidUtilities.density);

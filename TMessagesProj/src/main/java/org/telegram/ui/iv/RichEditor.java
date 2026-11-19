@@ -2438,6 +2438,8 @@ public class RichEditor extends BaseFragment implements NotificationCenter.Notif
     private void createEmojiView() {
         if (emojiView != null) return;
         emojiView = new EmojiView(this, true, false, false, getContext(), true, null, container, true, getResourceProvider(), false);
+        // SilentGram V: premium emoji insertable for every account.
+        emojiView.allowEmojisForNonPremium(true);
         emojiView.setVisibility(View.GONE);
         emojiView.fixBottomTabContainerTranslation = false;
         emojiView.setDelegate(new EmojiView.EmojiViewDelegate() {
