@@ -3,38 +3,41 @@ package org.telegram.messenger;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.view.Gravity;
-import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.SeekBar;
+import android.widget.NumberPicker;
 import android.widget.TextView;
+import android.widget.Toast;
 
-import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.Theme;
-import org.telegram.ui.Components.BackupImageView;
 import org.telegram.ui.Components.LayoutHelper;
 
 import java.util.Locale;
 
 /**
- * SilentGram sticker resize (1–20), like Plus Messenger.
+ * SilentGram sticker resize (1–10), like Plus Messenger.
  *
- * Long-press a sticker → "Resize" → a slider (1 = tiny, emoji-size;
- * 5 = normal; 20 = as big as the screen). The size is ONE value per
- * account: changing it from any sticker resizes every sticker shown
- * anywhere in that account. ChatMessageCell scales the sticker by it
- * (capped to the screen, so a sticker can never go off-screen).
+ * Long-press a sticker → "Resize" → a number picker (1 = tiny, emoji-size;
+ * 5 = normal; 10 = biggest). The size is ONE value per account: changing it
+ * from any sticker resizes every sticker shown anywhere in that account.
+ * ChatMessageCell scales the sticker by it, capped so a sticker NEVER takes
+ * the full screen — dp(16) margins stay on the sides, so tapping beside a
+ * sticker does not open the sticker view.
  */
 public class SilentStickerResize {
 
     private static final int MIN_LEVEL = 1;
-    private static final int MAX_LEVEL = 20;
+    private static final int MAX_LEVEL = 10;
     /** Level 5 = normal size (1.0x). */
     private static final int NORMAL_LEVEL = 5;
 
-    /** Scale for a level: 1 -> 0.2x, 5 -> 1.0x, 20 -> 4.0x. */
+    /** Max scale: level 10 = 2.0x. With the base 0.5x-parent-width sizing
+     * that reaches the margined cap for a standard sticker. */
+    private static final float MAX_SCALE = 2.0f;
+
+    /** Scale for a level: 1 -> 0.2x, 5 -> 1.0x, 10 -> 2.0x. */
     public static float scaleForLevel(int level) {
-        return Math.max(0.2f, Math.min(4.0f, level / (float) NORMAL_LEVEL));
+        return Math.max(0.2f, Math.min(MAX_SCALE, level / (float) NORMAL_LEVEL));
     }
 
     /** One scale per account — shared by every sticker in that account. */
@@ -47,10 +50,15 @@ public class SilentStickerResize {
                 .getSharedPreferences("silentgram", Context.MODE_PRIVATE);
     }
 
-    /** Stored scale for this account (1.0 = normal). */
+    /** Stored scale for this account (1.0 = normal), clamped to the 1–10 range.
+     * Older builds stored up to 4.0x (level 20) — that clamps down to 2.0x here,
+     * so a sticker saved huge before can never exceed the new max. */
     public static float getScale(int account) {
         float scale = prefs().getFloat(key(account), 1.0f);
-        return scale > 0 ? scale : 1.0f;
+        if (scale <= 0) {
+            return 1.0f;
+        }
+        return Math.max(0.2f, Math.min(MAX_SCALE, scale));
     }
 
     /** Current level for this account (5 = normal). */
@@ -63,7 +71,25 @@ public class SilentStickerResize {
         prefs().edit().putFloat(key(account), scaleForLevel(level)).apply();
     }
 
-    /** Show the 1–20 slider for this account. onChanged runs after picking. */
+    /** Max rendered sticker width: the chat width minus dp(16) on each side,
+     * so a sticker never takes the full screen and tapping beside it misses
+     * the sticker. */
+    public static int maxStickerWidth(int parentWidth) {
+        return Math.max(1, parentWidth - AndroidUtilities.dp(32));
+    }
+
+    /** Max rendered sticker height: 80% of the screen height. */
+    public static int maxStickerHeight() {
+        return Math.max(1, (int) (AndroidUtilities.displaySize.y * 0.8f));
+    }
+
+    /** Approximate sticker size in dp at a level (base dp(72) at 1.0x), for the
+     * confirmation shown after picking. */
+    public static int sizeDpForLevel(int level) {
+        return Math.round(72 * scaleForLevel(level));
+    }
+
+    /** Show the 1–10 number picker for this account. onChanged runs after picking. */
     public static void showPicker(Context context, int account, MessageObject messageObject, Runnable onChanged) {
         if (context == null || messageObject == null) {
             return;
@@ -80,63 +106,28 @@ public class SilentStickerResize {
         label.setGravity(Gravity.CENTER);
         layout.addView(label, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
 
-        SeekBar seekBar = new SeekBar(context);
-        seekBar.setMax(MAX_LEVEL - MIN_LEVEL);
-        seekBar.setProgress(current - MIN_LEVEL);
-        layout.addView(seekBar, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, AndroidUtilities.dp(12), 0, 0));
-
-        // SilentGram K2: live preview — the sticker itself, drawn at the
-        // chosen size, so the user can see how big it will look in chat
-        // before confirming. Base size is dp(72) at 1.0x (level 5), capped
-        // at dp(260) so the biggest levels still fit on screen.
-        final BackupImageView previewView;
-        final TLRPC.Document document = messageObject.getDocument();
-        if (document != null) {
-            FrameLayout previewBox = new FrameLayout(context);
-            previewView = new BackupImageView(context);
-            String ext = messageObject.isAnimatedSticker() ? "tgs" : null;
-            previewView.setImage(ImageLocation.getForDocument(document), "512_512", ext, null, null);
-            previewBox.addView(previewView, LayoutHelper.createFrame(AndroidUtilities.dp(72), AndroidUtilities.dp(72), Gravity.CENTER));
-            layout.addView(previewBox, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, AndroidUtilities.dp(280)));
-        } else {
-            previewView = null;
-        }
-
-        Runnable updatePreview = () -> {
-            if (previewView == null) {
-                return;
-            }
-            int level = seekBar.getProgress() + MIN_LEVEL;
-            int size = Math.min(AndroidUtilities.dp(260), Math.round(AndroidUtilities.dp(72) * scaleForLevel(level)));
-            FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) previewView.getLayoutParams();
-            lp.width = size;
-            lp.height = size;
-            previewView.setLayoutParams(lp);
-        };
+        NumberPicker picker = new NumberPicker(context);
+        picker.setMinValue(MIN_LEVEL);
+        picker.setMaxValue(MAX_LEVEL);
+        picker.setValue(current);
+        picker.setWrapSelectorWheel(false);
+        layout.addView(picker, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, AndroidUtilities.dp(12), 0, 0));
 
         Runnable updateLabel = () -> {
-            int level = seekBar.getProgress() + MIN_LEVEL;
+            int level = picker.getValue();
             String scaleText = String.format(Locale.US, "%.1fx", scaleForLevel(level));
             label.setText(LocaleController.getString(R.string.SilentStickerResize) + ": " + level + (level == NORMAL_LEVEL ? " (normal, " + scaleText + ")" : " (" + scaleText + ")"));
         };
         updateLabel.run();
-        updatePreview.run();
-        seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                updateLabel.run();
-                updatePreview.run();
-            }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
-        });
+        picker.setOnValueChangedListener((pickerView, oldVal, newVal) -> updateLabel.run());
 
         AlertDialog.Builder builder = new AlertDialog.Builder(context);
         builder.setTitle(LocaleController.getString(R.string.SilentStickerResize));
         builder.setView(layout);
         builder.setPositiveButton(LocaleController.getString(R.string.OK), (dialog, which) -> {
-            int level = seekBar.getProgress() + MIN_LEVEL;
+            int level = picker.getValue();
             setLevel(account, level);
+            confirmSize(context, level);
             if (onChanged != null) {
                 onChanged.run();
             }
@@ -144,11 +135,19 @@ public class SilentStickerResize {
         builder.setNegativeButton(LocaleController.getString(R.string.Cancel), null);
         builder.setNeutralButton(LocaleController.getString(R.string.SilentStickerResizeReset), (dialog, which) -> {
             setLevel(account, NORMAL_LEVEL);
+            confirmSize(context, NORMAL_LEVEL);
             if (onChanged != null) {
                 onChanged.run();
             }
         });
         builder.show();
+    }
+
+    /** Confirmation after picking: the exact number and the resulting size. */
+    private static void confirmSize(Context context, int level) {
+        String scaleText = String.format(Locale.US, "%.1fx", scaleForLevel(level));
+        String text = LocaleController.getString(R.string.SilentStickerResize) + ": " + level + " (" + scaleText + ", ~" + sizeDpForLevel(level) + " dp)";
+        Toast.makeText(context, text, Toast.LENGTH_LONG).show();
     }
 
     /** Backwards-compatible picker without a refresh callback. */

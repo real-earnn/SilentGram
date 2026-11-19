@@ -8221,11 +8221,11 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                                 } else {
                                     maxPhotoWidth = (int) (getParentWidth() * 0.5f);
                                 }
-                                // SilentGram: account-wide sticker resize (1-20 slider).
+                                // SilentGram: account-wide sticker resize (1–10 picker).
                                 if (documentAttachType == DOCUMENT_ATTACH_TYPE_STICKER && messageObject != null) {
                                     float scale = org.telegram.messenger.SilentStickerResize.getScale(currentAccount);
                                     if (scale != 1f) {
-                                        maxPhotoWidth = Math.min((int) (maxPhotoWidth * scale), getParentWidth());
+                                        maxPhotoWidth = Math.min((int) (maxPhotoWidth * scale), org.telegram.messenger.SilentStickerResize.maxStickerWidth(getParentWidth()));
                                     }
                                 }
                             } else if (documentAttachType == DOCUMENT_ATTACH_TYPE_ROUND) {
@@ -9193,30 +9193,34 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                             photoHeight = (int) maxHeight;
                         }
                     }
-                    // SilentGram V/W: account-wide sticker resize. The scale
-                    // read at :8226 sits in the link-preview branch, which a
-                    // standalone sticker never enters — so apply the scale
-                    // here, where stickers are actually sized. totalHeight
-                    // (10008) and setImageCoords (10073) both derive from
-                    // photoWidth/photoHeight. Dice shares this branch with
-                    // its own zoom above and stays exempt (a game, not a
-                    // sticker); animated emoji take the scale too.
+                    // SilentGram V/W: account-wide sticker resize (1–10
+                    // number picker). The scale read at :8226 sits in the
+                    // link-preview branch, which a standalone sticker never
+                    // enters — so apply the scale here, where stickers are
+                    // actually sized. totalHeight (10008) and setImageCoords
+                    // (10073) both derive from photoWidth/photoHeight. Dice
+                    // shares this branch with its own zoom above and stays
+                    // exempt (a game, not a sticker); animated emoji take
+                    // the scale too.
                     if (!messageObject.isDice()) {
                         float stickerScale = org.telegram.messenger.SilentStickerResize.getScale(currentAccount);
                         if (stickerScale != 1f) {
-                            float scaledW = photoWidth * stickerScale;
-                            float scaledH = photoHeight * stickerScale;
-                            // SilentGram W: cap so a sticker can never go
-                            // off-screen — width to the chat width, height
-                            // to the screen height, aspect kept — so it can
-                            // always be shrunk back from any sticker.
-                            float fit = Math.min(getParentWidth() / scaledW, AndroidUtilities.displaySize.y / scaledH);
+                            photoWidth = (int) (photoWidth * stickerScale);
+                            photoHeight = (int) (photoHeight * stickerScale);
+                        }
+                        // SilentGram v2.0.17: cap so a sticker NEVER takes
+                        // the full screen — dp(16) margins stay on the
+                        // sides, aspect kept — so it can always be shrunk
+                        // back from any sticker. Applies at every scale,
+                        // not just when resized.
+                        if (photoWidth > 0 && photoHeight > 0) {
+                            float fit = Math.min(
+                                    org.telegram.messenger.SilentStickerResize.maxStickerWidth(getParentWidth()) / (float) photoWidth,
+                                    org.telegram.messenger.SilentStickerResize.maxStickerHeight() / (float) photoHeight);
                             if (fit < 1f) {
-                                scaledW *= fit;
-                                scaledH *= fit;
+                                photoWidth = (int) (photoWidth * fit);
+                                photoHeight = (int) (photoHeight * fit);
                             }
-                            photoWidth = (int) scaledW;
-                            photoHeight = (int) scaledH;
                         }
                     }
                     Object parentObject = messageObject;

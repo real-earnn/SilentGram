@@ -35519,7 +35519,8 @@ public class ChatActivity extends BaseFragment implements
             }
             case OPTION_SILENT_STICKER_RESIZE: {
                 // SilentGram W: resize stickers account-wide (1 = tiny,
-                // 20 = full screen). The scale is ONE value per account —
+                // 10 = biggest, with side margins so a sticker never takes
+                // the full screen). The scale is ONE value per account —
                 // changing it from any sticker resizes every sticker.
                 if (selectedObject != null && (selectedObject.isSticker() || selectedObject.isAnimatedSticker() || selectedObject.isAnimatedEmoji()) && !selectedObject.isDice()) {
                     final MessageObject stickerMessage = selectedObject;

@@ -7004,6 +7004,19 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
         PipCoordinator.getInstance().onPictureInPictureModeChanged(isInPictureInPictureMode);
 
+        if (isInPictureInPictureMode) {
+            // SilentGram v2.0.17: restore the full-screen layout size first
+            // (the PiP config shrank it) so the re-layout below measures the
+            // whole app, then scale it down to the PiP window.
+            if (silentPipFullWidth > 0 && silentPipFullHeight > 0) {
+                AndroidUtilities.displaySize.x = silentPipFullWidth;
+                AndroidUtilities.displaySize.y = silentPipFullHeight;
+            }
+            applySilentPipScale();
+        } else {
+            clearSilentPipScale();
+        }
+
         if (!isInPictureInPictureMode && !isStarted) {
 
             // closing a PiP window never ends a call: it goes on with its notification
@@ -7252,12 +7265,100 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         } else {
             aspectRatio = new Rational(width, height);
         }
+        // SilentGram v2.0.17: remember the full-screen size before entering
+        // PiP — in PiP the configuration reports the small window size, and
+        // the scale-to-fit transform needs the full size to scale from.
+        silentPipFullWidth = AndroidUtilities.displaySize.x;
+        silentPipFullHeight = AndroidUtilities.displaySize.y;
         try {
-            return enterPictureInPictureMode(new PictureInPictureParams.Builder().setAspectRatio(aspectRatio).build());
+            PictureInPictureParams.Builder paramsBuilder = new PictureInPictureParams.Builder().setAspectRatio(aspectRatio);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                // Android 12: smoother cross-fade while the user resizes the
+                // PiP window. Pinch-to-zoom resize itself is a system gesture
+                // on Android 12+; below Android 12 the window size is fixed.
+                paramsBuilder.setSeamlessResizeEnabled(true);
+            }
+            boolean entered = enterPictureInPictureMode(paramsBuilder.build());
+            if (!entered) {
+                silentPipFullWidth = 0;
+                silentPipFullHeight = 0;
+            }
+            return entered;
         } catch (Exception e) {
+            silentPipFullWidth = 0;
+            silentPipFullHeight = 0;
             FileLog.e(e);
             return false;
         }
+    }
+
+    // SilentGram v2.0.17: whole-app PiP scale-to-fit. Telegram lays its UI
+    // out in fixed dp from the full display, so in the small PiP window only
+    // a slice of the app was visible, huge. While in PiP the content root is
+    // measured at the full-screen size and scaled down to the PiP window, so
+    // the WHOLE chat list / chat is visible in miniature, proportional to
+    // the window. Touch coordinates follow the scale transform.
+    // Honest limits — Android reserves these, no app API exists: a single
+    // tap on the PiP window always shows the system PiP menu and a
+    // double-tap toggles the window between its current and max/min size,
+    // so taps can never drive the app UI inside system PiP. Pinch-to-zoom
+    // resize is a system gesture on Android 12+; below Android 12 the PiP
+    // window size is fixed. Dialogs / popups are separate windows and are
+    // not scaled.
+    private int silentPipFullWidth;
+    private int silentPipFullHeight;
+
+    private void applySilentPipScale() {
+        final View decorView = getWindow().getDecorView();
+        decorView.post(() -> {
+            if (!AndroidUtilities.isInPictureInPictureMode(this)) {
+                return;
+            }
+            final View content = decorView.findViewById(android.R.id.content);
+            if (content == null || silentPipFullWidth <= 0 || silentPipFullHeight <= 0) {
+                return;
+            }
+            final int pipWidth = decorView.getWidth();
+            final int pipHeight = decorView.getHeight();
+            if (pipWidth <= 0 || pipHeight <= 0) {
+                return;
+            }
+            final float scale = Math.min(pipWidth / (float) silentPipFullWidth, pipHeight / (float) silentPipFullHeight);
+            if (scale >= 1f) {
+                // window not shrunk yet (enter animation still running) — do
+                // NOT clear the saved size: a later config change re-applies.
+                return;
+            }
+            final ViewGroup.LayoutParams lp = content.getLayoutParams();
+            lp.width = silentPipFullWidth;
+            lp.height = silentPipFullHeight;
+            content.setLayoutParams(lp);
+            content.setPivotX(0f);
+            content.setPivotY(0f);
+            content.setScaleX(scale);
+            content.setScaleY(scale);
+        });
+    }
+
+    private void clearSilentPipScale() {
+        final View decorView = getWindow().getDecorView();
+        final View content = decorView.findViewById(android.R.id.content);
+        if (content != null) {
+            final ViewGroup.LayoutParams lp = content.getLayoutParams();
+            if (lp.width != ViewGroup.LayoutParams.MATCH_PARENT || lp.height != ViewGroup.LayoutParams.MATCH_PARENT) {
+                lp.width = ViewGroup.LayoutParams.MATCH_PARENT;
+                lp.height = ViewGroup.LayoutParams.MATCH_PARENT;
+                content.setLayoutParams(lp);
+            }
+            content.setScaleX(1f);
+            content.setScaleY(1f);
+        }
+        silentPipFullWidth = 0;
+        silentPipFullHeight = 0;
+        // the exit config change may have run while the full size was still
+        // frozen above — recompute the layout size from the current config
+        // (e.g. after a rotation while in PiP).
+        AndroidUtilities.checkDisplaySize(this, getResources().getConfiguration());
     }
 
     View feedbackView;
@@ -7430,6 +7531,15 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         AndroidUtilities.checkDisplaySize(this, newConfig);
+        if (AndroidUtilities.isInPictureInPictureMode(this) && silentPipFullWidth > 0 && silentPipFullHeight > 0) {
+            // SilentGram v2.0.17: in PiP the config reports the small window
+            // size — keep the full-screen layout size so the scale-to-fit
+            // transform has a full-size layout to shrink, and re-apply the
+            // scale (a pinch resize changes the window size).
+            AndroidUtilities.displaySize.x = silentPipFullWidth;
+            AndroidUtilities.displaySize.y = silentPipFullHeight;
+            applySilentPipScale();
+        }
         orientationController.update();
         AndroidUtilities.setPreferredMaxRefreshRate(getWindow());
         super.onConfigurationChanged(newConfig);

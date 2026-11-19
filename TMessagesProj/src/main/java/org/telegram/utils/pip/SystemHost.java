@@ -239,6 +239,9 @@ final class SystemHost {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             final boolean autoEnter = PipEnvironment.useAutoEnter() && session.state != PipSession.STATE_SYSTEM;
             builder.setAutoEnterEnabled(autoEnter);
+            // SilentGram v2.0.17: smoother cross-fade while the user resizes
+            // the PiP window (pinch-to-zoom is the system gesture, Android 12+).
+            builder.setSeamlessResizeEnabled(true);
             keyBuilder.append('|').append(autoEnter);
         }
         paramsKey = keyBuilder.toString();
