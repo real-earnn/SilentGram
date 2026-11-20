@@ -48,9 +48,11 @@ import org.telegram.utils.settings.SharedSettings;
  * so taps, scroll and typing work inside the small window.
  *
  * Architecture (all verified against the platform APIs):
- * - VirtualDisplay: DisplayManager.createVirtualDisplay needs NO permission
- *   and NO MediaProjection token for a blank/private display (the token is
- *   only for capturing the main screen). Flag PUBLIC so the soft keyboard
+ * - VirtualDisplay: DisplayManager.createVirtualDisplay MUST use
+ *   VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY — without it Android treats the
+ *   display as a screen-sharing display and throws SecurityException
+ *   (needs CAPTURE_VIDEO_OUTPUT / CAPTURE_SECURE_VIDEO_OUTPUT or a
+ *   MediaProjection token). Flag PUBLIC is kept so the soft keyboard
  *   (another app's window) can render on the display for typing.
  * - Host: SilentFloatingActivity (a LaunchActivity subclass — LaunchActivity
  *   itself is singleTask, so it can never be the second instance). It is
@@ -66,6 +68,10 @@ import org.telegram.utils.settings.SharedSettings;
  * - The soft keyboard should render inside the window (it is drawn on the
  *   virtual display); if an OEM blocks IME on virtual displays, typing
  *   falls back to a hardware keyboard / voice input.
+ *   Note: VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY (required so the display
+ *   can be created at all) may itself keep the IME off the display on
+ *   some devices — whether the keyboard appears inside the window is a
+ *   device-test question.
  * - The virtual display is fixed portrait; rotating the phone does not
  *   rotate the floating window (it is re-clamped to stay on screen).
  * - Group calls / live streams keep their own content PiP and win over
@@ -217,7 +223,7 @@ public class SilentFloatingWindow {
             surface = new Surface(surfaceTexture);
             virtualDisplay = displayManager.createVirtualDisplay(
                     "SilentGram Floating", fullWidth, fullHeight, densityDpi, surface,
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC);
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);
             if (virtualDisplay == null || virtualDisplay.getDisplay() == null) {
                 lastStartError = "virtual display failed";
                 teardown();

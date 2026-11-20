@@ -155,11 +155,13 @@
     <string name="SilentRemindersChannelDesc">Reminders you set on messages.</string>
     <string name="SilentReminderTitle">Reminder</string>
     <string name="SilentTranscribeTitle">Voice to Text</string>
-    <string name="SilentTranscribeListening">Listening… speak clearly, quiet room works best.</string>
-    <string name="SilentTranscribeHint">On-device transcription — the voice plays aloud while the phone listens. For best results use a quiet room.</string>
-    <string name="SilentTranscribeDownloading">Downloading voice message first…</string>
-    <string name="SilentTranscribeUnavailable">Speech recognition is not available on this device.</string>
     <string name="SilentTranscribeFailed">Could not transcribe this voice message.</string>
+    <string name="SilentTranscribeTranscribing">Transcribing…</string>
+    <string name="SilentTranscribeTranslateTo">Translate to other language</string>
+    <string name="SilentTranscribeTranslation">Translation</string>
+    <string name="SilentTranscribePremium">Voice transcription needs Telegram Premium — your free trials are used up for now.</string>
+    <string name="SilentTranscribeTakingLong">Still transcribing… please try again in a moment.</string>
+    <string name="SilentTranscribeNotSent">Wait until the voice message is sent, then try again.</string>
     <string name="SilentQuickPrivateNote">Private Note</string>
     <string name="SilentNotesEmpty">No private notes yet. Open any chat → quick actions → Private Note.</string>
     <string name="SilentNoteTitle">Private Note</string>

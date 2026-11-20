@@ -1,155 +1,267 @@
 package org.telegram.messenger;
 
 import android.content.Context;
-import android.content.Intent;
-import android.media.MediaPlayer;
-import android.os.Bundle;
-import android.speech.RecognitionListener;
-import android.speech.RecognizerIntent;
-import android.speech.SpeechRecognizer;
+import android.content.DialogInterface;
+import android.text.TextUtils;
+import android.view.View;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
 
+import org.telegram.tgnet.ConnectionsManager;
+import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Components.LayoutHelper;
+import org.telegram.ui.Components.TranscribeButton;
 
-import android.widget.LinearLayout;
-import android.widget.TextView;
-
-import java.io.File;
 import java.util.ArrayList;
 
 /**
- * SilentGram F8: Voice message to text.
+ * SilentGram F8: Voice message to text (server-side, like Telegram's own button).
  *
- * On-device transcription: the voice message plays through the speaker
- * while Android's speech recognizer listens and writes the text.
- * Works best in a quiet room. (A server-side Whisper transcription would
- * be more accurate — this is the free on-device version, no key needed.)
+ * The old version played the voice aloud and let Android's SpeechRecognizer
+ * listen through the microphone — it failed silently whenever anything went
+ * wrong (file missing, recognizer unavailable, startListening error), so a
+ * tap could do nothing at all. This version sends the message to Telegram's
+ * own transcription service (TL_messages_transcribeAudio — the exact request
+ * TranscribeButton sends) and shows the result in a popup that ALWAYS opens:
+ * a loading state first, then the text, or the error inside the popup.
+ *
+ * Popup (user spec): top = transcribed text (Telegram default = English);
+ * below it a "Translate to other language" row with a language selector;
+ * tap Translate and the translation appears right below, in that language.
+ * Translation reuses SilentTranslate (Google Translate endpoint, no key).
+ *
+ * Premium gating mirrors TranscribeButton: Premium users and free-in-chat
+ * transcriptions go straight through; trial users go through while they
+ * have trials left; anyone else sees the lock message in the popup instead
+ * of a request. No trial/cooldown logic is bypassed.
  */
 public class SilentVoiceTranscribe {
 
+    private static final int MAX_TRIES = 3;
+    private static final long RETRY_DELAY_MS = 5000;
+
     public static void transcribe(Context context, int account, MessageObject msg) {
-        if (context == null || msg == null || !msg.isVoice()) {
-            return;
-        }
-        File audioFile = FileLoader.getInstance(account).getPathToAttach(msg.getDocument(), true);
-        if (audioFile == null || !audioFile.exists()) {
-            // Download it first, then transcribe.
-            FileLoader.getInstance(account).loadFile(msg.getDocument(), msg, FileLoader.PRIORITY_HIGH, 0);
-            SilentToast.show(context, LocaleController.getString(R.string.SilentTranscribeDownloading), android.widget.Toast.LENGTH_SHORT);
-            return;
-        }
-        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-            SilentToast.show(context, LocaleController.getString(R.string.SilentTranscribeUnavailable), android.widget.Toast.LENGTH_SHORT);
+        if (context == null) {
             return;
         }
 
+        // The popup opens FIRST, before any check or request, so a tap can
+        // never silently do nothing. Every failure below is shown in it.
         LinearLayout layout = new LinearLayout(context);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(AndroidUtilities.dp(24), AndroidUtilities.dp(8), AndroidUtilities.dp(24), AndroidUtilities.dp(8));
+        layout.setPadding(AndroidUtilities.dp(16), AndroidUtilities.dp(8), AndroidUtilities.dp(16), AndroidUtilities.dp(8));
+
         final TextView resultView = new TextView(context);
         resultView.setTextSize(15);
-        resultView.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteBlackText));
-        resultView.setText(LocaleController.getString(R.string.SilentTranscribeListening));
+        resultView.setTextColor(Theme.getColor(Theme.key_dialogTextBlack));
+        resultView.setText(LocaleController.getString(R.string.SilentTranscribeTranscribing));
         layout.addView(resultView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
-        TextView hint = new TextView(context);
-        hint.setText(LocaleController.getString(R.string.SilentTranscribeHint));
-        hint.setTextSize(12);
-        hint.setTextColor(Theme.getColor(Theme.key_windowBackgroundWhiteGrayText2));
-        hint.setPadding(0, AndroidUtilities.dp(12), 0, 0);
-        layout.addView(hint, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
+
+        // "Translate to other language" row: label + language selector.
+        TextView translateLabel = new TextView(context);
+        translateLabel.setText(LocaleController.getString(R.string.SilentTranscribeTranslateTo));
+        translateLabel.setTextSize(13);
+        translateLabel.setTextColor(Theme.getColor(Theme.key_dialogTextGray2));
+        translateLabel.setPadding(0, AndroidUtilities.dp(16), 0, 0);
+        layout.addView(translateLabel, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
+
+        final String[][] languages = SilentTranslate.getLanguages();
+        final int[] targetIdx = {2}; // Urdu by default (transcription is English).
+        final TextView targetLangView = new TextView(context);
+        targetLangView.setText(languages[targetIdx[0]][1]);
+        targetLangView.setTextSize(16);
+        targetLangView.setTextColor(Theme.getColor(Theme.key_dialogTextLink));
+        targetLangView.setPadding(0, AndroidUtilities.dp(4), 0, AndroidUtilities.dp(4));
+        targetLangView.setOnClickListener(v -> pickLanguage(context, targetIdx, () -> targetLangView.setText(languages[targetIdx[0]][1])));
+        layout.addView(targetLangView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
+
+        final TextView translationLabel = new TextView(context);
+        translationLabel.setText(LocaleController.getString(R.string.SilentTranscribeTranslation));
+        translationLabel.setTextSize(13);
+        translationLabel.setTextColor(Theme.getColor(Theme.key_dialogTextGray2));
+        translationLabel.setPadding(0, AndroidUtilities.dp(8), 0, 0);
+        translationLabel.setVisibility(View.GONE);
+        layout.addView(translationLabel, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
+
+        final TextView translationView = new TextView(context);
+        translationView.setTextSize(15);
+        translationView.setTextColor(Theme.getColor(Theme.key_dialogTextBlack));
+        translationView.setVisibility(View.GONE);
+        layout.addView(translationView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
+
+        ScrollView scrollView = new ScrollView(context);
+        scrollView.addView(layout);
 
         AlertDialog.Builder builder = new AlertDialog.Builder(context);
         builder.setTitle(LocaleController.getString(R.string.SilentTranscribeTitle));
-        builder.setView(layout);
+        builder.setView(scrollView);
         builder.setNegativeButton(LocaleController.getString(R.string.Close), null);
+        builder.setPositiveButton(LocaleController.getString(R.string.SilentTranslateButton), null);
         final AlertDialog dialog = builder.create();
         dialog.show();
 
-        final StringBuilder transcript = new StringBuilder();
-        final SpeechRecognizer recognizer = SpeechRecognizer.createSpeechRecognizer(context);
-        final MediaPlayer player = new MediaPlayer();
-        recognizer.setRecognitionListener(new RecognitionListener() {
-            @Override public void onReadyForSpeech(Bundle params) {}
-            @Override public void onBeginningOfSpeech() {}
-            @Override public void onRmsChanged(float rmsdB) {}
-            @Override public void onBufferReceived(byte[] buffer) {}
-            @Override public void onEndOfSpeech() {}
+        final String[] transcript = new String[1];
 
-            @Override
-            public void onError(int error) {
-                stopAll();
+        // Translate button: stays disabled until there is text to translate,
+        // and never dismisses the dialog (same pattern as SilentTranslate).
+        if (dialog.getButton(DialogInterface.BUTTON_POSITIVE) != null) {
+            dialog.getButton(DialogInterface.BUTTON_POSITIVE).setEnabled(false);
+            dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(v -> {
+                if (transcript[0] == null || TextUtils.isEmpty(transcript[0])) {
+                    return;
+                }
+                translationLabel.setVisibility(View.VISIBLE);
+                translationView.setVisibility(View.VISIBLE);
+                translationView.setText(LocaleController.getString(R.string.SilentTranslating));
+                String tl = languages[targetIdx[0]][0];
+                SilentTranslate.translateText(transcript[0], "auto", tl, translated -> AndroidUtilities.runOnUIThread(() -> {
+                    if (!dialog.isShowing()) {
+                        return;
+                    }
+                    if (translated == null) {
+                        translationView.setText(LocaleController.getString(R.string.SilentTranslateFailed));
+                    } else {
+                        translationView.setText(translated);
+                    }
+                }));
+            });
+        }
+
+        if (msg == null || msg.messageOwner == null || !msg.isVoice()) {
+            resultView.setText(LocaleController.getString(R.string.SilentTranscribeFailed));
+            return;
+        }
+        if (!msg.isSent()) {
+            resultView.setText(LocaleController.getString(R.string.SilentTranscribeNotSent));
+            return;
+        }
+        if (!UserConfig.getInstance(account).isPremium()
+                && !TranscribeButton.isFreeTranscribeInChat(msg)
+                && !TranscribeButton.canTranscribeTrial(msg)) {
+            resultView.setText(LocaleController.getString(R.string.SilentTranscribePremium));
+            return;
+        }
+        requestTranscription(context, account, msg, dialog, resultView, transcript, 1);
+    }
+
+    private static void requestTranscription(Context context, int account, MessageObject msg,
+            AlertDialog dialog, TextView resultView, String[] transcript, int attempt) {
+        TLRPC.InputPeer peer = MessagesController.getInstance(account).getInputPeer(msg.messageOwner.peer_id);
+        if (peer == null) {
+            AndroidUtilities.runOnUIThread(() -> {
+                if (dialog.isShowing()) {
+                    resultView.setText(LocaleController.getString(R.string.SilentTranscribeFailed));
+                }
+            });
+            return;
+        }
+        long dialogId = DialogObject.getPeerDialogId(peer);
+        int messageId = msg.messageOwner.id;
+        TLRPC.TL_messages_transcribeAudio req = new TLRPC.TL_messages_transcribeAudio();
+        req.peer = peer;
+        req.msg_id = messageId;
+        int flags = 0;
+        if (!UserConfig.getInstance(account).isPremium()) {
+            flags |= ConnectionsManager.RequestFlagDoNotWaitFloodWait;
+        }
+        ConnectionsManager.getInstance(account).sendRequest(req, (res, err) -> {
+            if (res instanceof TLRPC.TL_messages_transcribedAudio) {
+                TLRPC.TL_messages_transcribedAudio r = (TLRPC.TL_messages_transcribedAudio) res;
+                if ((r.flags & 2) != 0) {
+                    MessagesController.getInstance(account).updateTranscribeAudioTrialCurrentNumber(r.trial_remains_num);
+                    MessagesController.getInstance(account).updateTranscribeAudioTrialCooldownUntil(r.trial_remains_until_date);
+                }
+                final String text = r.text;
+                final boolean isFinal = !r.pending;
+                final long transcriptionId = r.transcription_id;
                 AndroidUtilities.runOnUIThread(() -> {
-                    if (transcript.length() == 0) {
+                    if (!dialog.isShowing()) {
+                        return;
+                    }
+                    if (!TextUtils.isEmpty(text)) {
+                        transcript[0] = text;
+                        if (isFinal) {
+                            resultView.setText(text);
+                            if (dialog.getButton(DialogInterface.BUTTON_POSITIVE) != null) {
+                                dialog.getButton(DialogInterface.BUTTON_POSITIVE).setEnabled(true);
+                            }
+                            TranscribeButton.finishTranscription(msg, transcriptionId, text);
+                        } else {
+                            resultView.setText(text + "\n\n" + LocaleController.getString(R.string.SilentTranscribeTranscribing));
+                            MessagesStorage.getInstance(account).updateMessageVoiceTranscription(dialogId, messageId, text, msg.messageOwner);
+                            if (attempt < MAX_TRIES) {
+                                scheduleRetry(context, account, msg, dialog, resultView, transcript, attempt + 1);
+                            } else {
+                                resultView.setText(text + "\n\n" + LocaleController.getString(R.string.SilentTranscribeTakingLong));
+                                if (dialog.getButton(DialogInterface.BUTTON_POSITIVE) != null) {
+                                    dialog.getButton(DialogInterface.BUTTON_POSITIVE).setEnabled(true);
+                                }
+                            }
+                        }
+                    } else if (!isFinal) {
+                        if (attempt < MAX_TRIES) {
+                            scheduleRetry(context, account, msg, dialog, resultView, transcript, attempt + 1);
+                        } else {
+                            resultView.setText(LocaleController.getString(R.string.SilentTranscribeTakingLong));
+                        }
+                    } else {
+                        resultView.setText(LocaleController.getString(R.string.SilentTranscribeFailed));
+                    }
+                });
+            } else {
+                if (err != null && err.text != null && err.text.startsWith("FLOOD_WAIT_")) {
+                    MessagesController.getInstance(account).updateTranscribeAudioTrialCurrentNumber(0);
+                    MessagesController.getInstance(account).updateTranscribeAudioTrialCooldownUntil(
+                            ConnectionsManager.getInstance(account).getCurrentTime() + Utilities.parseInt(err.text));
+                    AndroidUtilities.runOnUIThread(() -> {
+                        if (dialog.isShowing()) {
+                            resultView.setText(LocaleController.getString(R.string.SilentTranscribePremium));
+                        }
+                        NotificationCenter.getInstance(account).postNotificationName(NotificationCenter.voiceTranscriptionUpdate, msg);
+                        NotificationCenter.getInstance(account).postNotificationName(NotificationCenter.updateTranscriptionLock);
+                    });
+                    return;
+                }
+                AndroidUtilities.runOnUIThread(() -> {
+                    if (dialog.isShowing()) {
                         resultView.setText(LocaleController.getString(R.string.SilentTranscribeFailed));
                     }
                 });
             }
+        }, flags);
+    }
 
-            @Override
-            public void onResults(Bundle results) {
-                ArrayList<String> list = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                if (list != null && !list.isEmpty()) {
-                    transcript.append(list.get(0)).append(" ");
-                    final String text = transcript.toString().trim();
-                    AndroidUtilities.runOnUIThread(() -> resultView.setText(text));
-                }
-                stopAll();
+    private static void scheduleRetry(Context context, int account, MessageObject msg,
+            AlertDialog dialog, TextView resultView, String[] transcript, int nextAttempt) {
+        AndroidUtilities.runOnUIThread(() -> {
+            if (dialog.isShowing()) {
+                requestTranscription(context, account, msg, dialog, resultView, transcript, nextAttempt);
             }
+        }, RETRY_DELAY_MS);
+    }
 
-            @Override
-            public void onPartialResults(Bundle partialResults) {
-                ArrayList<String> list = partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-                if (list != null && !list.isEmpty()) {
-                    final String text = (transcript.toString() + list.get(0)).trim();
-                    AndroidUtilities.runOnUIThread(() -> resultView.setText(text));
-                }
+    private static void pickLanguage(Context context, int[] current, Runnable onPick) {
+        String[][] languages = SilentTranslate.getLanguages();
+        ArrayList<String> names = new ArrayList<>();
+        ArrayList<Integer> idx = new ArrayList<>();
+        for (int i = 0; i < languages.length; i++) {
+            if (i == 0) {
+                continue; // target language cannot be "auto"
             }
-
-            @Override public void onEvent(int eventType, Bundle params) {}
-
-            private void stopAll() {
-                try {
-                    if (player.isPlaying()) {
-                        player.stop();
-                    }
-                    player.release();
-                } catch (Exception e) {
-                    // Ignore.
-                }
-                try {
-                    recognizer.destroy();
-                } catch (Exception e) {
-                    // Ignore.
-                }
+            names.add(languages[i][1]);
+            idx.add(i);
+        }
+        AlertDialog.Builder builder = new AlertDialog.Builder(context);
+        builder.setTitle(LocaleController.getString(R.string.SilentChooseLanguage));
+        builder.setItems(names.toArray(new CharSequence[0]), (d, which) -> {
+            current[0] = idx.get(which);
+            if (onPick != null) {
+                onPick.run();
             }
         });
-
-        try {
-            player.setDataSource(audioFile.getAbsolutePath());
-            player.prepare();
-            player.setOnCompletionListener(mp -> {
-                // Give the recognizer a moment to finish, then stop.
-                AndroidUtilities.runOnUIThread(() -> {
-                    try {
-                        recognizer.stopListening();
-                    } catch (Exception e) {
-                        // Ignore.
-                    }
-                }, 800);
-            });
-            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-            intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-            recognizer.startListening(intent);
-            player.start();
-        } catch (Exception e) {
-            try {
-                recognizer.destroy();
-            } catch (Exception ignored) {
-            }
-            SilentToast.show(context, LocaleController.getString(R.string.SilentTranscribeFailed), android.widget.Toast.LENGTH_SHORT);
-            dialog.dismiss();
-        }
+        builder.show();
     }
 }
