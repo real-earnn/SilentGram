@@ -98,6 +98,7 @@ import com.google.firebase.appindexing.builders.AssistActionBuilder;
 import org.telegram.PhoneFormat.PhoneFormat;
 import org.telegram.messenger.AccountInstance;
 import org.telegram.messenger.AndroidUtilities;
+import org.telegram.messenger.SilentToast;
 import org.telegram.messenger.AnimationNotificationsLocker;
 import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.AutoDeleteMediaTask;
@@ -7209,7 +7210,14 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         // SilentGram v2.0.18: system PiP is REMOVED entirely. Home only ever
         // opens the floating window; if the overlay cannot start, the app
         // just backgrounds normally — no system PiP window can appear.
-        tryEnterSilentFloating();
+        // If the toggle is ON but floating failed to start, say why on
+        // screen, so the next test tells us exactly which step failed.
+        if (!tryEnterSilentFloating() && SharedSettings.silentPipEnabled.get()) {
+            String reason = SilentFloatingWindow.getInstance().getLastStartError();
+            if (reason != null) {
+                SilentToast.show(this, "Floating window could not start: " + reason, Toast.LENGTH_LONG);
+            }
+        }
     }
 
     /**

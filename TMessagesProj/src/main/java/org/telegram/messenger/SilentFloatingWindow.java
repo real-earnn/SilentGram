@@ -107,12 +107,21 @@ public class SilentFloatingWindow {
     private boolean openDialogIsUser;
     private Runnable launchWatchdog;
     private boolean contentPinching;
+    /** Why the last start() failed (null = no failure recorded). Shown on
+     * screen when the toggle is ON but the floating window could not start,
+     * so a device test names the failing step instead of silently falling
+     * back. */
+    private String lastStartError;
 
     private SilentFloatingWindow() {
     }
 
     public boolean isActive() {
         return active;
+    }
+
+    public String getLastStartError() {
+        return lastStartError;
     }
 
     public void setFloatingActivity(SilentFloatingActivity activity) {
@@ -130,17 +139,21 @@ public class SilentFloatingWindow {
      * when the window could not be started (caller falls back to system PiP).
      */
     public boolean start(Activity activity) {
+        lastStartError = null;
         if (active) {
             return true;
         }
         if (activity == null || activity.isFinishing()) {
+            lastStartError = "no activity";
             return false;
         }
         if (!PipEnvironment.canDrawOverlays(activity)) {
+            lastStartError = "overlay permission missing";
             return false;
         }
         PipCoordinator coordinator = PipCoordinator.getInstance();
         if (coordinator.hasSystemPipSession() || coordinator.findFloating() != null) {
+            lastStartError = "another PiP window is active";
             return false;
         }
         final Context ctx = ApplicationLoader.applicationContext;
@@ -148,6 +161,7 @@ public class SilentFloatingWindow {
             windowManager = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
             displayManager = (DisplayManager) ctx.getSystemService(Context.DISPLAY_SERVICE);
             if (windowManager == null || displayManager == null) {
+                lastStartError = "system service missing";
                 return false;
             }
             DisplayMetrics dm = ctx.getResources().getDisplayMetrics();
@@ -162,6 +176,7 @@ public class SilentFloatingWindow {
                 fullHeight = dm.heightPixels;
             }
             if (fullWidth <= 0 || fullHeight <= 0) {
+                lastStartError = "no display size";
                 return false;
             }
             barHeightPx = AndroidUtilities.dp(36);
@@ -204,6 +219,7 @@ public class SilentFloatingWindow {
                     "SilentGram Floating", fullWidth, fullHeight, densityDpi, surface,
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC);
             if (virtualDisplay == null || virtualDisplay.getDisplay() == null) {
+                lastStartError = "virtual display failed";
                 teardown();
                 return false;
             }
@@ -231,6 +247,7 @@ public class SilentFloatingWindow {
             AndroidUtilities.runOnUIThread(launchWatchdog, 5000);
             return true;
         } catch (Exception e) {
+            lastStartError = "error: " + String.valueOf(e.getMessage());
             FileLog.e(e);
             teardown();
             return false;
