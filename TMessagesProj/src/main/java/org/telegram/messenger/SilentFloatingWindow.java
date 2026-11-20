@@ -14,6 +14,7 @@ import android.graphics.drawable.GradientDrawable;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
 import android.os.Build;
+import android.os.SystemClock;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -105,6 +106,7 @@ public class SilentFloatingWindow {
     private long openDialogId;
     private boolean openDialogIsUser;
     private Runnable launchWatchdog;
+    private boolean contentPinching;
 
     private SilentFloatingWindow() {
     }
@@ -443,7 +445,7 @@ public class SilentFloatingWindow {
 
         textureView = new TextureView(ctx);
         textureView.setSurfaceTexture(surfaceTexture);
-        textureView.setOnTouchListener((v, event) -> forwardTouch(event));
+        textureView.setOnTouchListener(new ContentTouchListener());
         contentContainer.addView(textureView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
@@ -536,6 +538,73 @@ public class SilentFloatingWindow {
             copy.recycle();
         }
         return true;
+    }
+
+    /** Content: one finger drives the app inside; two fingers pinch-resize
+     * the window anywhere (v2.0.18 — pinch on the content, not only on the
+     * top bar). While pinching, touches never reach the app.
+     */
+    private class ContentTouchListener implements View.OnTouchListener {
+        private final ScaleGestureDetector pinchDetector = new ScaleGestureDetector(
+                ApplicationLoader.applicationContext, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                    @Override
+                    public boolean onScaleBegin(ScaleGestureDetector detector) {
+                        contentPinching = true;
+                        return true;
+                    }
+
+                    @Override
+                    public boolean onScale(ScaleGestureDetector detector) {
+                        applyWindowWidth((int) (windowWidthPx * detector.getScaleFactor()));
+                        return true;
+                    }
+
+                    @Override
+                    public void onScaleEnd(ScaleGestureDetector detector) {
+                        contentPinching = false;
+                        persistGeometry();
+                    }
+                });
+
+        @Override
+        public boolean onTouch(View v, MotionEvent event) {
+            pinchDetector.onTouchEvent(event);
+            if (contentPinching || event.getPointerCount() >= 2) {
+                // Second finger down: cancel the touch the app may already
+                // have received, so a half-started scroll does not stick.
+                if (event.getActionMasked() == MotionEvent.ACTION_POINTER_DOWN) {
+                    forwardTouchCancel();
+                }
+                return true;
+            }
+            return forwardTouch(event);
+        }
+    }
+
+    /** Send ACTION_CANCEL into the floating activity (ends a half-started gesture). */
+    private void forwardTouchCancel() {
+        SilentFloatingActivity fa = floatingActivity;
+        if (fa == null || fa.isFinishing()) {
+            return;
+        }
+        View decor;
+        try {
+            decor = fa.getWindow() != null ? fa.getWindow().getDecorView() : null;
+        } catch (Exception e) {
+            FileLog.e(e);
+            return;
+        }
+        if (decor == null) {
+            return;
+        }
+        MotionEvent cancel = MotionEvent.obtain(SystemClock.uptimeMillis(), SystemClock.uptimeMillis(), MotionEvent.ACTION_CANCEL, 0, 0, 0);
+        try {
+            decor.dispatchTouchEvent(cancel);
+        } catch (Exception e) {
+            FileLog.e(e);
+        } finally {
+            cancel.recycle();
+        }
     }
 
     // ---------- drag / resize ----------

@@ -4,7 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.view.Gravity;
 import android.widget.LinearLayout;
-import android.widget.NumberPicker;
+import org.telegram.ui.Components.NumberPicker;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -111,6 +111,10 @@ public class SilentStickerResize {
         picker.setMaxValue(MAX_LEVEL);
         picker.setValue(current);
         picker.setWrapSelectorWheel(false);
+        // 5-row wheel: the selected level sits in the middle, with two
+        // values above and two below it — so you always see exactly where
+        // you are (e.g. 6 in the middle, 5 and 4 above, 7 and 8 below).
+        picker.setItemCount(5);
         layout.addView(picker, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT, 0, AndroidUtilities.dp(12), 0, 0));
 
         Runnable updateLabel = () -> {
