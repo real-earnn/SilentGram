@@ -30,12 +30,11 @@ import java.util.ArrayList;
  */
 public class SilentQuickActions {
 
-    // SilentGram Batch U: "Removed Members" labels. Literals (not
-    // R.string) until matching entries land in strings.xml — see the
-    // Batch U report; the behaviour is identical either way.
+    // SilentGram Batch U: "Removed Members" label for the quick-actions
+    // pill. Literal (not R.string) until a matching entry lands in
+    // strings.xml — see the Batch U report; the behaviour is identical
+    // either way.
     private static final String REMOVED_MEMBERS_TITLE = "Removed Members";
-    private static final String REMOVED_MEMBERS_EMPTY = "No removed members";
-    private static final String REMOVED_MEMBERS_UNKNOWN = "Deleted account";
 
     /**
      * VIP panel for a 1-1 chat: Telegram's own bottom-sheet menu, icon on
@@ -229,10 +228,10 @@ public class SilentQuickActions {
         if (ChatObject.isChannel(chat) || chat.gigagroup) {
             itemList.add(LocaleController.getString(R.string.EventLog));
             actionList.add(4);
-            // SilentGram Batch U: "Removed Members" — who was kicked /
-            // banned or left, from the admin log. Basic groups have no
-            // admin log, so this row only exists where the log exists
-            // (same gate as Recent Actions above).
+            // "Removed Members" — Telegram's own Removed Users page
+            // (ChatUsersActivity TYPE_BANNED). Basic groups have no banned
+            // list, so this row only exists for channels / megagroups /
+            // gigagroups (same gate as Recent Actions above).
             itemList.add(REMOVED_MEMBERS_TITLE);
             actionList.add(6);
         }
@@ -283,111 +282,30 @@ public class SilentQuickActions {
                     openReactionsScreen(fragment, account, chat);
                     break;
                 case 6:
-                    showRemovedMembers(fragment, account, chatId);
+                    // Telegram's own Removed Users page — the same screen
+                    // as ChatEditActivity's blocked-users row (ChatEditActivity:1210):
+                    // ChatUsersActivity with TYPE_BANNED. Never a custom
+                    // rebuild of this page.
+                    android.os.Bundle bannedArgs = new android.os.Bundle();
+                    bannedArgs.putLong("chat_id", chatId);
+                    bannedArgs.putInt("type", org.telegram.ui.ChatUsersActivity.TYPE_BANNED);
+                    org.telegram.ui.ChatUsersActivity bannedFragment = new org.telegram.ui.ChatUsersActivity(bannedArgs);
+                    TLRPC.ChatFull bannedInfo = mc.getChatFull(chatId);
+                    if (bannedInfo != null) {
+                        bannedFragment.setInfo(bannedInfo);
+                    }
+                    // If the full info is not cached yet, ChatUsersActivity
+                    // loads it itself (onFragmentCreate: loadChatParticipants
+                    // + chatInfoDidLoad observer, ChatUsersActivity:623-628)
+                    // and every info read there is null-guarded, so opening
+                    // without setInfo is safe.
+                    fragment.presentFragment(bannedFragment);
                     break;
             }
         });
         builder.show();
     }
 
-    /**
-     * SilentGram Batch U: "Removed Members" — the people who were kicked
-     * or banned out of this channel/group, plus the people who left, taken
-     * from the admin log (channels.getAdminLog, filter kick + ban + leave).
-     * Tapping a name opens that person's profile. Only available where an
-     * admin log exists (channels / megagroups / gigagroups — same gate as
-     * Recent Actions); basic groups keep no such record server-side.
-     */
-    public static void showRemovedMembers(BaseFragment fragment, int account, long chatId) {
-        if (fragment == null || fragment.getParentActivity() == null) {
-            return;
-        }
-        MessagesController mc = MessagesController.getInstance(account);
-        TLRPC.TL_channels_getAdminLog req = new TLRPC.TL_channels_getAdminLog();
-        req.channel = mc.getInputChannel(chatId);
-        req.q = "";
-        req.limit = 100;
-        req.max_id = 0;
-        req.min_id = 0;
-        TLRPC.TL_channelAdminLogEventsFilter filter = new TLRPC.TL_channelAdminLogEventsFilter();
-        filter.kick = true;
-        filter.ban = true;
-        filter.leave = true;
-        req.flags |= 1;
-        req.events_filter = filter;
-        ConnectionsManager.getInstance(account).sendRequest(req, (res, err) -> AndroidUtilities.runOnUIThread(() -> {
-            if (fragment.getParentActivity() == null) {
-                return;
-            }
-            if (err != null) {
-                SilentToast.show(fragment.getParentActivity(), err.text, android.widget.Toast.LENGTH_SHORT);
-                return;
-            }
-            if (!(res instanceof TLRPC.TL_channels_adminLogResults)) {
-                return;
-            }
-            TLRPC.TL_channels_adminLogResults results = (TLRPC.TL_channels_adminLogResults) res;
-            // Most recent first (the log already arrives newest-first);
-            // one row per person, even if they were removed twice.
-            java.util.LinkedHashMap<Long, String> removed = new java.util.LinkedHashMap<>();
-            for (TLRPC.TL_channelAdminLogEvent event : results.events) {
-                if (event == null || event.action == null) {
-                    continue;
-                }
-                long userId = 0;
-                if (event.action instanceof TLRPC.TL_channelAdminLogEventActionParticipantToggleBan) {
-                    TLRPC.TL_channelAdminLogEventActionParticipantToggleBan action =
-                            (TLRPC.TL_channelAdminLogEventActionParticipantToggleBan) event.action;
-                    // A kick / ban is a ToggleBan whose new participant is
-                    // banned; an unban has a plain participant instead.
-                    if (action.new_participant instanceof TLRPC.TL_channelParticipantBanned) {
-                        userId = action.new_participant.user_id;
-                    }
-                } else if (event.action instanceof TLRPC.TL_channelAdminLogEventActionParticipantLeave) {
-                    // Left on their own — the leaver is the event's user.
-                    userId = event.user_id;
-                }
-                if (userId == 0 || userId == UserConfig.getInstance(account).getClientUserId()) {
-                    continue;
-                }
-                if (!removed.containsKey(userId)) {
-                    removed.put(userId, null);
-                }
-                if (removed.size() >= 50) {
-                    break;
-                }
-            }
-            if (removed.isEmpty()) {
-                SilentToast.show(fragment.getParentActivity(), REMOVED_MEMBERS_EMPTY, android.widget.Toast.LENGTH_SHORT);
-                return;
-            }
-            // Resolve display names (the log ships the users it mentions).
-            java.util.HashMap<Long, TLRPC.User> byId = new java.util.HashMap<>();
-            for (TLRPC.User u : results.users) {
-                if (u != null) {
-                    byId.put(u.id, u);
-                }
-            }
-            ArrayList<Long> ids = new ArrayList<>(removed.keySet());
-            CharSequence[] names = new CharSequence[ids.size()];
-            for (int i = 0; i < ids.size(); i++) {
-                TLRPC.User u = byId.get(ids.get(i));
-                if (u == null) {
-                    u = mc.getUser(ids.get(i));
-                }
-                names[i] = u != null ? UserObject.getUserName(u) : REMOVED_MEMBERS_UNKNOWN;
-            }
-            AlertDialog.Builder builder = new AlertDialog.Builder(fragment.getParentActivity());
-            builder.setTitle(REMOVED_MEMBERS_TITLE);
-            builder.setItems(names, (dialog, which) -> {
-                long userId = ids.get(which);
-                android.os.Bundle args = new android.os.Bundle();
-                args.putLong("user_id", userId);
-                fragment.presentFragment(new org.telegram.ui.ProfileActivity(args));
-            });
-            builder.show();
-        }));
-    }
 
     /**
      * K16 "Reactions": open the screen where the allowed reactions for
