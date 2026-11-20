@@ -3632,36 +3632,28 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 			final String persistentStateFilePath = new File(ApplicationLoader.applicationContext.getCacheDir(), "voip_persistent_state.json").getAbsolutePath();
 
 			// endpoints
-			// SilentGram Z (verified 2026-11-20 from tgcalls 545f5ae source):
-			// endpointType below is a NO-OP on the live path. Every v2
-			// implementation (InstanceV2Impl 7/8/9/12/13, Reference 10/11,
-			// Compat 14) NEVER reads Descriptor.endpoints — the live
-			// transport is RtcServer.isTcp, which comes from
-			// Endpoint.tcp, which is TL_phoneConnection.tcp from the
-			// server. forceTcp=true only affects the legacy v1 stack
-			// (InstanceImpl 2.7.7/5.0.0), which the server no longer
-			// negotiates. Likewise the SOCKS5 proxy passed to
-			// makeInstance never reaches any socket on v2: v2 never
-			// calls _portAllocator->set_proxy(), ReflectorPort's TCP
-			// connect ignores its proxy_info argument, and the vendored
-			// WebRTC socket factory implements PROXY_HTTPS only (no
-			// SOCKS5 anywhere). So today a call is: UDP reflector
-			// (direct, blocked in Pakistan) or, where the server sent
-			// tcp=true, TCP reflector (direct to a Telegram IP, also
-			// blocked) — hence "Connecting..." until the ~20s native
-			// timeout. The real fix is the tgcalls-fork patch in
-			// docs/sg-call-relay-via-socks5.md (SOCKS5 for the TCP
-			// reflector + set_proxy wiring). Do NOT "fix" this by
-			// forcing Endpoint.tcp=true here: Compat/Reference SKIP
-			// TCP servers from their ICE server list, so that would
-			// leave them with zero relay ports — strictly worse.
+			// SilentGram: the tgcalls-fork patch (v2.0.17+, docs/sg-call-relay-via-socks5.md)
+			// IS in: v2 calls _portAllocator->set_proxy() and ReflectorPort
+			// routes its TCP reflector connection through the SOCKS5 relay.
+			// But the relay path only exists when a TCP reflector exists:
+			// RtcServer.isTcp comes from Endpoint.tcp, i.e. the SERVER-sent
+			// TL_phoneConnection.tcp — and on the 2.0.17 device tests the
+			// relay log stayed empty, so the server offered no TCP reflector
+			// for those calls (every ReflectorPort was UDP, direct, blocked
+			// in Pakistan). So when the relay is configured we FORCE tcp=true
+			// on classic reflector endpoints: a reflector accepts TCP on the
+			// same port, and the ICE-list skip (Compat/Reference drop TCP
+			// non-TURN servers from the PeerConnection ICE list) loses
+			// nothing — reflectors were never valid ICE servers, they are
+			// served by the relay factory. endpointType below is a NO-OP on
+			// v2 (only the legacy v1 stack read Descriptor.endpoints).
 			final boolean forceTcp = true;
 			final int endpointType = forceTcp ? Instance.ENDPOINT_TYPE_TCP_RELAY : Instance.ENDPOINT_TYPE_UDP_RELAY;
 			final Instance.Endpoint[] endpoints = new Instance.Endpoint[privateCall.connections.size()];
 			ArrayList<Long> reflectorIds = new ArrayList<>();
 			for (int i = 0; i < endpoints.length; i++) {
 				final TLRPC.PhoneConnection connection = privateCall.connections.get(i);
-				endpoints[i] = new Instance.Endpoint(connection instanceof TLRPC.TL_phoneConnectionWebrtc, connection.id, connection.ip, connection.ipv6, connection.port, endpointType, connection.peer_tag, connection.turn, connection.stun, connection.username, connection.password, connection.tcp);
+				endpoints[i] = new Instance.Endpoint(connection instanceof TLRPC.TL_phoneConnectionWebrtc, connection.id, connection.ip, connection.ipv6, connection.port, endpointType, connection.peer_tag, connection.turn, connection.stun, connection.username, connection.password, connection instanceof TLRPC.TL_phoneConnectionWebrtc ? connection.tcp : true); // SilentGram: force TCP reflector (see comment above)
 				if (connection instanceof TLRPC.TL_phoneConnection) {
 					reflectorIds.add(((TLRPC.TL_phoneConnection) connection).id);
 				}
@@ -3706,16 +3698,33 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 			// endpoint, the server-sent tcp flag that actually picks
 			// the reflector transport on v2. No secrets: peerTag and
 			// username/password are deliberately NOT logged.
+			// NOTE: tcp= below is the SERVER-sent flag (endpoints are forced to TCP — see above).
 			StringBuilder endpointSummary = new StringBuilder();
 			for (int i = 0; i < endpoints.length; i++) {
 				if (i > 0) {
 					endpointSummary.append(';');
 				}
 				endpointSummary.append(endpoints[i].id).append('@').append(endpoints[i].ipv4).append(':').append(endpoints[i].port)
-					.append(" tcp=").append(endpoints[i].tcp).append(" turn=").append(endpoints[i].turn).append(" stun=").append(endpoints[i].stun)
+					.append(" tcp=").append(privateCall.connections.get(i).tcp).append(" turn=").append(endpoints[i].turn).append(" stun=").append(endpoints[i].stun)
 					.append(" type=").append(endpoints[i].type).append(" reflectorId=").append(endpoints[i].reflectorId);
 			}
 			FileLog.e("SG-CALL-RELAY init call=" + (privateCall != null ? privateCall.id : 0) + " version=" + privateCall.protocol.library_versions.get(0) + " proxy=161.118.196.94:18080 forceTcp=" + forceTcp + " endpoints=[" + endpointSummary + "] p2pAllowed=" + privateCall.p2p_allowed);
+			// SilentGram v2.0.18: stash the last call's facts (version +
+			// SERVER-sent TCP flags, before the TCP force above) so the
+			// proxy page can show them — no logcat needed to learn
+			// whether the server offered a TCP reflector at all.
+			try {
+				int serverTcpCount = 0;
+				for (int i = 0; i < privateCall.connections.size(); i++) {
+					if (privateCall.connections.get(i).tcp) {
+						serverTcpCount++;
+					}
+				}
+				ApplicationLoader.applicationContext.getSharedPreferences("silentgram", Context.MODE_PRIVATE).edit()
+					.putString("sg_last_call_facts", "v" + privateCall.protocol.library_versions.get(0) + " · endpoints=" + endpoints.length + " · server TCP " + serverTcpCount + "/" + endpoints.length + " (forced TCP)")
+					.putLong("sg_last_call_facts_ms", System.currentTimeMillis()).apply();
+			} catch (Exception ignored) {
+			}
 			tgVoip[CAPTURE_DEVICE_CAMERA] = Instance.makeInstance(privateCall.protocol.library_versions.get(0), config, persistentStateFilePath, endpoints, new Instance.Proxy(SILENT_CALL_RELAY_HOST, SILENT_CALL_RELAY_PORT, SILENT_CALL_RELAY_USER, SILENT_CALL_RELAY_PASSWORD), getNetworkType(), encryptionKey, remoteSink[CAPTURE_DEVICE_CAMERA], captureDevice[CAPTURE_DEVICE_CAMERA], (uids, levels, voice) -> {
 				if (sharedInstance == null || privateCall == null) {
 					return;

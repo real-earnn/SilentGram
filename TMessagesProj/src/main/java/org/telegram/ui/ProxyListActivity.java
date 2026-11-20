@@ -121,6 +121,23 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
     // it still shows when the relay was last OK.
     private static String lastCallRelayOkText;
     private static volatile long lastCallRelayOkMs;
+
+    // SilentGram v2.0.18: the last 1:1 call's facts, stashed by VoIPService
+    // at makeInstance time (version + SERVER-sent TCP flags). Read here so
+    // the proxy page shows whether the server offered a TCP reflector.
+    private static String getLastCallFactsText() {
+        try {
+            android.content.SharedPreferences prefs = org.telegram.messenger.ApplicationLoader.applicationContext.getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
+            String facts = prefs.getString("sg_last_call_facts", null);
+            if (facts == null) {
+                return null;
+            }
+            long ms = prefs.getLong("sg_last_call_facts_ms", 0);
+            return "Last call: " + facts + (ms > 0 ? " · " + formatCallRelayTime(ms) : "");
+        } catch (Exception e) {
+            return null;
+        }
+    }
     private static final int CALL_RELAY_PROBE_ATTEMPTS = 3;
     private static final int CALL_RELAY_TCP_TIMEOUT_MS = 4000;
     private static final int CALL_RELAY_UDP_TIMEOUT_MS = 3000;
@@ -1074,7 +1091,13 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
                         cell.setText(getString(R.string.ProxyRotationTimeoutInfo));
                     } else if (position == callRelayInfoRow) {
                         // SilentGram X: call-relay status (synthetic row, not a proxy entry).
-                        cell.setText(callRelayStatusText != null ? callRelayStatusText : "Call relay 161.118.196.94:18080 — checking…");
+                        // Second line: the last call's facts (version + the
+                        // SERVER-sent TCP flags, before the TCP force), so a
+                        // device test shows whether the server offered a TCP
+                        // reflector at all — no logcat needed.
+                        String relayText = callRelayStatusText != null ? callRelayStatusText : "Call relay 161.118.196.94:18080 — checking…";
+                        String lastCall = getLastCallFactsText();
+                        cell.setText(lastCall != null ? relayText + "\n" + lastCall : relayText);
                     }
                     break;
                 }
