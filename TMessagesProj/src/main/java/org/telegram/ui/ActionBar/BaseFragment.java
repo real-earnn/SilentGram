@@ -62,6 +62,7 @@ import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.NotificationsController;
 import org.telegram.messenger.SecretChatHelper;
 import org.telegram.messenger.SendMessagesHelper;
+import org.telegram.messenger.SilentFloatingWindow;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.utils.LeakDetector;
 import org.telegram.tgnet.ConnectionsManager;
@@ -683,12 +684,17 @@ public abstract class BaseFragment {
         if (actionBar != null) {
             actionBar.onPause();
         }
-        if (simpleMenuOverlay != null) {
+        // v2.0.22: while the floating activity is pausing (Home), keep
+        // popups/dialogs — the popup on top must survive Home. The flag
+        // is set only around the floating activity's super.onPause(),
+        // so fragment-cover pauses still dismiss normally.
+        boolean keepPopups = SilentFloatingWindow.getInstance().isPauseDismissalsSuppressed();
+        if (simpleMenuOverlay != null && !keepPopups) {
             simpleMenuOverlay.close(false);
         }
         isPaused = true;
         try {
-            if (visibleDialog != null && visibleDialog.isShowing() && dismissDialogOnPause(visibleDialog)) {
+            if (!keepPopups && visibleDialog != null && visibleDialog.isShowing() && dismissDialogOnPause(visibleDialog)) {
                 visibleDialog.dismiss();
                 visibleDialog = null;
             }

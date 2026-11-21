@@ -59,6 +59,7 @@ import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SharedConfig;
+import org.telegram.messenger.SilentFloatingWindow;
 import org.telegram.ui.Adapters.FiltersView;
 import org.telegram.ui.Components.AnimatedEmojiDrawable;
 import org.telegram.ui.Components.BackupImageView;
@@ -1827,7 +1828,9 @@ public class ActionBar extends FrameLayout implements FactorAnimator.Target, The
     protected void onPause() {
         resumed = false;
         updateAttachState();
-        if (menu != null) {
+        // v2.0.22: while the floating activity is pausing (Home), keep
+        // popup menus — see BaseFragment.onPause.
+        if (menu != null && !SilentFloatingWindow.getInstance().isPauseDismissalsSuppressed()) {
             menu.hideAllPopupMenus();
         }
     }

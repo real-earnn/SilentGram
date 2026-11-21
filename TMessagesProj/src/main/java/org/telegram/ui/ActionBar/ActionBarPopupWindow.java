@@ -54,6 +54,7 @@ import org.telegram.messenger.utils.ViewOutlineProviderImpl;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.PopupSwipeBackLayout;
 
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -91,6 +92,43 @@ public class ActionBarPopupWindow extends PopupWindow {
     private ViewTreeObserver.OnScrollChangedListener mSuperScrollListener;
     private ViewTreeObserver mViewTreeObserver;
     private AnimationNotificationsLocker notificationsLocker = new AnimationNotificationsLocker();
+
+    /** v2.0.22: registry of showing popups (weak references — entries
+     * die with the popup; getTopShowingPopup() also filters by
+     * isShowing(), so no dismiss hook is needed). Lets the floating
+     * window dispatch touches to the topmost popup instead of the
+     * activity content behind it. Popups are separate WindowManager
+     * windows with their own decor; without this the floating
+     * window's touch forwarding never reaches them. */
+    private static final ArrayList<WeakReference<ActionBarPopupWindow>> shownPopups = new ArrayList<>();
+
+    private static void trackShownPopup(ActionBarPopupWindow popup) {
+        if (popup == null) {
+            return;
+        }
+        for (int i = shownPopups.size() - 1; i >= 0; i--) {
+            WeakReference<ActionBarPopupWindow> ref = shownPopups.get(i);
+            ActionBarPopupWindow p = ref != null ? ref.get() : null;
+            if (p == null || p == popup) {
+                shownPopups.remove(i);
+            }
+        }
+        shownPopups.add(new WeakReference<>(popup));
+    }
+
+    /** Most recently shown popup that is still showing, or null. */
+    public static ActionBarPopupWindow getTopShowingPopup() {
+        for (int i = shownPopups.size() - 1; i >= 0; i--) {
+            WeakReference<ActionBarPopupWindow> ref = shownPopups.get(i);
+            ActionBarPopupWindow p = ref != null ? ref.get() : null;
+            if (p == null || !p.isShowing()) {
+                shownPopups.remove(i);
+                continue;
+            }
+            return p;
+        }
+        return null;
+    }
 
     public void setScaleOut(boolean b) {
         scaleOut = b;
@@ -836,7 +874,18 @@ public class ActionBarPopupWindow extends PopupWindow {
     public void showAsDropDown(View anchor, int xoff, int yoff) {
         try {
             super.showAsDropDown(anchor, xoff, yoff);
+            trackShownPopup(this);
             registerListener(anchor);
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    @Override
+    public void showAsDropDown(View anchor, int xoff, int yoff, int gravity) {
+        try {
+            super.showAsDropDown(anchor, xoff, yoff, gravity);
+            trackShownPopup(this);
         } catch (Exception e) {
             FileLog.e(e);
         }
@@ -1011,6 +1060,7 @@ public class ActionBarPopupWindow extends PopupWindow {
     @Override
     public void showAtLocation(View parent, int gravity, int x, int y) {
         super.showAtLocation(parent, gravity, x, y);
+        trackShownPopup(this);
         unregisterListener();
     }
 

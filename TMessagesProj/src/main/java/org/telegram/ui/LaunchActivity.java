@@ -7464,8 +7464,21 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             processBoostDialog(dialogId, null, null, chatMessageCell);
         } else if (id == NotificationCenter.closeOtherAppActivities) {
             if (args[0] != this) {
-                onFinish();
-                finish();
+                // v2.0.22: the floating activity NEVER finishes via this
+                // rule while its window is active — returning to the app
+                // via the launcher must not kill the floating window
+                // (Home must keep the same screen).
+                if (!(this instanceof SilentFloatingActivity) || !SilentFloatingWindow.getInstance().isActive()) {
+                    onFinish();
+                    finish();
+                }
+            } else if (!(this instanceof SilentFloatingActivity) && SilentFloatingWindow.getInstance().isActive()) {
+                // A fresh MAIN activity created (e.g. launcher tap)
+                // while the floating window is active: expand the
+                // floating window to fullscreen on the same screen
+                // instead of stacking a second fullscreen activity
+                // under the overlay.
+                SilentFloatingWindow.getInstance().expand();
             }
         } else if (id == NotificationCenter.didUpdateConnectionState) {
             int state = ConnectionsManager.getInstance(account).getConnectionState();
@@ -9060,6 +9073,54 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         }
         if (instance != null && instance.getActionBarLayout() != null) {
             return instance.getActionBarLayout().getLastFragment();
+        }
+        return null;
+    }
+
+    /** v2.0.22: topmost ChatActivity in the fragment stack, looking
+     * BENEATH any sheet fragment (a sheet/ProfileActivity over a chat
+     * must not hide the chat underneath — expand() and floating
+     * start() reopen that chat). Null when no chat is open (chat
+     * list). A plain dialog on top does not hide the chat: dialogs
+     * are not fragments, so the chat is still the top fragment. */
+    public static ChatActivity getTopChatActivity() {
+        if (instance == null) {
+            return null;
+        }
+        try {
+            if (!instance.sheetFragmentsStack.isEmpty()) {
+                for (int i = instance.sheetFragmentsStack.size() - 1; i >= 0; i--) {
+                    ChatActivity chat = findChatInLayout(instance.sheetFragmentsStack.get(i));
+                    if (chat != null) {
+                        return chat;
+                    }
+                }
+            }
+            if (instance.getActionBarLayout() != null) {
+                return findChatInLayout(instance.getActionBarLayout());
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        return null;
+    }
+
+    private static ChatActivity findChatInLayout(INavigationLayout layout) {
+        if (layout == null) {
+            return null;
+        }
+        try {
+            List<BaseFragment> stack = layout.getFragmentStack();
+            if (stack != null) {
+                for (int i = stack.size() - 1; i >= 0; i--) {
+                    BaseFragment f = stack.get(i);
+                    if (f instanceof ChatActivity) {
+                        return (ChatActivity) f;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
         }
         return null;
     }

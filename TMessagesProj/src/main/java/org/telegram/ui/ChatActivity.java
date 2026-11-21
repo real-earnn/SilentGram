@@ -189,6 +189,7 @@ import org.telegram.messenger.RichQuote;
 import org.telegram.messenger.SecretChatHelper;
 import org.telegram.messenger.SendMessagesHelper;
 import org.telegram.messenger.SharedConfig;
+import org.telegram.messenger.SilentFloatingWindow;
 import org.telegram.messenger.SvgHelper;
 import org.telegram.messenger.Timer;
 import org.telegram.messenger.TranslateController;
@@ -32009,7 +32010,11 @@ public class ChatActivity extends BaseFragment implements
         scrolling = false;
         if (scrimPopupWindow != null) {
             scrimPopupWindow.setPauseNotifications(false);
-            closeMenu();
+            // v2.0.22: while the floating activity is pausing (Home),
+            // keep the scrim menu — the popup on top must survive Home.
+            if (!SilentFloatingWindow.getInstance().isPauseDismissalsSuppressed()) {
+                closeMenu();
+            }
         }
         long replyId = threadMessageId;
         getMessagesController().markDialogAsReadNow(dialog_id, replyId);
