@@ -3634,26 +3634,23 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 			// endpoints
 			// SilentGram: the tgcalls-fork patch (v2.0.17+, docs/sg-call-relay-via-socks5.md)
 			// IS in: v2 calls _portAllocator->set_proxy() and ReflectorPort
-			// routes its TCP reflector connection through the SOCKS5 relay.
-			// But the relay path only exists when a TCP reflector exists:
-			// RtcServer.isTcp comes from Endpoint.tcp, i.e. the SERVER-sent
-			// TL_phoneConnection.tcp — and on the 2.0.17 device tests the
-			// relay log stayed empty, so the server offered no TCP reflector
-			// for those calls (every ReflectorPort was UDP, direct, blocked
-			// in Pakistan). So when the relay is configured we FORCE tcp=true
-			// on classic reflector endpoints: a reflector accepts TCP on the
-			// same port, and the ICE-list skip (Compat/Reference drop TCP
-			// non-TURN servers from the PeerConnection ICE list) loses
-			// nothing — reflectors were never valid ICE servers, they are
-			// served by the relay factory. endpointType below is a NO-OP on
-			// v2 (only the legacy v1 stack read Descriptor.endpoints).
-			final boolean forceTcp = true;
+			// routes its reflector connection through the SOCKS5 relay.
+			// v2.0.17-v2.0.21 forced tcp=true here: the fork only wrapped the
+			// TCP reflector path, and on the 2.0.17 device tests the server
+			// offered no TCP reflector, so the relay log stayed empty (every
+			// ReflectorPort was UDP, direct, blocked in Pakistan).
+			// v2.0.22: the fork now wraps the UDP reflector path too
+			// (Socks5UdpSocket via SOCKS5 UDP ASSOCIATE), so the TCP force is
+			// GONE - endpoints use the SERVER-sent TL_phoneConnection.tcp and
+			// endpointType is UDP_RELAY. endpointType is a NO-OP on v2 (only
+			// the legacy v1 stack read Descriptor.endpoints).
+			final boolean forceTcp = false;
 			final int endpointType = forceTcp ? Instance.ENDPOINT_TYPE_TCP_RELAY : Instance.ENDPOINT_TYPE_UDP_RELAY;
 			final Instance.Endpoint[] endpoints = new Instance.Endpoint[privateCall.connections.size()];
 			ArrayList<Long> reflectorIds = new ArrayList<>();
 			for (int i = 0; i < endpoints.length; i++) {
 				final TLRPC.PhoneConnection connection = privateCall.connections.get(i);
-				endpoints[i] = new Instance.Endpoint(connection instanceof TLRPC.TL_phoneConnectionWebrtc, connection.id, connection.ip, connection.ipv6, connection.port, endpointType, connection.peer_tag, connection.turn, connection.stun, connection.username, connection.password, connection instanceof TLRPC.TL_phoneConnectionWebrtc ? connection.tcp : true); // SilentGram: force TCP reflector (see comment above)
+				endpoints[i] = new Instance.Endpoint(connection instanceof TLRPC.TL_phoneConnectionWebrtc, connection.id, connection.ip, connection.ipv6, connection.port, endpointType, connection.peer_tag, connection.turn, connection.stun, connection.username, connection.password, connection.tcp); // SilentGram: server-sent tcp (UDP media goes via the relay since v2.0.22)
 				if (connection instanceof TLRPC.TL_phoneConnection) {
 					reflectorIds.add(((TLRPC.TL_phoneConnection) connection).id);
 				}
@@ -3698,7 +3695,7 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 			// endpoint, the server-sent tcp flag that actually picks
 			// the reflector transport on v2. No secrets: peerTag and
 			// username/password are deliberately NOT logged.
-			// NOTE: tcp= below is the SERVER-sent flag (endpoints are forced to TCP — see above).
+			// NOTE: tcp= below is the SERVER-sent flag (endpoints now use it as-is — see above).
 			StringBuilder endpointSummary = new StringBuilder();
 			for (int i = 0; i < endpoints.length; i++) {
 				if (i > 0) {
@@ -3721,7 +3718,7 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 					}
 				}
 				ApplicationLoader.applicationContext.getSharedPreferences("silentgram", Context.MODE_PRIVATE).edit()
-					.putString("sg_last_call_facts", "v" + privateCall.protocol.library_versions.get(0) + " · endpoints=" + endpoints.length + " · server TCP " + serverTcpCount + "/" + endpoints.length + " (forced TCP)")
+					.putString("sg_last_call_facts", "v" + privateCall.protocol.library_versions.get(0) + " · endpoints=" + endpoints.length + " · server TCP " + serverTcpCount + "/" + endpoints.length)
 					.putLong("sg_last_call_facts_ms", System.currentTimeMillis()).apply();
 			} catch (Exception ignored) {
 			}
@@ -4879,6 +4876,56 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 		if (needSendDebugLog) {
 			messagesController.voipDebug.done(privateCall.id, needSendDebugLog);
 			needSendDebugLog = false;
+		}
+
+		// SilentGram v2.0.22: parse the native SG-UDP markers out of the
+		// final debug log and append the UDP outcome to the last-call facts
+		// (SAME prefs key/keys as the makeInstance-time facts, so the proxy
+		// page + debug report show it). Markers are emitted by the tgcalls
+		// fork (Socks5UdpSocket.cpp, RTC_LOG):
+		//   SG-UDP associate=ok bnd=<ip:port> reflector=<ip:port> queued=<n>
+		//   SG-UDP associate=failed phase=handshake|midcall error=<errno> reflector=<ip:port> queued=<n>
+		//   SG-UDP first-media reflector=<ip:port>  (decisive: media flowed)
+		try {
+			String debugLog = finalState.debugLog;
+			String outcome;
+			if (debugLog != null && debugLog.contains("SG-UDP first-media")) {
+				outcome = "udp=ok bnd=161.118.196.94:18080 media=yes";
+			} else if (debugLog != null && debugLog.contains("SG-UDP associate=failed")) {
+				String phase = "handshake";
+				String err = "";
+				int failedAt = debugLog.indexOf("SG-UDP associate=failed");
+				int lineEnd = debugLog.indexOf('\n', failedAt);
+				String markerLine = lineEnd >= 0 ? debugLog.substring(failedAt, lineEnd) : debugLog.substring(failedAt);
+				int phaseAt = markerLine.indexOf("phase=");
+				if (phaseAt >= 0) {
+					int end = phaseAt + 6;
+					while (end < markerLine.length() && Character.isLetter(markerLine.charAt(end))) {
+						end++;
+					}
+					phase = markerLine.substring(phaseAt + 6, end);
+				}
+				int errAt = markerLine.indexOf("error=");
+				if (errAt >= 0) {
+					int end = errAt + 6;
+					while (end < markerLine.length() && (Character.isDigit(markerLine.charAt(end)) || markerLine.charAt(end) == '-')) {
+						end++;
+					}
+					err = markerLine.substring(errAt + 6, end);
+				}
+				outcome = "udp=failed phase=" + phase + " err=" + err;
+			} else if (debugLog != null && debugLog.contains("SG-UDP associate=ok")) {
+				outcome = "udp=ok bnd=161.118.196.94:18080 media=no";
+			} else {
+				outcome = "udp=not-tried";
+			}
+			android.content.SharedPreferences prefs = ApplicationLoader.applicationContext.getSharedPreferences("silentgram", Context.MODE_PRIVATE);
+			String facts = prefs.getString("sg_last_call_facts", null);
+			prefs.edit()
+					.putString("sg_last_call_facts", facts == null ? outcome : facts + " \u00b7 " + outcome)
+					.putLong("sg_last_call_facts_ms", System.currentTimeMillis()).apply();
+			FileLog.e("SG-CALL-RELAY udp=" + outcome);
+		} catch (Exception ignored) {
 		}
 	}
 

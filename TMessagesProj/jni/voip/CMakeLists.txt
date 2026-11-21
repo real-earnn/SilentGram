@@ -186,6 +186,7 @@ add_library(tgcalls STATIC
         tgcalls/tgcalls/v2/RawTcpSocket.cpp
         tgcalls/tgcalls/v2/ReflectorPort.cpp
         tgcalls/tgcalls/v2/Socks5ProxySocket.cpp
+        tgcalls/tgcalls/v2/Socks5UdpSocket.cpp
         tgcalls/tgcalls/v2/ReflectorRelayPortFactory.cpp
         tgcalls/tgcalls/v2/SignalingConnection.cpp
         tgcalls/tgcalls/v2/Signaling.cpp

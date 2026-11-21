@@ -310,11 +310,11 @@ public class SilentDebugReport {
             calls.put("relayStatus", relayStatus != null ? relayStatus : "not probed yet");
             long relayOkMs = ProxyListActivity.getLastCallRelayOkMs();
             calls.put("relayLastOk", relayOkMs > 0 ? formatTime(relayOkMs) : "never");
-            // VoIPService.makeInstance forces TCP (forceTcp = true, endpoint
-            // type TCP_RELAY); the relay argument itself is diagnostics-only
-            // until the tgcalls-fork patch lands.
-            calls.put("forcedTcp", true);
-            calls.put("endpointType", "TCP_RELAY");
+            // VoIPService.makeInstance no longer forces TCP (forceTcp =
+            // false, endpoint type UDP_RELAY since v2.0.22): the tgcalls
+            // fork routes reflector UDP media through the SOCKS5 relay.
+            calls.put("forcedTcp", false);
+            calls.put("endpointType", "UDP_RELAY");
             calls.put("note", "Per-endpoint TCP flags and the full endpoint list are in the logs section (SG-CALL-RELAY line).");
             return calls;
         } catch (Throwable e) {
