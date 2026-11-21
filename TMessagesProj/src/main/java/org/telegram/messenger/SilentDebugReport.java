@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.pm.PackageInfo;
 import android.graphics.Typeface;
 import android.os.Build;
 import android.text.TextUtils;
@@ -197,11 +198,23 @@ public class SilentDebugReport {
         try {
             JSONObject app = new JSONObject();
             app.put("version", BuildVars.BUILD_VERSION_STRING);
-            app.put("versionCode", BuildConfig.VERSION_CODE);
+            app.put("versionCode", getVersionCode());
             app.put("build", BuildConfig.BUILD_TYPE);
             return app;
         } catch (Throwable e) {
             return sectionError("app", e);
+        }
+    }
+
+    // BuildConfig has no VERSION_CODE field in this AGP setup (the
+    // workflow passes the version code to Gradle for the manifest only),
+    // so read it from the installed package like ApplicationLoader does.
+    private static int getVersionCode() {
+        try {
+            PackageInfo info = ApplicationLoader.applicationContext.getPackageManager().getPackageInfo(ApplicationLoader.applicationContext.getPackageName(), 0);
+            return info.versionCode;
+        } catch (Throwable e) {
+            return -1;
         }
     }
 
