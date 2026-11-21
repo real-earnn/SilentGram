@@ -128,6 +128,12 @@ public class LivePlayer implements NotificationCenter.NotificationCenterDelegate
 
     private int connectionState;
     private NativeInstance instance;
+    // SilentGram v2.0.24: RTC log path of this livestream, kept so the
+    // livestream facts can parse the SG-UDP markers at destroy time;
+    // and whether it ever reached ESTABLISHED (for the ended/failed
+    // word in the facts).
+    private String liveLogFilePath;
+    private boolean liveFactEstablished;
     private final HashMap<String, Integer> currentStreamRequestTimestamp = new HashMap<>();
 
     private TLRPC.GroupCallParticipant participant;
@@ -226,8 +232,13 @@ public class LivePlayer implements NotificationCenter.NotificationCenterDelegate
     private void init() {
         if (destroyed) return;
 
+        liveLogFilePath = VoIPHelper.getLogFilePath("live_" + inputCall.id);
+        // SilentGram v2.0.24: record the livestream attempt in the
+        // group-call facts (same keys as VoIPService's group facts, so
+        // the debug report shows the latest group-type attempt).
+        recordLiveCallAttempt();
         instance = NativeInstance.makeGroup(
-                VoIPHelper.getLogFilePath("live_" + inputCall.id),
+                liveLogFilePath,
                 0,
                 false,
                 SharedConfig.noiseSupression,
@@ -578,6 +589,13 @@ public class LivePlayer implements NotificationCenter.NotificationCenterDelegate
                 final boolean wasConnected = isConnected();
                 connectionState = state;
                 FileLog.d("[LivePlayer] connectionState = " + state);
+                // SilentGram v2.0.24: first ESTABLISHED — record it in
+                // the livestream facts (isConnected() is also true for
+                // WAIT_INIT, so only the ESTABLISHED transition counts).
+                if (state == Instance.STATE_ESTABLISHED && !liveFactEstablished) {
+                    liveFactEstablished = true;
+                    appendLiveCallFact(" established");
+                }
                 if (wasConnected != isConnected()) {
                     AndroidUtilities.runOnUIThread(() -> {
                         NotificationCenter.getInstance(currentAccount).postNotificationName(NotificationCenter.liveStoryUpdated, getCallId());
@@ -662,6 +680,32 @@ public class LivePlayer implements NotificationCenter.NotificationCenterDelegate
         );
     }
 
+    // SilentGram v2.0.24: livestream facts for the debug report —
+    // same keys as VoIPService's group facts (sg_last_group_call_facts),
+    // so the report shows the latest group-type attempt whatever the
+    // entry was. LivePlayer already delivers its join payload directly,
+    // so the attempt/established/outcome are what was missing.
+    private void recordLiveCallAttempt() {
+        try {
+            org.telegram.messenger.ApplicationLoader.applicationContext.getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE).edit()
+                    .putString("sg_last_group_call_facts", (outgoing ? "livestream-out" : "livestream") + " attempt")
+                    .putLong("sg_last_group_call_facts_ms", System.currentTimeMillis()).apply();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void appendLiveCallFact(String suffix) {
+        try {
+            android.content.SharedPreferences prefs = org.telegram.messenger.ApplicationLoader.applicationContext.getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
+            String facts = prefs.getString("sg_last_group_call_facts", null);
+            if (facts == null) {
+                return;
+            }
+            prefs.edit().putString("sg_last_group_call_facts", facts + suffix).apply();
+        } catch (Exception ignored) {
+        }
+    }
+
     public void destroy() {
         if (this.destroyed) return;
         this.destroyed = true;
@@ -687,6 +731,14 @@ public class LivePlayer implements NotificationCenter.NotificationCenterDelegate
             NativeInstance.destroyVideoCapturer(recordingVideoCapturer);
         }
         if (instance != null) {
+            // SilentGram v2.0.24: finalize the livestream facts BEFORE
+            // stopping the native instance — same SG-UDP outcome words
+            // as the 1:1 path, parsed out of this livestream's RTC log.
+            try {
+                String liveLog = liveLogFilePath != null ? VoIPService.getStringFromFile(liveLogFilePath) : null;
+                appendLiveCallFact(" \u00b7 " + VoIPService.parseSgUdpOutcome(liveLog) + (liveFactEstablished ? " ended" : " failed"));
+            } catch (Exception ignored) {
+            }
             Utilities.globalQueue.postRunnable(instance::stopGroup);
             srcs.clear();
             instance = null;

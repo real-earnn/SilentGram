@@ -1799,6 +1799,165 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 	}
 
 	private TLRPC.GroupCall lastGroupCallUpdate;
+	// SilentGram v2.0.24: guard so the join payload is delivered to
+	// native code exactly once per stream mode — the direct delivery
+	// from the join callback and the onGroupCallUpdated fallback must
+	// not double-fire; a mid-call stream-mode flip still re-delivers.
+	private boolean groupJoinPayloadDelivered;
+	private boolean groupJoinPayloadStreamMode;
+	// SilentGram v2.0.24: RTC log path per group instance (CAMERA /
+	// SCREEN), kept so the group-call facts can parse the SG-UDP
+	// markers out of the log at stop time. The local in
+	// createGroupInstance used to be lost.
+	private String[] lastGroupLogFilePath = new String[2];
+	// SilentGram v2.0.24: deliver the join-response payload the moment
+	// the join RPC returns. Waiting for a later TL_updateGroupCall push
+	// (onGroupCallUpdated) loses the payload: the create-flow push
+	// arrives before myParams exists (and is stored in
+	// lastGroupCallUpdate, never replayed), and alone in a call no
+	// further push ever arrives — ICE never starts, no UDP socket, no
+	// SG-UDP markers, UI stuck at STATE_WAIT_INIT. Mirrors
+	// startScreenCapture and LivePlayer, which already deliver directly.
+	// Runs on the UI thread (posted from the join callbacks, like the
+	// screen-share precedent). Also appends the server candidate list
+	// to the group-call facts so the debug report shows what the
+	// server offered.
+	private void deliverGroupJoinPayload() {
+		if (tgVoip[CAPTURE_DEVICE_CAMERA] == null || myParams == null) {
+			return;
+		}
+		try {
+			boolean stream = new JSONObject(myParams.data).optBoolean("stream");
+			if (groupJoinPayloadDelivered && stream == groupJoinPayloadStreamMode) {
+				return;
+			}
+			groupJoinPayloadDelivered = true;
+			groupJoinPayloadStreamMode = stream;
+			currentGroupModeStreaming = stream;
+			if (stream) {
+				tgVoip[CAPTURE_DEVICE_CAMERA].prepareForStream(groupCall != null && groupCall.call != null && groupCall.call.rtmp_stream);
+			} else {
+				logGroupJoinPayload(myParams.data);
+				tgVoip[CAPTURE_DEVICE_CAMERA].setJoinResponsePayload(myParams.data);
+			}
+			String candidates = groupCandidatesSummary(myParams.data);
+			if (candidates != null) {
+				appendGroupCallFact(" candidates=[" + candidates + "]");
+			}
+			dispatchStateChanged(STATE_WAIT_INIT_ACK);
+		} catch (Exception e) {
+			FileLog.e(e);
+		}
+	}
+
+	// SilentGram v2.0.24: group-call facts for the debug report. The
+	// 1:1 facts (sg_last_call_facts) can never record a group call:
+	// onTgVoipStop returns early unless it is a private call, so a
+	// group/link/livestream attempt left no trace at all. These facts
+	// live under their own keys (sg_last_group_call_facts[_ms]) in the
+	// same "silentgram" prefs and are built up in stages — attempt at
+	// createGroupInstance, candidates at join, "established" at first
+	// connect, UDP outcome + ended/failed at stop — so the next device
+	// test can tell, per attempt, whether the call went via the relay.
+	private String getGroupCallType() {
+		if (conference != null) {
+			return joinConference instanceof TLRPC.TL_inputGroupCallSlug ? "invite-link" : "conference";
+		}
+		return "group";
+	}
+
+	private void recordGroupCallAttempt() {
+		try {
+			ApplicationLoader.applicationContext.getSharedPreferences("silentgram", Context.MODE_PRIVATE).edit()
+					.putString("sg_last_group_call_facts", getGroupCallType() + " attempt")
+					.putLong("sg_last_group_call_facts_ms", System.currentTimeMillis()).apply();
+		} catch (Exception ignored) {
+		}
+	}
+
+	private void appendGroupCallFact(String suffix) {
+		try {
+			android.content.SharedPreferences prefs = ApplicationLoader.applicationContext.getSharedPreferences("silentgram", Context.MODE_PRIVATE);
+			String facts = prefs.getString("sg_last_group_call_facts", null);
+			if (facts == null) {
+				return;
+			}
+			prefs.edit().putString("sg_last_group_call_facts", facts + suffix).apply();
+		} catch (Exception ignored) {
+		}
+	}
+
+	// Compact "ip:port proto=x type=y;..." summary of the server's ICE
+	// candidates from a join payload. Null when the payload carries no
+	// candidates. Mirrors logGroupJoinPayload's loop (which logs the
+	// same line to the FileLog); no secrets — ufrag/pwd are not in it.
+	private static String groupCandidatesSummary(String payloadJson) {
+		try {
+			JSONObject object = new JSONObject(payloadJson);
+			JSONObject transport = object.optJSONObject("transport");
+			if (transport == null) {
+				return null;
+			}
+			JSONArray candidates = transport.optJSONArray("candidates");
+			if (candidates == null || candidates.length() == 0) {
+				return null;
+			}
+			StringBuilder summary = new StringBuilder();
+			for (int i = 0; i < candidates.length(); i++) {
+				JSONObject candidate = candidates.optJSONObject(i);
+				if (candidate == null) {
+					continue;
+				}
+				if (summary.length() > 0) {
+					summary.append(';');
+				}
+				summary.append(candidate.optString("ip")).append(':').append(candidate.optString("port"))
+					.append(" proto=").append(candidate.optString("protocol")).append(" type=").append(candidate.optString("type"))
+					.append(" tcptype=").append(candidate.optString("tcptype"));
+			}
+			return summary.length() > 0 ? summary.toString() : null;
+		} catch (Exception e) {
+			return null;
+		}
+	}
+
+	// SilentGram v2.0.24: parse the native SG-UDP markers out of a
+	// group RTC log into the same outcome words the 1:1 path appends
+	// (onTgVoipStop). Pure function, shared with LivePlayer. Markers
+	// are emitted by the tgcalls fork (Socks5UdpSocket.cpp, RTC_LOG).
+	public static String parseSgUdpOutcome(String debugLog) {
+		if (debugLog != null && debugLog.contains("SG-UDP first-media")) {
+			return "udp=ok bnd=161.118.196.94:18080 media=yes";
+		} else if (debugLog != null && debugLog.contains("SG-UDP associate=failed")) {
+			String phase = "handshake";
+			String err = "";
+			int failedAt = debugLog.indexOf("SG-UDP associate=failed");
+			int lineEnd = debugLog.indexOf('\n', failedAt);
+			String markerLine = lineEnd >= 0 ? debugLog.substring(failedAt, lineEnd) : debugLog.substring(failedAt);
+			int phaseAt = markerLine.indexOf("phase=");
+			if (phaseAt >= 0) {
+				int end = phaseAt + 6;
+				while (end < markerLine.length() && Character.isLetter(markerLine.charAt(end))) {
+					end++;
+				}
+				phase = markerLine.substring(phaseAt + 6, end);
+			}
+			int errAt = markerLine.indexOf("error=");
+			if (errAt >= 0) {
+				int end = errAt + 6;
+				while (end < markerLine.length() && (Character.isDigit(markerLine.charAt(end)) || markerLine.charAt(end) == '-')) {
+					end++;
+				}
+				err = markerLine.substring(errAt + 6, end);
+			}
+			return "udp=failed phase=" + phase + " err=" + err;
+		} else if (debugLog != null && debugLog.contains("SG-UDP associate=ok")) {
+			return "udp=ok bnd=161.118.196.94:18080 media=no";
+		} else {
+			return "udp=not-tried";
+		}
+	}
+
 	public void onGroupCallUpdated(TLRPC.GroupCall call) {
 		if (groupCall == null || groupCall.call.id != call.id) {
 			lastGroupCallUpdate = call;
@@ -1829,18 +1988,11 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 			if (playedConnectedSound && newModeStreaming != currentGroupModeStreaming) {
 				switchingStream = true;
 			}
-			currentGroupModeStreaming = newModeStreaming;
-			try {
-				if (newModeStreaming) {
-					tgVoip[CAPTURE_DEVICE_CAMERA].prepareForStream(groupCall.call != null && groupCall.call.rtmp_stream);
-				} else {
-					logGroupJoinPayload(myParams.data);
-					tgVoip[CAPTURE_DEVICE_CAMERA].setJoinResponsePayload(myParams.data);
-				}
-				dispatchStateChanged(STATE_WAIT_INIT_ACK);
-			} catch (Exception e) {
-				FileLog.e(e);
-			}
+			// v2.0.24: one delivery site — the join callbacks deliver
+			// directly now; this stays as the fallback for mid-call
+			// mode flips. The helper no-ops on a repeat of the same
+			// mode, so a late push cannot double-deliver.
+			deliverGroupJoinPayload();
 		}
 	}
 
@@ -2259,6 +2411,10 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 							}
 						}
 					}
+					// SilentGram v2.0.24: deliver the join payload now,
+					// directly — do not wait for a later
+					// TL_updateGroupCall push (see deliverGroupJoinPayload).
+					AndroidUtilities.runOnUIThread(this::deliverGroupJoinPayload);
 					MessagesController.getInstance(currentAccount).processUpdates(updates, false);
 					AndroidUtilities.runOnUIThread(() -> groupCall.loadMembers(create));
 					startGroupCheckShortpoll();
@@ -2574,6 +2730,10 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 							}
 						}
 
+						// SilentGram v2.0.24: deliver the join payload now,
+						// directly — do not wait for a later
+						// TL_updateGroupCall push (see deliverGroupJoinPayload).
+						AndroidUtilities.runOnUIThread(this::deliverGroupJoinPayload);
 						MessagesController.getInstance(currentAccount).processUpdates(updates, false);
 						AndroidUtilities.runOnUIThread(() -> {
 							if (conference == null) return;
@@ -3106,6 +3266,11 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 		cancelGroupCheckShortPoll();
 		if (type == CAPTURE_DEVICE_CAMERA) {
 			wasConnected = false;
+			// SilentGram v2.0.24: fresh instance, fresh join — the
+			// payload has not been delivered yet (reset here, not in
+			// the join callback, so a re-created instance re-delivers).
+			groupJoinPayloadDelivered = false;
+			recordGroupCallAttempt();
 		} else if (!wasConnected) {
 			reconnectScreenCapture = true;
 			return;
@@ -3125,6 +3290,7 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 			}
 			final boolean[] first = new boolean[] { isFirst };
 			final String logFilePath = BuildVars.DEBUG_VERSION ? VoIPHelper.getLogFilePath("voip_" + type + "_" + logId) : VoIPHelper.getLogFilePath(logId, false);
+			lastGroupLogFilePath[type] = logFilePath;
 			tgVoip[type] = NativeInstance.makeGroup(logFilePath, captureDevice[type], type == CAPTURE_DEVICE_SCREEN, type == CAPTURE_DEVICE_CAMERA && SharedConfig.noiseSupression, (ssrc, json) -> {
 				if (type == CAPTURE_DEVICE_CAMERA) {
 					if (conference != null) {
@@ -3276,6 +3442,19 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 		}
 		if (type == CAPTURE_DEVICE_CAMERA) {
 			dispatchStateChanged(STATE_WAIT_INIT);
+			// SilentGram v2.0.24: replay a join update that arrived
+			// before myParams existed (onGroupCallUpdated stored it in
+			// lastGroupCallUpdate and never replayed it). On a
+			// re-created instance the payload is already known, so
+			// deliver it instead of waiting for another push that may
+			// never come. The helper no-ops if the payload was already
+			// delivered for this mode.
+			if (lastGroupCallUpdate != null && groupCall != null
+					&& groupCall.call != null && lastGroupCallUpdate.id == groupCall.call.id) {
+				TLRPC.GroupCall stashed = lastGroupCallUpdate;
+				lastGroupCallUpdate = null;
+				onGroupCallUpdated(stashed);
+			}
 		}
 	}
 
@@ -3513,6 +3692,11 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 			}
 			if (!wasConnected) {
 				wasConnected = true;
+				// SilentGram v2.0.24: first connect — record it in the
+				// group-call facts (the debug report's proof the call
+				// reached ESTABLISHED; the UDP outcome is appended at
+				// stop time from the RTC log).
+				appendGroupCallFact(" established");
 				if (reconnectScreenCapture) {
 					createGroupInstance(CAPTURE_DEVICE_SCREEN, false, true);
 					reconnectScreenCapture = false;
@@ -4433,6 +4617,17 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 			StatsController.getInstance(currentAccount).incrementTotalCallsTime(getStatsNetworkType(), (int) (getCallDuration() / 1000) % 5);
 			onTgVoipPreStop();
 			if (tgVoip[CAPTURE_DEVICE_CAMERA].isGroup()) {
+				// SilentGram v2.0.24: finalize the group-call facts
+				// BEFORE stopping the native instance — parse the
+				// SG-UDP markers out of the RTC log (same words as the
+				// 1:1 path) and note whether the call ever established.
+				// stopGroup is async and returns no state, so this is
+				// the only place the outcome can be recorded.
+				try {
+					String groupLog = lastGroupLogFilePath[CAPTURE_DEVICE_CAMERA] != null ? getStringFromFile(lastGroupLogFilePath[CAPTURE_DEVICE_CAMERA]) : null;
+					appendGroupCallFact(" \u00b7 " + parseSgUdpOutcome(groupLog) + (wasConnected ? " ended" : " failed"));
+				} catch (Exception ignored) {
+				}
 				NativeInstance instance = tgVoip[CAPTURE_DEVICE_CAMERA];
 				Utilities.globalQueue.postRunnable(instance::stopGroup);
 				for (HashMap.Entry<String, Integer> entry : currentStreamRequestTimestamp.entrySet()) {

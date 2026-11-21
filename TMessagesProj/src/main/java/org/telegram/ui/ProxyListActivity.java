@@ -141,6 +141,28 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
         }
     }
 
+    // SilentGram v2.0.24: the last group-type call's facts (group /
+    // invite-link / conference / livestream), stashed by VoIPService
+    // and LivePlayer under their own keys. The 1:1 facts above can
+    // never record a group call (onTgVoipStop returns early unless it
+    // is a private call), so without this the debug report stayed
+    // silent about every group attempt. Public so the debug report
+    // reuses the same mechanism (and the same keys) instead of
+    // duplicating it.
+    public static String getLastGroupCallFactsText() {
+        try {
+            android.content.SharedPreferences prefs = org.telegram.messenger.ApplicationLoader.applicationContext.getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
+            String facts = prefs.getString("sg_last_group_call_facts", null);
+            if (facts == null) {
+                return null;
+            }
+            long ms = prefs.getLong("sg_last_group_call_facts_ms", 0);
+            return "Last group call: " + facts + (ms > 0 ? " · " + formatCallRelayTime(ms) : "");
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /** Last known-good call-relay probe result (static: survives page opens), or null if never probed. */
     public static String getLastCallRelayStatusText() {
         return lastCallRelayOkText;

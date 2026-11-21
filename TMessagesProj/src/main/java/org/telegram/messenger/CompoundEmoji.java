@@ -177,6 +177,9 @@ public class CompoundEmoji {
         }
 
         public Rect getDrawRect() {
+            // v2.0.24: refresh the (density-dependent) emoji sizes first
+            // — see Emoji.refreshImgSizes().
+            Emoji.refreshImgSizes();
             Rect original = getBounds();
             int cX = original.centerX(), cY = original.centerY();
             rect.left = cX - (fullSize ? Emoji.bigImgSize : Emoji.drawImgSize) / 2;

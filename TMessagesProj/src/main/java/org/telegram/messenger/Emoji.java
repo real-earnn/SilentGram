@@ -101,6 +101,19 @@ public class Emoji {
         placeholderPaint.setColor(0x00000000);
     }
 
+    /** v2.0.24: drawImgSize/bigImgSize were frozen at class-load
+     * (phone density) — the static initializer runs once while the
+     * main activity is alive, so drawables sized from them rendered
+     * ~2.5x too big inside the floating window's virtual display
+     * (different density). Recompute from the CURRENT density before
+     * any use; in fullscreen the values are identical to the frozen
+     * ones, so nothing changes there. Called from getEmojiDrawable(),
+     * getEmojiBigDrawable() and both getDrawRect() paths. */
+    public static void refreshImgSizes() {
+        drawImgSize = AndroidUtilities.dp(20);
+        bigImgSize = AndroidUtilities.dp(AndroidUtilities.isTablet() ? 40 : 34);
+    }
+
     public static void preloadEmoji(CharSequence code) {
         final DrawableInfo info = getDrawableInfo(code);
         if (info != null) {
@@ -206,6 +219,7 @@ public class Emoji {
     }
 
     public static EmojiDrawable getEmojiDrawable(CharSequence code) {
+        refreshImgSizes();
         DrawableInfo info = getDrawableInfo(code);
         if (info == null) {
             if (code != null) {
@@ -257,6 +271,7 @@ public class Emoji {
     }
 
     public static Drawable getEmojiBigDrawable(String code) {
+        refreshImgSizes();
         EmojiDrawable ed = null;
         CompoundEmoji.CompoundEmojiDrawable compoundEmojiDrawable = CompoundEmoji.getCompoundEmojiDrawable(code);
         if (compoundEmojiDrawable != null) {
@@ -306,6 +321,7 @@ public class Emoji {
         }
 
         public Rect getDrawRect() {
+            refreshImgSizes();
             Rect original = getBounds();
             int cX = original.centerX(), cY = original.centerY();
             rect.left = cX - (fullSize ? bigImgSize : drawImgSize) / 2;

@@ -232,6 +232,11 @@ public class SilentDebugReport {
             JSONObject calls = new JSONObject();
             String facts = ProxyListActivity.getLastCallFactsText();
             calls.put("lastCallFacts", facts != null ? cap(facts, 2000) : "no call yet");
+            // SilentGram v2.0.24: group-type attempts (group /
+            // invite-link / conference / livestream) have their own
+            // facts line — the 1:1 line above never recorded them.
+            String groupFacts = ProxyListActivity.getLastGroupCallFactsText();
+            calls.put("lastGroupCallFacts", groupFacts != null ? cap(groupFacts, 2000) : "no group call yet");
             calls.put("relayHost", VoIPService.SILENT_CALL_RELAY_HOST);
             calls.put("relayPort", VoIPService.SILENT_CALL_RELAY_PORT);
             String relayStatus = ProxyListActivity.getLastCallRelayStatusText();

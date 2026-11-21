@@ -138,7 +138,12 @@ public class TableView extends TableLayout implements Theme.Colorable {
         if (copyButton != null) {
             ImageView copyView = new ImageView(getContext());
             copyView.setImageResource(R.drawable.msg_copy);
-            copyView.setScaleType(ImageView.ScaleType.CENTER);
+            // v2.0.24: CENTER never scales — a drawable resolved at phone
+            // density overflowed the VD-sized box inside the floating
+            // window. CENTER_INSIDE scales it down into the box; a
+            // correctly-sized drawable is unaffected.
+            copyView.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
+            copyView.setAdjustViewBounds(true);
             ThemeBind.colorFilter(copyView, Theme.key_windowBackgroundWhiteBlueIcon, resourcesProvider, PorterDuff.Mode.SRC_IN);
             copyView.setOnClickListener(v -> {
                 AndroidUtilities.addToClipboard(text);

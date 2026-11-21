@@ -172,12 +172,25 @@ public class TimerDrawable extends Drawable {
                 }
             }
             if (isDialog) {
-                currentTtlIcon.setBounds(getBounds().left, getBounds().top, getBounds().left + currentTtlIcon.getIntrinsicWidth(),  getBounds().top + currentTtlIcon.getIntrinsicHeight());
+                // v2.0.24: never bound the inner icon to its intrinsic
+                // size — the icon is loaded from the application context
+                // (phone density) while this drawable is drawn inside
+                // the floating window's virtual display (different
+                // density), so it rendered ~2.5x too big. Bound it to
+                // the dp box the caller assigned (DialogCell sets
+                // dp(22)); fullscreen is identical (dp(22) at phone
+                // density == the xhdpi intrinsic size).
+                int iconSize = AndroidUtilities.dp(22);
+                currentTtlIcon.setBounds(getBounds().left, getBounds().top, getBounds().left + iconSize, getBounds().top + iconSize);
                 currentTtlIcon.draw(canvas);
             } else {
+                // v2.0.24: same intrinsic-size fix as the dialog branch
+                // above — msg_mini_autodelete is a 21dp icon; bound it
+                // to dp(21) instead of its phone-density intrinsic size.
+                int iconSize = AndroidUtilities.dp(21);
                 AndroidUtilities.rectTmp2.set((int) (getBounds().centerX() - AndroidUtilities.dp(10.5f)), (int) (getBounds().centerY() - AndroidUtilities.dp(10.5f)),
-                        (int) (getBounds().centerX() - AndroidUtilities.dp(10.5f)) + currentTtlIcon.getIntrinsicWidth(),
-                        (int) (getBounds().centerY() - AndroidUtilities.dp(10.5f)) + currentTtlIcon.getIntrinsicHeight());
+                        (int) (getBounds().centerX() - AndroidUtilities.dp(10.5f)) + iconSize,
+                        (int) (getBounds().centerY() - AndroidUtilities.dp(10.5f)) + iconSize);
                 currentTtlIcon.setBounds(AndroidUtilities.rectTmp2);
                 currentTtlIcon.draw(canvas);
             }

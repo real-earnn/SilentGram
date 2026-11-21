@@ -59,7 +59,24 @@ public class ColoredImageSpan extends ReplacementSpan {
     public ColoredImageSpan(Drawable drawable, int verticalAlignment) {
         this.drawable = drawable;
         if (drawable != null) {
-            drawable.setBounds(0, 0, drawable.getIntrinsicWidth(), drawable.getIntrinsicHeight());
+            // v2.0.24: the drawable is usually loaded from the
+            // application context (phone density) while this span may be
+            // drawn inside the floating window's virtual display
+            // (different density) — intrinsic size is phone pixels, so
+            // it rendered ~2.5x too big there. Re-bound it to the
+            // CURRENT density: in fullscreen the factor is 1, so
+            // nothing changes there.
+            float scale = 1f;
+            try {
+                float appDensity = ApplicationLoader.applicationContext.getResources().getDisplayMetrics().density;
+                if (appDensity > 0) {
+                    scale = AndroidUtilities.density / appDensity;
+                }
+            } catch (Exception ignored) {
+            }
+            int w = Math.max(1, Math.round(drawable.getIntrinsicWidth() * scale));
+            int h = Math.max(1, Math.round(drawable.getIntrinsicHeight() * scale));
+            drawable.setBounds(0, 0, w, h);
         }
         this.verticalAlignment = verticalAlignment;
     }
@@ -121,7 +138,9 @@ public class ColoredImageSpan extends ReplacementSpan {
         }
         if (sizeWidth != 0)
             return (int) (Math.abs(scaleX) * sizeWidth);
-        return (int) (Math.abs(scaleX) * Math.abs(spaceScaleX) * (size != 0 ? size : drawable.getIntrinsicWidth()));
+        // v2.0.24: reserve the (density-scaled) bounds width, not the
+        // phone-density intrinsic width — see the constructor.
+        return (int) (Math.abs(scaleX) * Math.abs(spaceScaleX) * (size != 0 ? size : drawable.getBounds().width()));
     }
 
     @Override
@@ -157,7 +176,9 @@ public class ColoredImageSpan extends ReplacementSpan {
             transY = top + (bottom - top) / 2 - (drawable != null ? drawable.getBounds().height() / 2 : 0);
         } else if (verticalAlignment == ALIGN_DEFAULT) {
             int lineHeight = bottom - top;
-            int drawableHeight = size != 0 ? size : drawable.getIntrinsicHeight();
+            // v2.0.24: use the (density-scaled) bounds height, not the
+            // phone-density intrinsic height — see the constructor.
+            int drawableHeight = size != 0 ? size : drawable.getBounds().height();
             int padding = (lineHeight - drawableHeight) / 2;
             transY = top + padding + AndroidUtilities.dp(topOffset);
         }

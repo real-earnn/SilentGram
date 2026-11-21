@@ -6,7 +6,13 @@ import android.content.Intent;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
+import android.view.View;
 
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowInsetsCompat;
+
+import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.SilentFloatingWindow;
 
@@ -27,10 +33,66 @@ import org.telegram.messenger.SilentFloatingWindow;
  */
 public class SilentFloatingActivity extends LaunchActivity {
 
+    // v2.0.24: set when this activity is paused/stopped (Home), cleared
+    // on resume after the re-kick — the floating manager uses it to know
+    // a tap must wake the activity before the touch is forwarded.
+    private boolean wasPausedOrStopped;
+
+    /** Whether this activity was paused/stopped (e.g. by Home) and has
+     * not resumed since — the floating manager re-kicks it on the next
+     * tap instead of forwarding the touch into a stopped window. */
+    public boolean silentWasPausedOrStopped() {
+        return wasPausedOrStopped;
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         SilentFloatingWindow.getInstance().setFloatingActivity(this);
+        // v2.0.24: the virtual display has no status bar and no
+        // navigation bar, so nothing may reserve space for them.
+        // AndroidUtilities.statusBarHeight is a GLOBAL static written
+        // only by DrawerLayoutContainer from the last insets dispatch
+        // — the main activity's phone value would otherwise leak in
+        // here, and ActionBar adds it on top of its own height, so the
+        // content starts below a big empty strip and loses that height.
+        // Zero it, and strip the system-bars top/bottom from the
+        // insets this window delivers, so no later dispatch can
+        // re-introduce the gap. Scoped to this activity/window only:
+        // on expand the re-launched main activity re-writes both
+        // globals from the real display's insets on its first dispatch.
+        AndroidUtilities.statusBarHeight = 0;
+        AndroidUtilities.navigationBarHeight = 0;
+        ViewCompat.setOnApplyWindowInsetsListener(getWindow().getDecorView(), (v, insets) -> {
+            Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            Insets strippedBars = Insets.of(bars.left, 0, bars.right, 0);
+            WindowInsetsCompat stripped = new WindowInsetsCompat.Builder(insets)
+                    .setInsets(WindowInsetsCompat.Type.systemBars(), strippedBars)
+                    .setInsetsIgnoringVisibility(WindowInsetsCompat.Type.systemBars(), strippedBars)
+                    .build();
+            return stripped;
+        });
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // v2.0.24: after Home this activity is stopped and nothing
+        // resumes it — the first resize was the only thing that
+        // re-kicked drawing. Re-kick on resume instead, so the picture
+        // comes back without the user having to resize. The flag is
+        // false on the initial launch, so this fires only after a real
+        // pause/stop.
+        if (wasPausedOrStopped) {
+            wasPausedOrStopped = false;
+            SilentFloatingWindow.getInstance().onFloatingActivityResumed();
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        wasPausedOrStopped = true;
+        super.onStop();
     }
 
     @Override
@@ -42,6 +104,9 @@ public class SilentFloatingActivity extends LaunchActivity {
 
     @Override
     protected void onPause() {
+        // v2.0.24: remember the pause so onResume() can re-kick the
+        // activity (see onResume above).
+        wasPausedOrStopped = true;
         // v2.0.22: Home pauses this activity — suppress fragment
         // pause-dismissals only for the duration of super.onPause()
         // (LaunchActivity.onPause runs the fragment onPause chain

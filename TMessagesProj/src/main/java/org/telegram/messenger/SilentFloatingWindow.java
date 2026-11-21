@@ -269,6 +269,10 @@ public class SilentFloatingWindow {
      * must be recoverable, so recovery may run again 10s after the last
      * attempt instead of once per start(). */
     private long lastFrameRecoveryAtMs;
+    /** v2.0.24: last time onFloatingActivityResumed() kicked a re-launch
+     * — 2s cooldown so a tap storm while the activity is still coming
+     * back cannot spam startActivity. */
+    private long lastResumeKickMs;
     /** v2.0.22: true while the floating activity's onPause() is running.
      * Fragment pause-dismissals (popups/dialogs) are suppressed only in
      * that window — Home pauses the floating activity and the popup on
@@ -821,6 +825,45 @@ public class SilentFloatingWindow {
                 FileLog.e(e);
             }
         }
+    }
+
+    /** v2.0.24: re-kick the floating activity after Home/background.
+     * Home stops the activity and nothing in the system resumes it —
+     * touches are forwarded straight into the stopped decor and
+     * swallowed, and the compositor pushes blank frames, so the window
+     * stays black until the first resize (the only path that forced a
+     * new traversal). This re-delivers the launch intent to the
+     * EXISTING singleTask (onNewIntent, same chat the user is on — the
+     * dialog id is re-read from the live activity, so nothing yanks
+     * the user elsewhere) and brings the task to the front on the
+     * virtual display — the system-correct resume, reusing the proven
+     * launchFloatingActivity() path. Called from
+     * SilentFloatingActivity.onResume() (when the system does resume
+     * it) and from the first tap after Home (forwardTouch, when it
+     * does not). A 2s cooldown guards against tap storms while the
+     * activity is still coming back; the frame check 1.5s later
+     * verifies the picture returned (runFrameCheck rebinds after 2
+     * consecutive failures, so a kick that did not take is caught). */
+    public void onFloatingActivityResumed() {
+        if (!active || minimized || floatingActivity == null || floatingActivity.isFinishing()) {
+            return;
+        }
+        long now = SystemClock.uptimeMillis();
+        if (now - lastResumeKickMs < 2000) {
+            return;
+        }
+        lastResumeKickMs = now;
+        launchFloatingActivity(ApplicationLoader.applicationContext);
+        try {
+            View decor = floatingActivity.getWindow() != null ? floatingActivity.getWindow().getDecorView() : null;
+            if (decor != null) {
+                decor.requestLayout();
+                decor.invalidate();
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        scheduleFrameCheck(1500);
     }
 
     /**
@@ -1573,6 +1616,18 @@ public class SilentFloatingWindow {
             int action = event.getActionMasked();
             if (action == MotionEvent.ACTION_DOWN) {
                 touchTarget = null;
+                // v2.0.24: after Home the activity is stopped and a tap
+                // forwarded into it is swallowed — wake it first (the
+                // re-launch brings the task to the front; this tap may
+                // still be swallowed, the next one lands). Cooldown in
+                // onFloatingActivityResumed() guards tap storms.
+                try {
+                    if (fa.silentWasPausedOrStopped()) {
+                        onFloatingActivityResumed();
+                    }
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
             }
             View target = touchTarget;
             if (target != null && !target.isAttachedToWindow()) {
