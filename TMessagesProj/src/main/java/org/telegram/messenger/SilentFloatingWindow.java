@@ -57,9 +57,13 @@ import org.telegram.utils.settings.SharedSettings;
  * - Host: SilentFloatingActivity (a LaunchActivity subclass — LaunchActivity
  *   itself is singleTask, so it can never be the second instance). It is
  *   launched with ActivityOptions.setLaunchDisplayId(displayId).
- * - The activity lays out at full-screen size on the virtual display; the
- *   TextureView scales it down to the window, so the whole app is visible
- *   in miniature, proportional — the layout fits the window by construction.
+ * - The activity lays out AT THE WINDOW'S content size on the virtual
+ *   display; the TextureView shows it 1:1, so the picture is aspect-correct
+ *   and tracks window resizes (resizeDisplayToWindow). This is required,
+ *   not cosmetic: TextureView overwrites the shared SurfaceTexture's
+ *   buffer size with its own view size (getTextureLayer/onSizeChanged),
+ *   so a full-screen display and a window-size texture disagree and no
+ *   frame ever reaches the TextureView — a black window.
  * - The main LaunchActivity finishes when the floating one starts
  *   (Telegram's own closeOtherAppActivities rule); the connection is
  *   process-level and stays alive.
@@ -108,10 +112,16 @@ public class SilentFloatingWindow {
     private int windowWidthPx;
     private int windowHeightPx;
     private int barHeightPx;
+    /** Current virtual-display size = the window's content size (window
+     * minus the top bar). The TextureView shows it 1:1; forwardTouch maps
+     * window coordinates back with these values. */
+    private int displayWidthPx;
+    private int displayHeightPx;
 
     private long openDialogId;
     private boolean openDialogIsUser;
     private Runnable launchWatchdog;
+    private Runnable frameCheck;
     private boolean contentPinching;
     /** Why the last start() failed (null = no failure recorded). Shown on
      * screen when the toggle is ON but the floating window could not start,
@@ -218,11 +228,21 @@ public class SilentFloatingWindow {
 
             // Surface + virtual display FIRST (synchronous): the TextureView
             // is handed this texture, so no async surface race with Home.
+            // The display is created AT THE WINDOW'S content size (not the
+            // full screen): TextureView overwrites the shared
+            // SurfaceTexture's buffer size with its own view size
+            // (getTextureLayer/onSizeChanged), so a full-size display and a
+            // window-size texture disagree and no frame ever reaches the
+            // TextureView — a black window. With the display sized to the
+            // window, both sides agree and the content is aspect-correct
+            // 1:1; resizeDisplayToWindow() keeps it in sync on resizes.
+            displayWidthPx = windowWidthPx;
+            displayHeightPx = windowHeightPx - barHeightPx;
             surfaceTexture = new SurfaceTexture(0);
-            surfaceTexture.setDefaultBufferSize(fullWidth, fullHeight);
+            surfaceTexture.setDefaultBufferSize(displayWidthPx, displayHeightPx);
             surface = new Surface(surfaceTexture);
             virtualDisplay = displayManager.createVirtualDisplay(
-                    "SilentGram Floating", fullWidth, fullHeight, densityDpi, surface,
+                    "SilentGram Floating", displayWidthPx, displayHeightPx, densityDpi, surface,
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);
             if (virtualDisplay == null || virtualDisplay.getDisplay() == null) {
                 lastStartError = "virtual display failed";
@@ -251,6 +271,41 @@ public class SilentFloatingWindow {
                 }
             };
             AndroidUtilities.runOnUIThread(launchWatchdog, 5000);
+
+            // Frame check: if the virtual display never delivers a frame,
+            // the window stays black. Sample the TextureView once — a live
+            // app always has non-black pixels (app bar, text, avatars).
+            // Names the failure instead of leaving a silent black window;
+            // it tears nothing down.
+            frameCheck = () -> {
+                frameCheck = null;
+                if (!active || textureView == null || floatingActivity == null) {
+                    return;
+                }
+                try {
+                    android.graphics.Bitmap bmp = textureView.getBitmap(32, 32);
+                    boolean anyContent = false;
+                    if (bmp != null) {
+                        for (int y = 0; y < bmp.getHeight() && !anyContent; y += 2) {
+                            for (int x = 0; x < bmp.getWidth(); x += 2) {
+                                if ((bmp.getPixel(x, y) & 0x00FFFFFF) != 0) {
+                                    anyContent = true;
+                                    break;
+                                }
+                            }
+                        }
+                        bmp.recycle();
+                    }
+                    if (!anyContent) {
+                        lastStartError = "floating content black (no frames)";
+                        FileLog.e("SilentFloatingWindow: no frames after 5s, content is black");
+                        SilentToast.show(ApplicationLoader.applicationContext, "Floating window is black — no picture from the app yet", android.widget.Toast.LENGTH_LONG);
+                    }
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+            };
+            AndroidUtilities.runOnUIThread(frameCheck, 5000);
             return true;
         } catch (Exception e) {
             lastStartError = "error: " + String.valueOf(e.getMessage());
@@ -274,6 +329,33 @@ public class SilentFloatingWindow {
         ActivityOptions options = ActivityOptions.makeBasic();
         options.setLaunchDisplayId(virtualDisplay.getDisplay().getDisplayId());
         ctx.startActivity(intent, options.toBundle());
+    }
+
+    /** Keep the virtual display (and its buffers) at the window's current
+     * content size, so the picture stays aspect-correct as the window is
+     * resized. Called when a resize gesture ENDS (not on every move, so a
+     * pinch does not fire a config change per frame). On API < 26 the
+     * display cannot be resized in place, so the content keeps its old
+     * size until the window is closed and reopened. */
+    private void resizeDisplayToWindow() {
+        if (virtualDisplay == null || surfaceTexture == null) {
+            return;
+        }
+        int w = windowWidthPx;
+        int h = windowHeightPx - barHeightPx;
+        if (w <= 0 || h <= 0 || (w == displayWidthPx && h == displayHeightPx)) {
+            return;
+        }
+        displayWidthPx = w;
+        displayHeightPx = h;
+        try {
+            surfaceTexture.setDefaultBufferSize(displayWidthPx, displayHeightPx);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                virtualDisplay.resize(displayWidthPx, displayHeightPx, densityDpi);
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
     }
 
     /** Back to the fullscreen app, reopening the same chat when known. */
@@ -370,6 +452,10 @@ public class SilentFloatingWindow {
         if (launchWatchdog != null) {
             AndroidUtilities.cancelRunOnUIThread(launchWatchdog);
             launchWatchdog = null;
+        }
+        if (frameCheck != null) {
+            AndroidUtilities.cancelRunOnUIThread(frameCheck);
+            frameCheck = null;
         }
         active = false;
         try {
@@ -545,10 +631,12 @@ public class SilentFloatingWindow {
         if (decor == null || textureView.getWidth() <= 0 || textureView.getHeight() <= 0) {
             return false;
         }
-        // The TextureView shows the whole virtual display scaled down; the
-        // transform maps window coordinates back to full-display coordinates.
-        float scaleX = fullWidth / (float) textureView.getWidth();
-        float scaleY = fullHeight / (float) textureView.getHeight();
+        // The TextureView shows the virtual display 1:1 at the window's
+        // content size; the transform maps window coordinates back to
+        // display coordinates (scale is ~1, recomputed from the current
+        // display size so it stays right after a resize).
+        float scaleX = displayWidthPx / (float) textureView.getWidth();
+        float scaleY = displayHeightPx / (float) textureView.getHeight();
         MotionEvent copy = MotionEvent.obtain(event);
         Matrix matrix = new Matrix();
         matrix.setScale(scaleX, scaleY);
@@ -586,6 +674,7 @@ public class SilentFloatingWindow {
                     public void onScaleEnd(ScaleGestureDetector detector) {
                         contentPinching = false;
                         persistGeometry();
+                        resizeDisplayToWindow();
                     }
                 });
 
@@ -714,6 +803,7 @@ public class SilentFloatingWindow {
             windowParams.x = clampX(windowParams.x);
             windowParams.y = clampY(windowParams.y);
             updateLayout();
+            resizeDisplayToWindow();
         } catch (Exception e) {
             FileLog.e(e);
         }
@@ -745,6 +835,7 @@ public class SilentFloatingWindow {
                     public void onScaleEnd(ScaleGestureDetector detector) {
                         pinching = false;
                         persistGeometry();
+                        resizeDisplayToWindow();
                     }
                 });
 
@@ -821,6 +912,7 @@ public class SilentFloatingWindow {
             }
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
                 persistGeometry();
+                resizeDisplayToWindow();
                 return true;
             }
             return true;

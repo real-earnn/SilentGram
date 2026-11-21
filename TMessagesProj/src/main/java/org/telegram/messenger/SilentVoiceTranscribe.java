@@ -33,10 +33,14 @@ import java.util.ArrayList;
  * tap Translate and the translation appears right below, in that language.
  * Translation reuses SilentTranslate (Google Translate endpoint, no key).
  *
- * Premium gating mirrors TranscribeButton: Premium users and free-in-chat
- * transcriptions go straight through; trial users go through while they
- * have trials left; anyone else sees the lock message in the popup instead
- * of a request. No trial/cooldown logic is bypassed.
+ * Premium gating mirrors TranscribeButton EXACTLY (onTap + transcribePressed):
+ * Premium users and free-in-chat transcriptions go straight through; trial
+ * users go through while they have trials left; a message that was already
+ * transcribed shows its stored text without a new request; anyone else sees
+ * the lock message in the popup instead of a request. Every check and
+ * request uses the message's own account (messageObject.currentAccount),
+ * never a passed-in account. No trial/cooldown logic is bypassed, and no
+ * Premium status is faked — the server still enforces Premium.
  */
 public class SilentVoiceTranscribe {
 
@@ -47,6 +51,9 @@ public class SilentVoiceTranscribe {
         if (context == null) {
             return;
         }
+        // The message's own account (TranscribeButton uses
+        // messageObject.currentAccount for every check and request).
+        final int acc = msg != null ? msg.currentAccount : account;
 
         // The popup opens FIRST, before any check or request, so a tap can
         // never silently do nothing. Every failure below is shown in it.
@@ -117,7 +124,7 @@ public class SilentVoiceTranscribe {
                 translationView.setVisibility(View.VISIBLE);
                 translationView.setText(LocaleController.getString(R.string.SilentTranslating));
                 String tl = languages[targetIdx[0]][0];
-                SilentTranslate.translateText(transcript[0], "auto", tl, translated -> AndroidUtilities.runOnUIThread(() -> {
+                SilentTranslate.translateText(transcript[0], "auto", tl, acc, translated -> AndroidUtilities.runOnUIThread(() -> {
                     if (!dialog.isShowing()) {
                         return;
                     }
@@ -138,13 +145,47 @@ public class SilentVoiceTranscribe {
             resultView.setText(LocaleController.getString(R.string.SilentTranscribeNotSent));
             return;
         }
-        if (!UserConfig.getInstance(account).isPremium()
+        // Telegram's own button shows a cached transcription without any
+        // server request (TranscribeButton.onTap allows the tap when
+        // voiceTranscription is non-empty; transcribePressed shows the
+        // stored final text). Without this, a message the user already
+        // transcribed shows our lock instead of its text.
+        if (!TextUtils.isEmpty(msg.messageOwner.voiceTranscription)) {
+            transcript[0] = msg.messageOwner.voiceTranscription;
+            resultView.setText(msg.messageOwner.voiceTranscription);
+            if (dialog.getButton(DialogInterface.BUTTON_POSITIVE) != null) {
+                dialog.getButton(DialogInterface.BUTTON_POSITIVE).setEnabled(true);
+            }
+            if (msg.messageOwner.voiceTranscriptionFinal) {
+                TranscribeButton.openVideoTranscription(msg);
+                msg.messageOwner.voiceTranscriptionOpen = true;
+                try {
+                    TLRPC.InputPeer peer = MessagesController.getInstance(acc).getInputPeer(msg.messageOwner.peer_id);
+                    if (peer != null) {
+                        long dialogId = DialogObject.getPeerDialogId(peer);
+                        MessagesStorage.getInstance(acc).updateMessageVoiceTranscriptionOpen(dialogId, msg.messageOwner.id, msg.messageOwner);
+                        NotificationCenter.getInstance(acc).postNotificationName(NotificationCenter.voiceTranscriptionUpdate, msg, null, null, (Boolean) true, (Boolean) true);
+                    }
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+                return;
+            }
+            // Non-final cached text: shown above, but still re-request so it
+            // can finish — the native button does the same.
+            requestTranscription(context, acc, msg, dialog, resultView, transcript, 1);
+            return;
+        }
+        // Eligibility is TranscribeButton.onTap exactly: Premium, free in
+        // this chat, or a trial left (a cached transcription is handled
+        // above). Anyone else sees the lock message in the popup.
+        if (!UserConfig.getInstance(acc).isPremium()
                 && !TranscribeButton.isFreeTranscribeInChat(msg)
                 && !TranscribeButton.canTranscribeTrial(msg)) {
             resultView.setText(LocaleController.getString(R.string.SilentTranscribePremium));
             return;
         }
-        requestTranscription(context, account, msg, dialog, resultView, transcript, 1);
+        requestTranscription(context, acc, msg, dialog, resultView, transcript, 1);
     }
 
     private static void requestTranscription(Context context, int account, MessageObject msg,

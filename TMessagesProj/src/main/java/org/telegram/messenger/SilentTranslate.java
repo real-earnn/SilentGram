@@ -9,6 +9,8 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import org.json.JSONArray;
+import org.telegram.tgnet.ConnectionsManager;
+import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Components.LayoutHelper;
@@ -30,6 +32,16 @@ import java.util.ArrayList;
  *
  * Endpoint: https://translate.googleapis.com/translate_a/single
  *   ?client=gtx&sl=<source>&tl=<target>&dt=t&q=<text>
+ *
+ * The Google endpoint is called over plain HTTPS — NOT through MTProto —
+ * so it works even if MTProto is down, but it fails on any network that
+ * blocks that host (some WiFi does, while mobile data works). If the
+ * Google call fails, translateText retries ONCE via Telegram's own
+ * server-side translate over MTProto (the exact TL_messages_translateText
+ * call TranslateController makes for stories), which works wherever
+ * Telegram works. The retry runs only after the primary has already
+ * failed, so the working path is untouched; if both fail, callers show
+ * the same "Translation failed" message as before.
  */
 public class SilentTranslate {
 
@@ -170,7 +182,12 @@ public class SilentTranslate {
 
     /** Public wrapper for whole-chat translation (F1). `done` runs with the translated text (null on failure). */
     public static void translateText(String text, String sourceLang, String targetLang, java.util.function.Consumer<String> done) {
-        translateInBackground(text, sourceLang, targetLang, done);
+        translateText(text, sourceLang, targetLang, UserConfig.selectedAccount, done);
+    }
+
+    /** Same, with an explicit account (used by the Voice-to-Text popup, which resolves the message's own account). */
+    public static void translateText(String text, String sourceLang, String targetLang, int account, java.util.function.Consumer<String> done) {
+        translateInBackground(text, sourceLang, targetLang, account, done);
     }
 
     /** The language codes/names table (for pickers). */
@@ -179,6 +196,10 @@ public class SilentTranslate {
     }
 
     private static void translateInBackground(String text, String sl, String tl, java.util.function.Consumer<String> done) {
+        translateInBackground(text, sl, tl, UserConfig.selectedAccount, done);
+    }
+
+    private static void translateInBackground(String text, String sl, String tl, int account, java.util.function.Consumer<String> done) {
         new Thread(() -> {
             String result = null;
             HttpURLConnection conn = null;
@@ -206,8 +227,45 @@ public class SilentTranslate {
                     conn.disconnect();
                 }
             }
+            // Primary (Google) unchanged above. Second try ONLY when it
+            // failed: Telegram's own server-side translate over MTProto,
+            // which works wherever Telegram works. If this also fails,
+            // done gets null and callers show the existing failure text.
+            if (result == null) {
+                translateViaTelegram(text, tl, account, done);
+                return;
+            }
             done.accept(result);
         }, "silent-translate").start();
+    }
+
+    /** Second try, ONLY after the Google endpoint failed: Telegram's own
+     * server-side translate (TL_messages_translateText with raw text —
+     * the exact call TranslateController makes for stories). Runs over
+     * MTProto, so it works wherever Telegram itself works. Best-effort:
+     * any failure just yields null, like the primary failing. */
+    private static void translateViaTelegram(String text, String toLang, int account, java.util.function.Consumer<String> done) {
+        try {
+            TLRPC.TL_messages_translateText req = new TLRPC.TL_messages_translateText();
+            req.flags |= 2; // raw text (no peer/id)
+            TLRPC.TL_textWithEntities part = new TLRPC.TL_textWithEntities();
+            part.text = text;
+            req.text.add(part);
+            req.to_lang = TranslateController.normalizeLanguage(toLang);
+            ConnectionsManager.getInstance(account).sendRequest(req, (res, err) -> {
+                String out = null;
+                if (res instanceof TLRPC.TL_messages_translateResult) {
+                    ArrayList<TLRPC.TL_textWithEntities> r = ((TLRPC.TL_messages_translateResult) res).result;
+                    if (r != null && !r.isEmpty() && r.get(0) != null && !TextUtils.isEmpty(r.get(0).text)) {
+                        out = r.get(0).text;
+                    }
+                }
+                done.accept(out);
+            });
+        } catch (Throwable e) {
+            FileLog.e(e);
+            done.accept(null);
+        }
     }
 
     /** The endpoint returns [[["translated","original",...],...],...] — join the translated parts. */
