@@ -1,6 +1,7 @@
 package org.telegram.messenger;
 
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.ActivityOptions;
 import android.app.Dialog;
 import android.content.Context;
@@ -29,6 +30,10 @@ import android.view.ViewOutlineProvider;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.PopupWindow;
+
+import java.lang.ref.WeakReference;
+import java.util.ArrayList;
 
 import org.telegram.ui.ActionBar.ActionBarPopupWindow;
 import org.telegram.ui.ActionBar.BaseFragment;
@@ -58,29 +63,36 @@ import org.telegram.utils.settings.SharedSettings;
  *   (another app's window) can render on the display for typing.
  * - Host: SilentFloatingActivity (a LaunchActivity subclass — LaunchActivity
  *   itself is singleTask, so it can never be the second instance). It is
- *   launched with ActivityOptions.setLaunchDisplayId(displayId).
- * - The TextureView OWNS its SurfaceTexture (v2.0.21): the virtual
- *   display is created from the texture the TextureView delivers in
- *   onSurfaceTextureAvailable, never from a pre-created SurfaceTexture
- *   handed in with setSurfaceTexture(). The old pattern left the
- *   TextureView's hardware layer unbound on the user's device — the
- *   display produced frames into a texture the TextureView never
- *   rendered, so the window stayed fully transparent (the background
- *   showed straight through it). The TextureView's own texture is
- *   guaranteed bound to its hardware layer.
- * - The virtual display is the WHOLE PHONE (v2.0.22): created ONCE at
- *   the full screen size and never resized. The TextureView's
- *   SurfaceTexture buffer is the window's content size (the
- *   TextureView sets it to its own view size on layout), so the
- *   compositor scales the entire phone UI down proportionally into
- *   the window — edge-to-edge, the whole design shrinking as the
- *   window shrinks, never a zoomed/cropped chunk. A resize is only
- *   a window-size change: the display is untouched, so frames keep
- *   flowing and the content re-fits on every resize. The old 1:1
- *   design (display at window size + virtualDisplay.resize() at
- *   gesture end) stalled frames on the user's device: a small view
- *   flashed on resize, then vanished, and a second resize showed
- *   nothing. resizeDisplayToWindow() is a no-op by design now.
+ *   launched with ActivityOptions.setLaunchDisplayId(displayId) into its OWN
+ *   task: manifest taskAffinity "${applicationId}.floating" + singleTask
+ *   (v2.0.23). WITHOUT the affinity the launch never reached the virtual
+ *   display at all — AOSP ActivityStarter (Android 10) finds the existing
+ *   main task by affinity, clears it (FLAG_ACTIVITY_CLEAR_TASK) and reuses
+ *   it ("We are reusing a task, keep the stack!"), so setLaunchDisplayId
+ *   was never consulted, the activity landed on display 0, and the system
+ *   toasted "App does not support launch on secondary displays". The
+ *   manifest resizeableActivity="true" was never the problem: the toast
+ *   fires whenever the task lands on a different display than requested,
+ *   whatever the activity declares. The launch is verified ~1.5s later
+ *   (activity display id must equal the virtual display id); a misplaced
+ *   activity is finished and the user is put back fullscreen instead of
+ *   being stranded with a transparent overlay over a fullscreen app.
+ * - The virtual display is the WINDOW (v2.0.23): created at the floating
+ *   window's CONTENT size (the TextureView's size) with a density matched
+ *   to it, so the activity lays out for a mini device of the phone's dp
+ *   size — edge-to-edge, everything shrinks proportionally, left AND
+ *   right AND bottom visible. The v2.0.22 whole-phone display (720x1480)
+ *   depended on the device downscaling the display into the window's
+ *   buffers; the user's device does not do that — it showed only the
+ *   top-left of the phone UI (right and bottom cut off). Window size +
+ *   matched density makes the display, the SurfaceTexture buffer and the
+ *   TextureView all the same size, so there is nothing to scale, crop or
+ *   mis-transform. A resize re-syncs the display IN PLACE with
+ *   virtualDisplay.resize(w, h, dpi) at gesture end: same display id,
+ *   same Surface, same activity — no re-create, no re-launch, no second
+ *   display. (The v2.0.21 resize() frame stalls were observed while the
+ *   activity was on display 0, i.e. while the virtual display was blank
+ *   anyway; resize() itself was never the cause.)
  * - Frame production is retried, not just reported: if a frame check
  *   still sees no frames, the display is re-created from the live
  *   texture (and the activity re-launched if it is not on the
@@ -90,9 +102,18 @@ import org.telegram.utils.settings.SharedSettings;
  *   every resize/move stops, so frames must persist across EVERY
  *   resize — not just the first one (the user's repro: frames appear
  *   once at the first resize stop, then die on the next touch).
- * - Minimize "−" in the top bar hides only the overlay window; the
- *   display + activity keep running, and a sidebar pill at the right
- *   edge restores the window at its previous size/position/content.
+ * - Minimize "−" in the top bar HIDES the overlay window (v2.0.23): the
+ *   root view goes GONE and the window shrinks to a 1x1 off-screen rect —
+ *   the view is never detached, so the TextureView keeps its texture and
+ *   the virtual display + activity keep running untouched, and restore
+ *   shows the exact same screen with NO display re-create and NO
+ *   re-launch. (v2.0.22 removed the view, which destroyed the texture,
+ *   so restore had to rebind the display and re-launch the activity —
+ *   the second-display / re-launch path that failed on the device.)
+ *   A sidebar pill at the right edge restores the window at its previous
+ *   size/position/content. If the texture did die while hidden, restore
+ *   falls back to the guarded rebind path (release-then-create, never
+ *   two displays alive at once).
  * - The main LaunchActivity finishes when the floating one starts
  *   (Telegram's own closeOtherAppActivities rule); the connection is
  *   process-level and stays alive.
@@ -136,21 +157,112 @@ public class SilentFloatingWindow {
     private int fullHeight;
     private int densityDpi;
     private float density;
+    /** Phone width in dp (fullWidth / density) — the dp width the virtual
+     * display must keep, so the window is a mini device, not a reflowed
+     * narrow screen. */
+    private int phoneWidthDp;
     private int screenWidthPx;
     private int screenHeightPx;
     private int windowWidthPx;
     private int windowHeightPx;
     private int barHeightPx;
-    /** Current virtual-display size = the FULL phone size (v2.0.22).
-     * The TextureView shows it scaled down to the window; forwardTouch
-     * maps window coordinates back with these values. */
+    /** Current virtual-display size = the WINDOW'S content size (v2.0.23).
+     * Display, SurfaceTexture buffer and TextureView are all the same size,
+     * so forwardTouch maps window coordinates 1:1 (the scale is recomputed
+     * from these values and stays right after a resize). */
     private int displayWidthPx;
     private int displayHeightPx;
+    /** Density of the virtual display, matched to its width so the dp size
+     * stays the phone's dp size (displayWidthPx at this density =
+     * phoneWidthDp). Read by the debug report (getDisplayDensityDpi). */
+    private int displayDensityDpi;
+
+    /** v2.0.23: registry of showing RAW android.widget.PopupWindows
+     * (weak references — entries die with the popup; the lookup also
+     * filters by isShowing(), so no dismiss hook is needed for popups
+     * that really dismiss). ActionBarPopupWindow has its OWN registry
+     * (v2.0.22); raw popups never go through it, so without this the
+     * floating window's touch forwarding never reaches them — e.g. the
+     * quick-reply templates popup in ChatActivity and the text-selection
+     * FloatingToolbar both showed on the virtual display but took no
+     * taps and no scrolls. Tracked at show time by the popup's owner
+     * (ChatActivity.showSilentTemplatePopup, FloatingToolbarPopup.show);
+     * FloatingToolbar also untracks on dismiss()/hide() because its
+     * PopupWindow stays framework-showing while logically hidden.
+     * NOT covered: raw popups owned by files outside the floating
+     * path (EmojiColorPickerWindow in Components/EmojiView, the
+     * SelectAnimatedEmojiDialogWindow in channel/peer color screens)
+     * — they have no hook in an allowed file; same one-line
+     * trackRawPopup() call at their show sites covers them. */
+    private static final ArrayList<WeakReference<PopupWindow>> shownRawPopups = new ArrayList<>();
+
+    /** Register a raw PopupWindow shown inside floating, so touch
+     * forwarding can find it. Safe to call for any popup; duplicates
+     * and dead entries are pruned. */
+    public static void trackRawPopup(PopupWindow popup) {
+        if (popup == null) {
+            return;
+        }
+        for (int i = shownRawPopups.size() - 1; i >= 0; i--) {
+            WeakReference<PopupWindow> ref = shownRawPopups.get(i);
+            PopupWindow p = ref != null ? ref.get() : null;
+            if (p == null || p == popup) {
+                shownRawPopups.remove(i);
+            }
+        }
+        shownRawPopups.add(new WeakReference<>(popup));
+    }
+
+    /** Forget a tracked raw popup (FloatingToolbar hide/dismiss: its
+     * PopupWindow stays framework-showing while logically hidden, so
+     * the isShowing() filter alone cannot drop it). */
+    public static void untrackRawPopup(PopupWindow popup) {
+        if (popup == null) {
+            return;
+        }
+        for (int i = shownRawPopups.size() - 1; i >= 0; i--) {
+            WeakReference<PopupWindow> ref = shownRawPopups.get(i);
+            PopupWindow p = ref != null ? ref.get() : null;
+            if (p == null || p == popup) {
+                shownRawPopups.remove(i);
+            }
+        }
+    }
+
+    /** Most recently shown raw popup that is still showing, or null. */
+    private static PopupWindow getTopShowingRawPopup() {
+        for (int i = shownRawPopups.size() - 1; i >= 0; i--) {
+            WeakReference<PopupWindow> ref = shownRawPopups.get(i);
+            PopupWindow p = ref != null ? ref.get() : null;
+            if (p == null || !p.isShowing()) {
+                shownRawPopups.remove(i);
+                continue;
+            }
+            return p;
+        }
+        return null;
+    }
 
     private long openDialogId;
     private boolean openDialogIsUser;
     private Runnable launchWatchdog;
+    /** v2.0.23: verifies ~1.5s after a launch that the floating activity
+     * really landed on the virtual display (its display id must equal the
+     * virtual display id). Cancelled in teardown(). */
+    private Runnable launchVerify;
+    /** Foreground activity start() was called from — the launch context
+     * for the first floating-activity launch. Cleared once the floating
+     * activity reports in (setFloatingActivity); recovery re-launches use
+     * the application context (no foreground activity exists then). */
+    private Activity launchActivity;
     private Runnable frameCheck;
+    /** v2.0.23: consecutive failed frame checks while the activity IS on
+     * the virtual display with a valid surface. A single failed check
+     * there is transient (first frames still coming) — the display is
+     * only rebuilt on the 2nd consecutive failure, so a good display is
+     * never torn down by one black sample. Reset on every OK check, on
+     * start() and on every display (re)create. */
+    private int consecutiveFrameFailures;
     /** v2.0.22: frame recovery is cooldown-based, not once-per-start.
      * The user's repro: frames appear exactly once (first resize stop)
      * then die on the next interaction — a stall after ANY resize/move
@@ -164,9 +276,15 @@ public class SilentFloatingWindow {
      * Set/cleared by SilentFloatingActivity around super.onPause(). */
     private boolean pauseDismissalsSuppressed;
     /** v2.0.22: true while the window is minimized to the sidebar pill.
-     * Only the overlay is hidden; the virtual display + activity keep
-     * running untouched, so restore shows the exact same content. */
+     * v2.0.23: minimize HIDES the overlay (root view GONE, window 1x1
+     * off-screen) instead of detaching it — the TextureView keeps its
+     * texture, so restore re-shows the same display with no re-create
+     * and no re-launch. */
     private boolean minimized;
+    /** Window position before minimize() shrank the overlay to 1x1
+     * off-screen; restore puts it back here. */
+    private int preMinimizeX;
+    private int preMinimizeY;
     private View pillView;
     private WindowManager.LayoutParams pillParams;
     private boolean contentPinching;
@@ -262,6 +380,15 @@ public class SilentFloatingWindow {
         return displayHeightPx;
     }
 
+    /** Density of the virtual display (v2.0.23) — for the debug report:
+     * display widthPx at this density must stay ~ the phone's dp width.
+     * SilentDebugReport.buildFloating() does not print it yet; one line
+     * there (display.put("densityDpi", fw.getDisplayDensityDpi())) wires
+     * it in — that file is owned by the coordinator. */
+    public int getDisplayDensityDpi() {
+        return displayDensityDpi;
+    }
+
     public int getScreenWidthPx() {
         return screenWidthPx;
     }
@@ -272,6 +399,9 @@ public class SilentFloatingWindow {
 
     public void setFloatingActivity(SilentFloatingActivity activity) {
         floatingActivity = activity;
+        // The launch landed; the foreground launch context is no longer
+        // needed (recovery re-launches use the application context).
+        launchActivity = null;
         if (launchWatchdog != null) {
             AndroidUtilities.cancelRunOnUIThread(launchWatchdog);
             launchWatchdog = null;
@@ -287,6 +417,7 @@ public class SilentFloatingWindow {
     public boolean start(Activity activity) {
         lastStartError = null;
         lastFrameRecoveryAtMs = 0;
+        consecutiveFrameFailures = 0;
         if (active) {
             // Safety net: if the window was minimized to the pill and
             // the toggle is hit again, bring it back instead of
@@ -300,6 +431,25 @@ public class SilentFloatingWindow {
             lastStartError = "no activity";
             return false;
         }
+        // Defensive: a stale display from an interrupted teardown must
+        // never survive into a fresh start — only one virtual display
+        // may exist at a time.
+        if (virtualDisplay != null) {
+            try {
+                virtualDisplay.release();
+            } catch (Exception ignored) {
+            }
+            virtualDisplay = null;
+        }
+        if (surface != null) {
+            try {
+                surface.release();
+            } catch (Exception ignored) {
+            }
+            surface = null;
+        }
+        surfaceTexture = null;
+        launchActivity = activity;
         if (!PipEnvironment.canDrawOverlays(activity)) {
             lastStartError = "overlay permission missing";
             return false;
@@ -332,6 +482,7 @@ public class SilentFloatingWindow {
                 lastStartError = "no display size";
                 return false;
             }
+            phoneWidthDp = density > 0 ? Math.round(fullWidth / density) : 0;
             barHeightPx = AndroidUtilities.dp(36);
 
             // Remember which screen to reopen (chat list, or the open chat).
@@ -365,23 +516,24 @@ public class SilentFloatingWindow {
             int startX = savedXDp > 0 ? AndroidUtilities.dp(savedXDp) : fullWidth - windowWidthPx - AndroidUtilities.dp(16);
             int startY = savedYDp > 0 ? AndroidUtilities.dp(savedYDp) : (screenHeightPx - windowHeightPx) / 2;
 
-            // The TextureView OWNS its SurfaceTexture (v2.0.21): the
-            // virtual display is created from the texture the TextureView
-            // hands us in onSurfaceTextureAvailable — never from a
-            // pre-created `new SurfaceTexture(0)` handed in with
-            // setSurfaceTexture(). The old pattern left the hardware layer
-            // unbound on the user's device: the display produced frames
-            // into a texture the TextureView never rendered, so the window
-            // stayed fully transparent (background visible through it).
-            // v2.0.22: the display is the WHOLE PHONE (fullWidth x
-            // fullHeight), created once and never resized. The
-            // TextureView's buffer is the window's content size, so
-            // the compositor scales the full UI down into the window,
-            // edge-to-edge. Creation happens in the listener (see
-            // createVirtualDisplayAndLaunch), so the overlay is added
-            // first and the activity launch waits for the texture.
-            displayWidthPx = fullWidth;
-            displayHeightPx = fullHeight;
+            // v2.0.23: the display is the WINDOW'S content size, with a
+            // density matched to it (see currentDisplaySize() /
+            // displayDensityForWidth) — NOT the full phone size. The
+            // TextureView OWNS its SurfaceTexture (v2.0.21): the virtual
+            // display is created from the texture delivered in
+            // onSurfaceTextureAvailable — never from a pre-created
+            // `new SurfaceTexture(0)` handed in with setSurfaceTexture().
+            // The old pattern left the hardware layer unbound on the
+            // user's device: the display produced frames into a texture
+            // the TextureView never rendered, so the window stayed fully
+            // transparent (background visible through it). Creation
+            // happens in the listener (see createVirtualDisplayAndLaunch),
+            // so the overlay is added first and the activity launch waits
+            // for the texture. Provisional values until the texture
+            // arrives (rebind recomputes them from the real view size).
+            displayWidthPx = windowWidthPx;
+            displayHeightPx = Math.max(1, windowHeightPx - barHeightPx);
+            displayDensityDpi = displayDensityForWidth(displayWidthPx);
 
             buildOverlay(ctx);
             windowParams.x = clampX(startX);
@@ -417,35 +569,178 @@ public class SilentFloatingWindow {
         }
     }
 
-    private void launchFloatingActivity(Context ctx) {
+    /**
+     * Launch the floating activity ONTO the virtual display. Returns false
+     * when the launch could not even be attempted (no display, or the
+     * system refuses the display) — the caller then recovers to fullscreen.
+     *
+     * v2.0.23 — why the v2.0.22 launch landed on display 0 (verified
+     * against AOSP Android 10 ActivityStarter + the toast string):
+     * the old intent was FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_CLEAR_TASK
+     * and SilentFloatingActivity had NO taskAffinity, so it shared the
+     * main task's affinity. With NEW_TASK and no MULTIPLE_TASK the system
+     * looks up an existing task by affinity, finds the main LaunchActivity
+     * task on display 0, clears it and REUSES it — getLaunchStack()
+     * "We are reusing a task, keep the stack!" — so the setLaunchDisplayId
+     * virtual-display id is never consulted. The manifest now gives the
+     * floating activity its own affinity ("${applicationId}.floating") and
+     * singleTask, so no affinity-matching task exists and the system
+     * creates a FRESH task on the virtual display; CLEAR_TASK is dropped
+     * (it is the flag that drives the reuse path). Launching from the
+     * foreground activity that started floating (not the application
+     * context) keeps the launch attributed to a foreground caller.
+     * The toast "App does not support launch on secondary displays" is
+     * the symptom of that reuse, not a verdict on the activity:
+     * AOSP fires it (handleNonResizableTaskIfNeeded) whenever the task
+     * lands on a different display than requested. resizeableActivity
+     * is true in the manifest and stays true.
+     */
+    private boolean launchFloatingActivity(Context ctx) {
+        if (virtualDisplay == null || virtualDisplay.getDisplay() == null) {
+            lastStartError = "no virtual display";
+            return false;
+        }
+        int vdId = virtualDisplay.getDisplay().getDisplayId();
+        // Reopen the screen the user is actually on: the live floating
+        // activity's top dialog when it exists (a recovery re-launch
+        // must not yank the user back to the dialog captured at start()).
+        long dialogId = openDialogId;
+        boolean dialogIsUser = openDialogIsUser;
+        SilentFloatingActivity fa = floatingActivity;
+        if (fa != null && !fa.isFinishing()) {
+            long top = fa.silentGetTopDialogId();
+            if (top != 0) {
+                dialogId = top;
+                dialogIsUser = top > 0;
+            }
+        }
         Intent intent = new Intent(ctx, SilentFloatingActivity.class);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-        if (openDialogId != 0) {
+        // NEW_TASK only: no CLEAR_TASK (see above — it drives the
+        // affinity-reuse path onto display 0). The manifest's own
+        // affinity + singleTask guarantee a fresh floating task on the
+        // first launch and a new-intent delivery to that task on a
+        // re-launch — never a second instance, never the main task.
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        if (dialogId != 0) {
             intent.setAction("com.tmessages.openchat");
-            if (openDialogIsUser) {
-                intent.putExtra("userId", openDialogId);
+            if (dialogIsUser) {
+                intent.putExtra("userId", dialogId);
             } else {
-                intent.putExtra("chatId", -openDialogId);
+                intent.putExtra("chatId", -dialogId);
+            }
+        }
+        Context launchCtx = ctx;
+        if (launchActivity != null && !launchActivity.isFinishing()) {
+            launchCtx = launchActivity;
+        }
+        // Pre-flight (API 29+): a launch onto a display the caller may
+        // not use throws SecurityException. Check first so a refusal is
+        // a named error, not a crash — and so a launch that would land
+        // on display 0 is never attempted blind.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                ActivityManager am = (ActivityManager) launchCtx.getSystemService(Context.ACTIVITY_SERVICE);
+                if (am != null && !am.isActivityStartAllowedOnDisplay(launchCtx, vdId, intent)) {
+                    lastStartError = "launch on virtual display " + vdId + " not allowed";
+                    FileLog.e("SilentFloatingWindow: " + lastStartError);
+                    return false;
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
             }
         }
         ActivityOptions options = ActivityOptions.makeBasic();
-        options.setLaunchDisplayId(virtualDisplay.getDisplay().getDisplayId());
-        ctx.startActivity(intent, options.toBundle());
+        options.setLaunchDisplayId(vdId);
+        try {
+            launchCtx.startActivity(intent, options.toBundle());
+        } catch (Exception e) {
+            lastStartError = "floating activity launch failed: " + String.valueOf(e.getMessage());
+            FileLog.e(e);
+            return false;
+        }
+        scheduleLaunchVerify(vdId);
+        return true;
+    }
+
+    /** Post a launch verification ~1.5s after a launch: the activity's
+     * display id must equal the virtual display id it was launched onto.
+     * Cancels any pending verification first. */
+    private void scheduleLaunchVerify(int expectedVdId) {
+        if (launchVerify != null) {
+            AndroidUtilities.cancelRunOnUIThread(launchVerify);
+            launchVerify = null;
+        }
+        launchVerify = () -> runLaunchVerify(expectedVdId);
+        AndroidUtilities.runOnUIThread(launchVerify, 1500);
+    }
+
+    /** The launch check (see launchFloatingActivity): a floating activity
+     * running on the WRONG display (usually 0 = the phone screen) means
+     * a fullscreen Telegram behind a transparent overlay — fail loud
+     * back to fullscreen instead of stranding the user there. Still
+     * starting (watchdog armed, activity not up yet) just re-schedules;
+     * the 5s watchdog covers an activity that never appears at all. */
+    private void runLaunchVerify(int expectedVdId) {
+        launchVerify = null;
+        if (!active) {
+            return;
+        }
+        if (floatingActivity == null) {
+            if (launchWatchdog != null) {
+                scheduleLaunchVerify(expectedVdId);
+            }
+            return;
+        }
+        if (floatingActivity.isFinishing()) {
+            return;
+        }
+        if (virtualDisplay == null || virtualDisplay.getDisplay() == null) {
+            return;
+        }
+        if (virtualDisplay.getDisplay().getDisplayId() != expectedVdId) {
+            return;
+        }
+        int activityDisplay = getActivityDisplayId();
+        if (activityDisplay == expectedVdId) {
+            FileLog.d("SilentFloatingWindow: launch verified, activity on virtual display " + expectedVdId);
+            return;
+        }
+        String msg = "floating activity on display " + activityDisplay
+                + " instead of virtual display " + expectedVdId;
+        lastStartError = msg;
+        FileLog.e("SilentFloatingWindow: " + msg);
+        SilentToast.show(ApplicationLoader.applicationContext,
+                "Floating: " + msg, android.widget.Toast.LENGTH_LONG);
+        SilentFloatingActivity fa = floatingActivity;
+        try {
+            if (fa != null && !fa.isFinishing()) {
+                fa.finish();
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        if (active) {
+            teardown();
+        }
+        relaunchMain(0);
     }
 
     /**
      * (Re)create the virtual display from the given live texture at the
-     * FULL phone size. Releases any previous display/surface first.
-     * Returns the new display id, or -1 on failure. The caller
-     * re-launches the floating activity when it is not on the new
-     * display. v2.0.22: do NOT set the buffer size here — the
-     * TextureView owns its SurfaceTexture and sets the buffer size to
-     * its own view size on layout, so the full-size display is scaled
-     * down into window-size buffers by the compositor.
+     * WINDOW'S content size with matched density (see currentDisplaySize).
+     * Releases any previous display/surface first, so there is never a
+     * second virtual display alive at the same time. Returns the new
+     * display id, or -1 on failure. The caller re-launches the floating
+     * activity when it is not on the new display. v2.0.23: do NOT set the
+     * buffer size here — the TextureView owns its SurfaceTexture and sets
+     * the buffer size to its own view size on layout, and the display is
+     * now exactly that size, so display, buffer and view agree 1:1.
      */
     private int rebindDisplayToTexture(SurfaceTexture texture) {
-        displayWidthPx = fullWidth;
-        displayHeightPx = fullHeight;
+        int[] size = currentDisplaySize();
+        displayWidthPx = size[0];
+        displayHeightPx = size[1];
+        displayDensityDpi = size[2];
         try {
             if (virtualDisplay != null) {
                 virtualDisplay.release();
@@ -464,17 +759,49 @@ public class SilentFloatingWindow {
         try {
             surface = new Surface(surfaceTexture);
             virtualDisplay = displayManager.createVirtualDisplay(
-                    "SilentGram Floating", displayWidthPx, displayHeightPx, densityDpi, surface,
+                    "SilentGram Floating", displayWidthPx, displayHeightPx, displayDensityDpi, surface,
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);
             if (virtualDisplay != null && virtualDisplay.getDisplay() != null) {
                 int displayId = virtualDisplay.getDisplay().getDisplayId();
-                FileLog.d("SilentFloatingWindow: virtual display id=" + displayId + " size=" + displayWidthPx + "x" + displayHeightPx);
+                consecutiveFrameFailures = 0;
+                FileLog.d("SilentFloatingWindow: virtual display id=" + displayId + " size=" + displayWidthPx + "x" + displayHeightPx + " dpi=" + displayDensityDpi);
                 return displayId;
             }
         } catch (Exception e) {
             FileLog.e(e);
         }
         return -1;
+    }
+
+    /** The virtual display's size: the TextureView's current size (the
+     * window's content size — the top bar sits above it, not over it),
+     * falling back to the window geometry before first layout. The
+     * density is matched to the width (see displayDensityForWidth), so
+     * the display's dp size stays the phone's dp size. */
+    private int[] currentDisplaySize() {
+        int w = textureView != null ? textureView.getWidth() : 0;
+        int h = textureView != null ? textureView.getHeight() : 0;
+        if (w <= 0) {
+            w = windowWidthPx;
+        }
+        if (h <= 0) {
+            h = Math.max(1, windowHeightPx - barHeightPx);
+        }
+        return new int[]{w, h, displayDensityForWidth(w)};
+    }
+
+    /** Density for a display of widthPx: the density that keeps the dp
+     * width at the phone's dp width (phoneWidthDp), so the activity lays
+     * out like a mini phone — everything shrinks proportionally as the
+     * window shrinks. E.g. phone 720px @ 360dp, window content 314px
+     * -> 140 dpi -> 314px / (140/160) = ~359dp. Falls back to the
+     * phone's density when the phone dp width is unknown. */
+    private int displayDensityForWidth(int widthPx) {
+        if (phoneWidthDp <= 0 || widthPx <= 0) {
+            return densityDpi;
+        }
+        int dpi = Math.round(widthPx * 160f / phoneWidthDp);
+        return Math.max(80, Math.min(480, dpi));
     }
 
     /** Re-launch the floating activity when it is not running on the
@@ -499,10 +826,10 @@ public class SilentFloatingWindow {
     /**
      * Called from the TextureView's SurfaceTextureListener once the
      * TextureView owns a live SurfaceTexture. Creates the virtual display
-     * from THAT texture (never a pre-created one) at the FULL phone
-     * size, then launches the floating activity on it. The 5s
-     * frame check is scheduled here, so it measures 5s of real activity
-     * runtime, not 5s from the overlay being added.
+     * from THAT texture (never a pre-created one) at the WINDOW'S content
+     * size with matched density, then launches the floating activity on
+     * it. The 5s frame check is scheduled here, so it measures 5s of real
+     * activity runtime, not 5s from the overlay being added.
      *
      * v2.0.22: if a display already exists but the texture is a NEW one
      * (the TextureView re-created it on a resize/move, or on restore
@@ -510,6 +837,10 @@ public class SilentFloatingWindow {
      * the DEAD texture and no more frames ever arrive — rebind the
      * display to the new texture instead of leaving a transparent
      * window. Same texture + existing display = nothing to do.
+     * v2.0.23: minimize no longer detaches the view (it hides it), so
+     * restore normally reuses the existing display with NO rebind and NO
+     * re-launch; this rebind path is only the fallback for a texture
+     * that genuinely died while hidden.
      */
     private void createVirtualDisplayAndLaunch(Context ctx, SurfaceTexture texture, int width, int height) {
         if (!active || texture == null || width <= 0 || height <= 0) {
@@ -537,7 +868,11 @@ public class SilentFloatingWindow {
                 AndroidUtilities.runOnUIThread(() -> recoverToMain());
                 return;
             }
-            launchFloatingActivity(ctx);
+            if (!launchFloatingActivity(ctx)) {
+                FileLog.e("SilentFloatingWindow: floating activity launch failed: " + lastStartError);
+                AndroidUtilities.runOnUIThread(() -> recoverToMain());
+                return;
+            }
 
             // Frame check: if the virtual display never delivers a frame,
             // the window stays transparent. Sample the TextureView once —
@@ -635,9 +970,27 @@ public class SilentFloatingWindow {
             lastFrameCheck = (lit == 0 ? "FAILED: " : "OK: ") + state;
             lastFrameCheckAtMs = System.currentTimeMillis();
             if (lit != 0) {
+                consecutiveFrameFailures = 0;
                 FileLog.d("SilentFloatingWindow: frame check OK: " + state);
                 return;
             }
+            // v2.0.23: the activity IS on the virtual display and the
+            // surface is valid, but this sample is black — that is
+            // transient (first frames still coming, or a resize mid-flight),
+            // not a dead display. Wait for one more check before tearing
+            // a good display down: only the 2nd consecutive failure
+            // rebuilds it. An activity on the WRONG display or a dead
+            // surface goes straight to the rebind below.
+            boolean activityOnVd = activityRunning && vdId >= 0 && activityDisplayId == vdId;
+            if (activityOnVd && surfaceValid) {
+                consecutiveFrameFailures++;
+                if (consecutiveFrameFailures < 2) {
+                    FileLog.e("SilentFloatingWindow: frame check FAILED once with activity on vd + valid surface, waiting for another check: " + state);
+                    scheduleFrameCheck(5000);
+                    return;
+                }
+            }
+            consecutiveFrameFailures = 0;
             lastStartError = "floating content black (no frames)";
             FileLog.e("SilentFloatingWindow: frame check FAILED, no frames: " + state);
             // v2.0.22: recovery is cooldown-based (10s), not once-per-start
@@ -682,17 +1035,34 @@ public class SilentFloatingWindow {
     }
 
 
-    /** v2.0.22: intentionally a NO-OP. The virtual display is created
-     * ONCE at the FULL phone size and is never resized: the TextureView
-     * re-scales the picture automatically when its own size changes (its
-     * SurfaceTexture buffer size tracks its view size, and the compositor
-     * scales the full display down into it), so a resize is only a
-     * window-size change. The old behaviour — virtualDisplay.resize() at
-     * gesture end — stalled frames on the user's device (a small view
-     * flashed, then vanished; a second resize showed nothing). Kept as a
-     * method so the resize-gesture call sites do not change. */
+    /** v2.0.23: re-sync the virtual display to the window's CURRENT
+     * content size (with matched density) IN PLACE, at gesture end.
+     * virtualDisplay.resize() keeps the same display id, the same
+     * Surface and the same activity — no re-create, no re-launch, no
+     * second display — so frames keep flowing across every resize. The
+     * activity re-lays out for the new size (it declares screenSize in
+     * configChanges); the frame check the caller schedules proves the
+     * frames survived. A no-op when nothing changed. */
     private void resizeDisplayToWindow() {
-        // No-op by design (see above).
+        if (virtualDisplay == null || textureView == null) {
+            return;
+        }
+        int[] size = currentDisplaySize();
+        int w = size[0];
+        int h = size[1];
+        int dpi = size[2];
+        if (w == displayWidthPx && h == displayHeightPx && dpi == displayDensityDpi) {
+            return;
+        }
+        try {
+            virtualDisplay.resize(w, h, dpi);
+            displayWidthPx = w;
+            displayHeightPx = h;
+            displayDensityDpi = dpi;
+            FileLog.d("SilentFloatingWindow: virtual display resized to " + w + "x" + h + " dpi=" + dpi);
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
     }
 
     /** Back to the fullscreen app, reopening the same chat when known. */
@@ -736,29 +1106,42 @@ public class SilentFloatingWindow {
         }
     }
 
-    /** v2.0.22: minimize to the sidebar pill. ONLY the overlay window
-     * is hidden (windowManager.removeView) — the virtual display and
-     * the floating activity keep running untouched, so restore shows
-     * the exact same screen, size and position. The TextureView's
-     * texture is released on detach by design; the display is rebound
-     * to the new texture when the view re-attaches (see
-     * createVirtualDisplayAndLaunch). */
+    /** v2.0.23: minimize to the sidebar pill. The overlay is HIDDEN,
+     * not detached: the root view goes GONE and the window shrinks to a
+     * 1x1 off-screen rect, so the TextureView keeps its texture and the
+     * virtual display + activity keep running untouched — restore shows
+     * the exact same screen with NO display re-create and NO re-launch
+     * (and therefore no "second virtual display"). minimized is set
+     * FIRST so a texture destroyed while hidden never triggers the
+     * fullscreen recovery (see onSurfaceTextureDestroyed). If the
+     * texture did die while hidden, restore falls back to the guarded
+     * rebind path in createVirtualDisplayAndLaunch. */
     public void minimize() {
         if (!active || minimized || rootView == null || windowManager == null) {
             return;
         }
+        preMinimizeX = windowParams.x;
+        preMinimizeY = windowParams.y;
+        minimized = true;
+        rootView.setVisibility(View.GONE);
+        windowParams.width = 1;
+        windowParams.height = 1;
+        windowParams.x = -2;
+        windowParams.y = -2;
         try {
-            windowManager.removeView(rootView);
+            windowManager.updateViewLayout(rootView, windowParams);
         } catch (Exception e) {
             FileLog.e(e);
-            return;
         }
-        minimized = true;
         showPill();
     }
 
     /** Restore the floating window from the sidebar pill, at its
-     * previous size/position/content. */
+     * previous size/position/content. The overlay was only hidden, so
+     * this re-shows the EXISTING display/activity: no addView (the view
+     * never left the window), no display re-create, no re-launch. Only
+     * if the texture died while hidden does the rebind fallback in
+     * createVirtualDisplayAndLaunch run (release-then-create). */
     public void restoreFromMinimized() {
         if (!minimized || windowManager == null) {
             return;
@@ -772,23 +1155,22 @@ public class SilentFloatingWindow {
         }
         pillView = null;
         pillParams = null;
-        minimized = false;
         if (rootView == null) {
             teardown();
             relaunchMain(0);
             return;
         }
-        try {
-            windowManager.addView(rootView, windowParams);
+        minimized = false;
+        windowParams.width = windowWidthPx;
+        windowParams.height = windowHeightPx;
+        windowParams.x = preMinimizeX;
+        windowParams.y = preMinimizeY;
+        rootView.setVisibility(View.VISIBLE);
+        updateLayout();
+        if (rootView != null) {
             rootView.requestFocus();
-        } catch (Exception e) {
-            FileLog.e(e);
-            teardown();
-            relaunchMain(0);
-            return;
         }
-        // The TextureView re-attaches with a fresh texture; confirm
-        // frames are flowing again after the rebind.
+        // Confirm frames are still flowing on the existing display.
         schedulePostResizeFrameCheck();
     }
 
@@ -898,12 +1280,18 @@ public class SilentFloatingWindow {
             AndroidUtilities.cancelRunOnUIThread(launchWatchdog);
             launchWatchdog = null;
         }
+        if (launchVerify != null) {
+            AndroidUtilities.cancelRunOnUIThread(launchVerify);
+            launchVerify = null;
+        }
         if (frameCheck != null) {
             AndroidUtilities.cancelRunOnUIThread(frameCheck);
             frameCheck = null;
         }
         active = false;
         minimized = false;
+        launchActivity = null;
+        consecutiveFrameFailures = 0;
         lastFrameRecoveryAtMs = 0;
         try {
             if (pillView != null && windowManager != null) {
@@ -999,7 +1387,8 @@ public class SilentFloatingWindow {
             }
         });
 
-        // Content: the virtual display's surface, scaled to the window.
+        // Content: the virtual display's surface, 1:1 with the window
+        // (v2.0.23: display, buffer and view are all the content size).
         FrameLayout contentContainer = new FrameLayout(ctx);
         FrameLayout.LayoutParams contentLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
@@ -1030,11 +1419,21 @@ public class SilentFloatingWindow {
 
             @Override
             public void onSurfaceTextureSizeChanged(SurfaceTexture texture, int width, int height) {
-                // v2.0.22: the TextureView re-sizes its own buffer here;
-                // the virtual display is FULL-size and never resized, so
-                // the compositor re-scales the picture into the new
-                // buffer size automatically. Prove frames survived the
-                // resize: check again ~2s after the last size change.
+                // v2.0.23: the TextureView re-sizes its own buffer here;
+                // the virtual display is re-synced to the new size IN
+                // PLACE at gesture end (resizeDisplayToWindow), so the
+                // display, buffer and view agree again. Prove frames
+                // survived the resize: check again ~2s after the last
+                // size change.
+                // Safety net for first open: if the texture arrived
+                // before first layout (0x0 in onSurfaceTextureAvailable)
+                // and the one posted retry also ran before layout, NO
+                // display exists yet — the first real size change is the
+                // last chance to create it, or the window stays
+                // transparent forever with no further callback.
+                if (virtualDisplay == null && width > 0 && height > 0) {
+                    createVirtualDisplayAndLaunch(ctx, texture, width, height);
+                }
                 schedulePostResizeFrameCheck();
             }
 
@@ -1044,10 +1443,10 @@ public class SilentFloatingWindow {
                 if (active && !minimized) {
                     // The display's surface is dead: fall back to the
                     // fullscreen app instead of a transparent window.
-                    // Minimized is exempt: removing the overlay detaches
-                    // the TextureView and destroys its texture by design
-                    // — the display is rebound to the new texture on
-                    // restore (see createVirtualDisplayAndLaunch).
+                    // Minimized is exempt: the overlay is only HIDDEN
+                    // while minimized (v2.0.23) and its texture may be
+                    // dropped by the system — restore rebinds the display
+                    // to the new texture (see createVirtualDisplayAndLaunch).
                     AndroidUtilities.runOnUIThread(() -> recoverToMain());
                 }
                 // False: the TextureView owns this texture and releases
@@ -1160,10 +1559,10 @@ public class SilentFloatingWindow {
         if (decor == null || textureView.getWidth() <= 0 || textureView.getHeight() <= 0) {
             return false;
         }
-        // The TextureView shows the virtual display scaled to the
-        // window's content size; the transform maps window coordinates
-        // back to display coordinates (recomputed from the current
-        // display size so it stays right after a resize).
+        // The TextureView shows the virtual display 1:1 at the window's
+        // content size (v2.0.23); the transform maps window coordinates
+        // to display coordinates (recomputed from the current display
+        // size so it stays right after a resize).
         float scaleX = displayWidthPx / (float) textureView.getWidth();
         float scaleY = displayHeightPx / (float) textureView.getHeight();
         MotionEvent copy = MotionEvent.obtain(event);
@@ -1216,24 +1615,18 @@ public class SilentFloatingWindow {
     }
 
     /** Topmost window containing (x, y) in virtual-display coordinates:
-     * most-recent showing ActionBarPopupWindow, else the showing dialog,
-     * else the activity decor. Returns null when the point is outside a
-     * showing popup — the caller consumes the event there (popup
-     * dismissed when outside-touchable) and never forwards it to the
-     * content behind. */
+     * most-recent showing ActionBarPopupWindow, else most-recent showing
+     * raw PopupWindow (v2.0.23: templates popup, text-selection toolbar),
+     * else the showing dialog, else the activity decor. Returns null when
+     * the point is outside a showing popup — the caller consumes the event
+     * there (popup dismissed when outside-touchable) and never forwards
+     * it to the content behind. */
     private View findTopTouchTarget(float x, float y, View decor) {
         try {
             ActionBarPopupWindow popup = ActionBarPopupWindow.getTopShowingPopup();
             if (popup != null) {
-                View root = null;
-                try {
-                    if (popup.getContentView() != null) {
-                        root = popup.getContentView().getRootView();
-                    }
-                } catch (Exception e) {
-                    FileLog.e(e);
-                }
-                if (root != null && root.isAttachedToWindow() && hitTest(root, x, y)) {
+                View root = popupHitRoot(popup, x, y);
+                if (root != null) {
                     return root;
                 }
                 // Outside a showing popup: emulate PopupWindow's
@@ -1243,6 +1636,25 @@ public class SilentFloatingWindow {
                 if (popup.isOutsideTouchable()) {
                     try {
                         popup.dismiss();
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                    }
+                }
+                return null;
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        try {
+            PopupWindow rawPopup = getTopShowingRawPopup();
+            if (rawPopup != null) {
+                View root = popupHitRoot(rawPopup, x, y);
+                if (root != null) {
+                    return root;
+                }
+                if (rawPopup.isOutsideTouchable()) {
+                    try {
+                        rawPopup.dismiss();
                     } catch (Exception e) {
                         FileLog.e(e);
                     }
@@ -1268,6 +1680,26 @@ public class SilentFloatingWindow {
             FileLog.e(e);
         }
         return decor;
+    }
+
+    /** Root view of a showing popup (any PopupWindow subclass) when
+     * (x, y) hits it, else null. Shared by the ActionBar-popup and the
+     * raw-popup branches above. */
+    private View popupHitRoot(PopupWindow popup, float x, float y) {
+        if (popup == null) {
+            return null;
+        }
+        try {
+            if (popup.getContentView() != null) {
+                View root = popup.getContentView().getRootView();
+                if (root != null && root.isAttachedToWindow() && hitTest(root, x, y)) {
+                    return root;
+                }
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        return null;
     }
 
     private boolean hitTest(View view, float x, float y) {

@@ -156,6 +156,7 @@ add_library(tgcalls STATIC
         tgcalls/tgcalls/group/GroupInstanceReferenceImpl.cpp
         tgcalls/tgcalls/group/GroupJoinPayloadInternal.cpp
         tgcalls/tgcalls/group/GroupNetworkManager.cpp
+        tgcalls/tgcalls/group/Socks5UdpPacketSocketFactory.cpp
         tgcalls/tgcalls/group/StreamingAudioRenderer.cpp
         tgcalls/tgcalls/group/StreamingAudioRendererTest.cpp
         tgcalls/tgcalls/group/StreamingMediaContext.cpp

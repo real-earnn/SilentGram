@@ -8,6 +8,7 @@
 
 package org.telegram.ui.Components;
 
+import org.telegram.messenger.SilentFloatingWindow;
 import static org.telegram.messenger.AndroidUtilities.dp;
 import static org.telegram.messenger.AndroidUtilities.lerp;
 import static org.telegram.messenger.AndroidUtilities.translitSafe;
@@ -1743,6 +1744,7 @@ public class EmojiView extends FrameLayout implements
                         colorPickerView.setupArrow(AndroidUtilities.dp(AndroidUtilities.isTablet() ? 30 : 22) - xOffset + (int) AndroidUtilities.dpf2(0.5f));
                         colorPickerView.setFocusable(true);
                         colorPickerView.showAsDropDown(view, xOffset, -view.getMeasuredHeight() - popupHeight + (view.getMeasuredHeight() - emojiSize) / 2 - yOffset);
+                        SilentFloatingWindow.trackRawPopup(colorPickerView);
                         pager.requestDisallowInterceptTouchEvent(true);
                         emojiGridView.hideSelector(true);
                         emojiGridView.clearTouchesFor(view);

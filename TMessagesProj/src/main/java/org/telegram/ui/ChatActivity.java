@@ -10293,6 +10293,13 @@ public class ChatActivity extends BaseFragment implements
             // SilentGram X: long-press a suggestion to DELETE the template
             // from the popup (no need to open it to delete it).
             row.setOnLongClickListener(v -> {
+                // v2.0.23: dismiss the popup BEFORE the confirm dialog
+                // opens — a dialog is a separate window above the popup,
+                // and with the popup still showing the floating window's
+                // touch forwarding would route the first tap on the
+                // dialog to the popup instead (dismissing it and
+                // swallowing the tap).
+                dismissSilentTemplatePopup();
                 AlertDialog.Builder builder = new AlertDialog.Builder(context);
                 builder.setTitle("/" + t.trigger);
                 builder.setPositiveButton(LocaleController.getString(R.string.Delete), (d, w) -> {
@@ -10325,6 +10332,11 @@ public class ChatActivity extends BaseFragment implements
                 android.view.View.MeasureSpec.makeMeasureSpec(0, android.view.View.MeasureSpec.UNSPECIFIED));
         int popupHeight = layout.getMeasuredHeight();
         silentTemplatePopup.showAsDropDown(chatActivityEnterView, 0, -(chatActivityEnterView.getHeight() + popupHeight));
+        // v2.0.23: a raw PopupWindow — register it for the floating
+        // window's touch forwarding, or taps/scrolls on it fall through
+        // to the chat behind it (ActionBarPopupWindow has its own
+        // registry; this one never went through it).
+        SilentFloatingWindow.trackRawPopup(silentTemplatePopup);
     }
 
     /**

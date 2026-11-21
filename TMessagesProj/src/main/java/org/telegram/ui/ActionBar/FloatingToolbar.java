@@ -80,6 +80,7 @@ import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SharedConfig;
+import org.telegram.messenger.SilentFloatingWindow;
 import org.telegram.messenger.TranslateController;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.Utilities;
@@ -571,6 +572,10 @@ public final class FloatingToolbar {
             refreshCoordinatesAndOverflowDirection(contentRectOnScreen);
             preparePopupContent();
             mPopupWindow.showAtLocation(mParent, Gravity.NO_GRAVITY, mCoordsOnWindow.x, mCoordsOnWindow.y);
+            // v2.0.23: a raw PopupWindow — register it for the floating
+            // window's touch forwarding, or taps on the text-selection
+            // toolbar fall through to the chat behind it.
+            SilentFloatingWindow.trackRawPopup(mPopupWindow);
             setTouchableSurfaceInsetsComputer();
             runShowAnimation();
         }
@@ -581,6 +586,7 @@ public final class FloatingToolbar {
             }
             mHidden = false;
             mDismissed = true;
+            SilentFloatingWindow.untrackRawPopup(mPopupWindow);
             mHideAnimation.cancel();
             runDismissAnimation();
             setZeroTouchableSurface();
@@ -591,6 +597,11 @@ public final class FloatingToolbar {
                 return;
             }
             mHidden = true;
+            // v2.0.23: hidden is not dismissed — the PopupWindow stays
+            // framework-showing, so untrack it or taps keep routing to
+            // an invisible toolbar instead of the content. show() tracks
+            // it again.
+            SilentFloatingWindow.untrackRawPopup(mPopupWindow);
             runHideAnimation();
             setZeroTouchableSurface();
         }

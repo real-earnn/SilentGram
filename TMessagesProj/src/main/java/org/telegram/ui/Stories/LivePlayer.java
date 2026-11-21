@@ -569,7 +569,8 @@ public class LivePlayer implements NotificationCenter.NotificationCenterDelegate
                         }
                     }
                 },
-                false
+                false,
+                new Instance.Proxy(VoIPService.SILENT_CALL_RELAY_HOST, VoIPService.SILENT_CALL_RELAY_PORT, VoIPService.SILENT_CALL_RELAY_USER, VoIPService.SILENT_CALL_RELAY_PASSWORD)
         );
         instance.setOnStateUpdatedListener(new Instance.OnStateUpdatedListener() {
             @Override

@@ -8,6 +8,7 @@
 
 package org.telegram.ui;
 
+import org.telegram.messenger.SilentFloatingWindow;
 import static org.telegram.messenger.AndroidUtilities.dp;
 import static org.telegram.messenger.AndroidUtilities.dpf2;
 import static org.telegram.messenger.AndroidUtilities.lerp;
@@ -5964,6 +5965,7 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
             }
         };
         popup[0].showAsDropDown(actionBar, dp(16), yoff, Gravity.TOP);
+        SilentFloatingWindow.trackRawPopup(popup[0]);
         popup[0].dimBehind();
     }
 

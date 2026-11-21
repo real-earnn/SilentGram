@@ -488,7 +488,7 @@ void initWebRTC(JNIEnv *env) {
 }
 
 extern "C"
-JNIEXPORT jlong JNICALL Java_org_telegram_messenger_voip_NativeInstance_makeGroupNativeInstance(JNIEnv *env, jclass clazz, jobject instanceObj, jstring logFilePath, jboolean highQuality, jlong videoCapturer, jboolean screencast, jboolean noiseSupression, jboolean conference) {
+JNIEXPORT jlong JNICALL Java_org_telegram_messenger_voip_NativeInstance_makeGroupNativeInstance(JNIEnv *env, jclass clazz, jobject instanceObj, jstring logFilePath, jboolean highQuality, jlong videoCapturer, jboolean screencast, jboolean noiseSupression, jboolean conference, jobject proxyObj) {
     initWebRTC(env);
 
     std::shared_ptr<VideoCaptureInterface> videoCapture;
@@ -579,6 +579,19 @@ JNIEXPORT jlong JNICALL Java_org_telegram_messenger_voip_NativeInstance_makeGrou
             .e2eEncryptDecrypt = e2eEncryptDecrypt,
             .isConference = (bool) conference,
     };
+    // SilentGram v2.0.23: the same SOCKS5 call-relay proxy the app passes
+    // for 1:1 calls (Instance.makeInstance) — the group stack routes its
+    // UDP media through the identical relay via AsyncSocks5UdpSocket.
+    // Extraction mirrors makeNativeInstance below (same Java fields).
+    if (!env->IsSameObject(proxyObj, nullptr)) {
+        JavaObject proxyObject(env, proxyObj);
+        auto groupProxy = std::make_shared<Proxy>();
+        groupProxy->host = tgvoip::jni::JavaStringToStdString(env, proxyObject.getStringField("host"));
+        groupProxy->port = static_cast<uint16_t>(proxyObject.getIntField("port"));
+        groupProxy->login = tgvoip::jni::JavaStringToStdString(env, proxyObject.getStringField("login"));
+        groupProxy->password = tgvoip::jni::JavaStringToStdString(env, proxyObject.getStringField("password"));
+        descriptor.proxy = groupProxy;
+    }
     if (!screencast) {
         descriptor.requestAudioBroadcastPart = [platformContext](int64_t timestamp, int64_t duration, std::function<void(BroadcastPart &&)> callback) -> std::shared_ptr<BroadcastPartTask> {
             std::shared_ptr<BroadcastPartTask> task = std::make_shared<BroadcastPartTaskJava>(platformContext, callback, timestamp, 0, VideoChannelDescription::Quality::Full);

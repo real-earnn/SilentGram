@@ -1,5 +1,6 @@
 package org.telegram.ui.Components;
 
+import org.telegram.messenger.SilentFloatingWindow;
 import static androidx.core.view.ViewCompat.performHapticFeedback;
 import static org.telegram.messenger.AndroidUtilities.dp;
 import static org.telegram.messenger.AndroidUtilities.lerp;
@@ -2199,6 +2200,7 @@ public class AIEditorAlert extends BottomSheetWithRecyclerListView implements No
                 }
             };
             popup[0].showAsDropDown(iconButton, dp(150), -dp(390), Gravity.BOTTOM);
+            SilentFloatingWindow.trackRawPopup(popup[0]);
             popup[0].dimBehind();
         }
 

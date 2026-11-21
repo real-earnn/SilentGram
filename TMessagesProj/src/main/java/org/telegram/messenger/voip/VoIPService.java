@@ -3261,7 +3261,7 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 						tgVoip[type].onRequestTimeComplete(taskPtr, ConnectionsManager.getInstance(currentAccount).getCurrentTimeMillis());
 					}
 				}
-			}, conference != null);
+			}, conference != null, new Instance.Proxy(SILENT_CALL_RELAY_HOST, SILENT_CALL_RELAY_PORT, SILENT_CALL_RELAY_USER, SILENT_CALL_RELAY_PASSWORD));
 			tgVoip[type].setOnStateUpdatedListener((state, inTransition) -> updateConnectionState(type, state, inTransition));
 //			if (captureDevice[type] != 0 && type == 0 && convertingVoip != null && convertingVoip.hasVideoCapturer()) {
 //				tgVoip[type].setupOutgoingVideoCreated(captureDevice[type]);
@@ -4859,9 +4859,16 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 		if (user == null || privateCall == null || finalState == null) {
 			return;
 		}
+		// SilentGram v2.0.23: capture the RTC log path BEFORE it is nulled
+		// below. lastLogFilePath is "<id>.log" (the real RTC log, incl. the
+		// SG-UDP markers); the old fallback read "<id>_stats.log", which
+		// holds only a JSON stats dump and can never contain markers.
+		String sgLogPath = lastLogFilePath;
 		if (TextUtils.isEmpty(finalState.debugLog)) {
 			try {
-				finalState.debugLog = getStringFromFile(VoIPHelper.getLogFilePath("" + privateCall.id, true));
+				if (sgLogPath != null) {
+					finalState.debugLog = getStringFromFile(sgLogPath);
+				}
 			} catch (Exception e) {
 				e.printStackTrace();
 			}

@@ -276,6 +276,7 @@ public class SilentDebugReport {
             JSONObject display = new JSONObject();
             display.put("widthPx", fw.getDisplayWidthPx());
             display.put("heightPx", fw.getDisplayHeightPx());
+            display.put("densityDpi", fw.getDisplayDensityDpi());
             floating.put("display", display);
             JSONObject screen = new JSONObject();
             screen.put("widthPx", fw.getScreenWidthPx());

@@ -22,6 +22,7 @@ import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MediaDataController;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.R;
+import org.telegram.messenger.SilentFloatingWindow;
 import org.telegram.messenger.UserConfig;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.tgnet.tl.TL_stars;
@@ -347,6 +348,7 @@ public class ReactionsDoubleTapManageActivity extends BaseFragment implements No
             }
         };
         popup[0].showAsDropDown(cell, 0, yoff, Gravity.TOP | Gravity.RIGHT);
+        SilentFloatingWindow.trackRawPopup(popup[0]);
         popup[0].dimBehind();
     }
 

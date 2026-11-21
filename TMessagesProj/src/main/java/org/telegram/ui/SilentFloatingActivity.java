@@ -3,6 +3,7 @@ package org.telegram.ui;
 import android.app.ActivityOptions;
 import android.content.ComponentName;
 import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
 
@@ -123,6 +124,11 @@ public class SilentFloatingActivity extends LaunchActivity {
     private boolean isMediaPickerIntent(Intent intent) {
         String action = intent.getAction();
         if (Intent.ACTION_PICK.equals(action) || Intent.ACTION_GET_CONTENT.equals(action)) {
+            return true;
+        }
+        // v2.0.23: the system photo picker (API 33+) is a media picker too.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && MediaStore.ACTION_PICK_IMAGES.equals(action)) {
             return true;
         }
         if (Intent.ACTION_CHOOSER.equals(action)) {

@@ -1,5 +1,6 @@
 package org.telegram.ui;
 
+import org.telegram.messenger.SilentFloatingWindow;
 import static org.telegram.messenger.AndroidUtilities.dp;
 import static org.telegram.messenger.AndroidUtilities.dpf2;
 import static org.telegram.messenger.LocaleController.getString;
@@ -969,6 +970,7 @@ public class ChannelColorActivity extends BaseFragment implements NotificationCe
             }
         };
         popup[0].showAsDropDown(cell, 0, yoff, Gravity.TOP | Gravity.RIGHT);
+        SilentFloatingWindow.trackRawPopup(popup[0]);
         popup[0].dimBehind();
     }
 

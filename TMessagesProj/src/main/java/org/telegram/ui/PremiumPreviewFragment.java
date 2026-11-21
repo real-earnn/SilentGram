@@ -1,5 +1,6 @@
 package org.telegram.ui;
 
+import org.telegram.messenger.SilentFloatingWindow;
 import static org.telegram.messenger.AndroidUtilities.dp;
 import static org.telegram.messenger.LocaleController.getCurrencyExpDivider;
 import static org.telegram.messenger.LocaleController.getString;
@@ -2585,6 +2586,7 @@ public class PremiumPreviewFragment extends BaseFragment implements Notification
             }
         };
         popup[0].showAsDropDown(cell, 0, yoff, Gravity.TOP | Gravity.RIGHT);
+        SilentFloatingWindow.trackRawPopup(popup[0]);
         popup[0].dimBehind();
     }
 

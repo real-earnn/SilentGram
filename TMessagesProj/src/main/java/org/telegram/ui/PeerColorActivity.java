@@ -1,5 +1,6 @@
 package org.telegram.ui;
 
+import org.telegram.messenger.SilentFloatingWindow;
 import static org.telegram.messenger.AndroidUtilities.distance;
 import static org.telegram.messenger.AndroidUtilities.dp;
 import static org.telegram.messenger.AndroidUtilities.dpf2;
@@ -1108,6 +1109,7 @@ public class PeerColorActivity extends BaseFragment implements NotificationCente
                 }
             };
             popup[0].showAsDropDown(cell, 0, yoff, Gravity.TOP | (LocaleController.isRTL ? Gravity.LEFT : Gravity.RIGHT));
+            SilentFloatingWindow.trackRawPopup(popup[0]);
             popup[0].dimBehind();
         }
 
