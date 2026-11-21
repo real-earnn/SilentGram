@@ -57,13 +57,22 @@ import org.telegram.utils.settings.SharedSettings;
  * - Host: SilentFloatingActivity (a LaunchActivity subclass — LaunchActivity
  *   itself is singleTask, so it can never be the second instance). It is
  *   launched with ActivityOptions.setLaunchDisplayId(displayId).
+ * - The TextureView OWNS its SurfaceTexture (v2.0.21): the virtual
+ *   display is created from the texture the TextureView delivers in
+ *   onSurfaceTextureAvailable, never from a pre-created SurfaceTexture
+ *   handed in with setSurfaceTexture(). The old pattern left the
+ *   TextureView's hardware layer unbound on the user's device — the
+ *   display produced frames into a texture the TextureView never
+ *   rendered, so the window stayed fully transparent (the background
+ *   showed straight through it). The TextureView's own texture is
+ *   guaranteed bound to its hardware layer.
  * - The activity lays out AT THE WINDOW'S content size on the virtual
  *   display; the TextureView shows it 1:1, so the picture is aspect-correct
  *   and tracks window resizes (resizeDisplayToWindow). This is required,
- *   not cosmetic: TextureView overwrites the shared SurfaceTexture's
- *   buffer size with its own view size (getTextureLayer/onSizeChanged),
- *   so a full-screen display and a window-size texture disagree and no
- *   frame ever reaches the TextureView — a black window.
+ *   not cosmetic: TextureView overwrites its SurfaceTexture's buffer
+ *   size with its own view size (onSizeChanged), so a full-screen
+ *   display and a window-size texture disagree and no frame ever
+ *   reaches the TextureView — a black window.
  * - The main LaunchActivity finishes when the floating one starts
  *   (Telegram's own closeOtherAppActivities rule); the connection is
  *   process-level and stays alive.
@@ -226,29 +235,26 @@ public class SilentFloatingWindow {
             int startX = savedXDp > 0 ? AndroidUtilities.dp(savedXDp) : fullWidth - windowWidthPx - AndroidUtilities.dp(16);
             int startY = savedYDp > 0 ? AndroidUtilities.dp(savedYDp) : (screenHeightPx - windowHeightPx) / 2;
 
-            // Surface + virtual display FIRST (synchronous): the TextureView
-            // is handed this texture, so no async surface race with Home.
+            // The TextureView OWNS its SurfaceTexture (v2.0.21): the
+            // virtual display is created from the texture the TextureView
+            // hands us in onSurfaceTextureAvailable — never from a
+            // pre-created `new SurfaceTexture(0)` handed in with
+            // setSurfaceTexture(). The old pattern left the hardware layer
+            // unbound on the user's device: the display produced frames
+            // into a texture the TextureView never rendered, so the window
+            // stayed fully transparent (background visible through it).
             // The display is created AT THE WINDOW'S content size (not the
-            // full screen): TextureView overwrites the shared
-            // SurfaceTexture's buffer size with its own view size
-            // (getTextureLayer/onSizeChanged), so a full-size display and a
-            // window-size texture disagree and no frame ever reaches the
-            // TextureView — a black window. With the display sized to the
-            // window, both sides agree and the content is aspect-correct
-            // 1:1; resizeDisplayToWindow() keeps it in sync on resizes.
+            // full screen): TextureView overwrites its SurfaceTexture's
+            // buffer size with its own view size (onSizeChanged), so a
+            // full-size display and a window-size texture disagree and no
+            // frame ever reaches the TextureView. With the display sized
+            // to the window, both sides agree and the content is
+            // aspect-correct 1:1; resizeDisplayToWindow() keeps it in
+            // sync on resizes. Creation happens in the listener (see
+            // createVirtualDisplayAndLaunch), so the overlay is added
+            // first and the activity launch waits for the texture.
             displayWidthPx = windowWidthPx;
             displayHeightPx = windowHeightPx - barHeightPx;
-            surfaceTexture = new SurfaceTexture(0);
-            surfaceTexture.setDefaultBufferSize(displayWidthPx, displayHeightPx);
-            surface = new Surface(surfaceTexture);
-            virtualDisplay = displayManager.createVirtualDisplay(
-                    "SilentGram Floating", displayWidthPx, displayHeightPx, densityDpi, surface,
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);
-            if (virtualDisplay == null || virtualDisplay.getDisplay() == null) {
-                lastStartError = "virtual display failed";
-                teardown();
-                return false;
-            }
 
             buildOverlay(ctx);
             windowParams.x = clampX(startX);
@@ -257,55 +263,24 @@ public class SilentFloatingWindow {
             rootView.requestFocus();
             active = true;
 
-            launchFloatingActivity(ctx);
+            // The floating activity is launched from the TextureView's
+            // SurfaceTextureListener once its texture is ready (see
+            // createVirtualDisplayAndLaunch) — not here.
 
-            // Watchdog: if the activity never appears (e.g. the launch was
-            // blocked), do not leave a dark empty window — go back to the
+            // Watchdog: if the texture never becomes available, or the
+            // activity never appears (e.g. the launch was blocked), do
+            // not leave an empty transparent window — go back to the
             // fullscreen app instead.
             launchWatchdog = () -> {
                 launchWatchdog = null;
                 if (floatingActivity == null && active) {
+                    lastStartError = "floating activity never started (no texture / display failed)";
                     FileLog.e("SilentFloatingWindow: floating activity never started, recovering");
                     teardown();
                     relaunchMain(0);
                 }
             };
             AndroidUtilities.runOnUIThread(launchWatchdog, 5000);
-
-            // Frame check: if the virtual display never delivers a frame,
-            // the window stays black. Sample the TextureView once — a live
-            // app always has non-black pixels (app bar, text, avatars).
-            // Names the failure instead of leaving a silent black window;
-            // it tears nothing down.
-            frameCheck = () -> {
-                frameCheck = null;
-                if (!active || textureView == null || floatingActivity == null) {
-                    return;
-                }
-                try {
-                    android.graphics.Bitmap bmp = textureView.getBitmap(32, 32);
-                    boolean anyContent = false;
-                    if (bmp != null) {
-                        for (int y = 0; y < bmp.getHeight() && !anyContent; y += 2) {
-                            for (int x = 0; x < bmp.getWidth(); x += 2) {
-                                if ((bmp.getPixel(x, y) & 0x00FFFFFF) != 0) {
-                                    anyContent = true;
-                                    break;
-                                }
-                            }
-                        }
-                        bmp.recycle();
-                    }
-                    if (!anyContent) {
-                        lastStartError = "floating content black (no frames)";
-                        FileLog.e("SilentFloatingWindow: no frames after 5s, content is black");
-                        SilentToast.show(ApplicationLoader.applicationContext, "Floating window is black — no picture from the app yet", android.widget.Toast.LENGTH_LONG);
-                    }
-                } catch (Exception e) {
-                    FileLog.e(e);
-                }
-            };
-            AndroidUtilities.runOnUIThread(frameCheck, 5000);
             return true;
         } catch (Exception e) {
             lastStartError = "error: " + String.valueOf(e.getMessage());
@@ -329,6 +304,123 @@ public class SilentFloatingWindow {
         ActivityOptions options = ActivityOptions.makeBasic();
         options.setLaunchDisplayId(virtualDisplay.getDisplay().getDisplayId());
         ctx.startActivity(intent, options.toBundle());
+    }
+
+    /**
+     * Called from the TextureView's SurfaceTextureListener once the
+     * TextureView owns a live SurfaceTexture. Creates the virtual display
+     * from THAT texture (never a pre-created one) at the TextureView's
+     * actual size, then launches the floating activity on it. The 5s
+     * frame check is scheduled here, so it measures 5s of real activity
+     * runtime, not 5s from the overlay being added.
+     */
+    private void createVirtualDisplayAndLaunch(Context ctx, SurfaceTexture texture, int width, int height) {
+        if (!active || virtualDisplay != null || texture == null || width <= 0 || height <= 0) {
+            return;
+        }
+        displayWidthPx = width;
+        displayHeightPx = height;
+        try {
+            surfaceTexture = texture;
+            surfaceTexture.setDefaultBufferSize(displayWidthPx, displayHeightPx);
+            surface = new Surface(surfaceTexture);
+            virtualDisplay = displayManager.createVirtualDisplay(
+                    "SilentGram Floating", displayWidthPx, displayHeightPx, densityDpi, surface,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC | DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);
+            if (virtualDisplay == null || virtualDisplay.getDisplay() == null) {
+                lastStartError = "virtual display failed";
+                FileLog.e("SilentFloatingWindow: virtual display creation failed");
+                AndroidUtilities.runOnUIThread(() -> recoverToMain());
+                return;
+            }
+            int displayId = virtualDisplay.getDisplay().getDisplayId();
+            FileLog.d("SilentFloatingWindow: virtual display id=" + displayId + " size=" + displayWidthPx + "x" + displayHeightPx + " texture=" + width + "x" + height);
+            launchFloatingActivity(ctx);
+
+            // Frame check: if the virtual display never delivers a frame,
+            // the window stays transparent. Sample the TextureView once —
+            // a live app always has non-black pixels (app bar, text,
+            // avatars). Logs the exact state (virtual display id, whether
+            // the activity is running and on which display, surface and
+            // texture validity, TextureView size, pixels sampled) and, on
+            // failure, toasts it too, so a device test names the failing
+            // step instead of leaving a silent transparent window; it
+            // tears nothing down.
+            frameCheck = () -> {
+                frameCheck = null;
+                if (!active || textureView == null) {
+                    return;
+                }
+                try {
+                    int vdId = -1;
+                    try {
+                        if (virtualDisplay != null && virtualDisplay.getDisplay() != null) {
+                            vdId = virtualDisplay.getDisplay().getDisplayId();
+                        }
+                    } catch (Exception ignored) {
+                    }
+                    boolean activityRunning = floatingActivity != null && !floatingActivity.isFinishing();
+                    int activityDisplayId = -1;
+                    try {
+                        if (floatingActivity != null) {
+                            activityDisplayId = floatingActivity.getWindowManager().getDefaultDisplay().getDisplayId();
+                        }
+                    } catch (Exception ignored) {
+                    }
+                    boolean surfaceValid = surface != null && surface.isValid();
+                    boolean textureAvailable = textureView.isAvailable();
+                    int tvW = textureView.getWidth();
+                    int tvH = textureView.getHeight();
+                    android.graphics.Bitmap bmp = textureView.getBitmap(32, 32);
+                    int sampled = 0;
+                    int lit = 0;
+                    if (bmp != null) {
+                        for (int y = 0; y < bmp.getHeight(); y += 2) {
+                            for (int x = 0; x < bmp.getWidth(); x += 2) {
+                                sampled++;
+                                if ((bmp.getPixel(x, y) & 0x00FFFFFF) != 0) {
+                                    lit++;
+                                }
+                            }
+                        }
+                        bmp.recycle();
+                    }
+                    String state = "vd=" + vdId + " activity=" + (activityRunning ? "running" : "none")
+                            + " activityDisplay=" + activityDisplayId
+                            + " surfaceValid=" + surfaceValid
+                            + " textureAvailable=" + textureAvailable
+                            + " view=" + tvW + "x" + tvH
+                            + " pixels=" + lit + "/" + sampled;
+                    if (lit == 0) {
+                        lastStartError = "floating content black (no frames)";
+                        FileLog.e("SilentFloatingWindow: frame check FAILED, no frames: " + state);
+                        SilentToast.show(ApplicationLoader.applicationContext,
+                                "Floating: no picture (" + state + ")", android.widget.Toast.LENGTH_LONG);
+                    } else {
+                        FileLog.d("SilentFloatingWindow: frame check OK: " + state);
+                    }
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+            };
+            AndroidUtilities.runOnUIThread(frameCheck, 5000);
+        } catch (Exception e) {
+            lastStartError = "error: " + String.valueOf(e.getMessage());
+            FileLog.e(e);
+            AndroidUtilities.runOnUIThread(() -> recoverToMain());
+        }
+    }
+
+    /** Tear the floating window down and bring the fullscreen app back.
+     * Used when the virtual display or the activity launch fails after
+     * the overlay is already up. Failure sites post this to the UI
+     * thread so no teardown runs inside a draw pass. */
+    private void recoverToMain() {
+        if (!active) {
+            return;
+        }
+        teardown();
+        relaunchMain(0);
     }
 
     /** Keep the virtual display (and its buffers) at the window's current
@@ -483,13 +575,11 @@ public class SilentFloatingWindow {
             FileLog.e(e);
         }
         surface = null;
-        try {
-            if (surfaceTexture != null) {
-                surfaceTexture.release();
-            }
-        } catch (Exception e) {
-            FileLog.e(e);
-        }
+        // The SurfaceTexture is NOT released here: since v2.0.21 the
+        // TextureView owns it, and it releases the texture itself when
+        // the view is detached (onSurfaceTextureDestroyed returns false).
+        // Releasing it here would pull the texture out from under the
+        // TextureView's hardware layer.
         surfaceTexture = null;
         if (LaunchActivity.instance == floatingActivity) {
             LaunchActivity.instance = null;
@@ -553,7 +643,51 @@ public class SilentFloatingWindow {
         rootView.addView(contentContainer, contentLp);
 
         textureView = new TextureView(ctx);
-        textureView.setSurfaceTexture(surfaceTexture);
+        // The TextureView OWNS its SurfaceTexture (v2.0.21): the virtual
+        // display is created from the texture delivered here, never from
+        // a pre-created SurfaceTexture handed in with setSurfaceTexture()
+        // — on the user's device that left the hardware layer unbound and
+        // no frame ever reached the window (fully transparent).
+        textureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+            @Override
+            public void onSurfaceTextureAvailable(SurfaceTexture texture, int width, int height) {
+                if (width > 0 && height > 0) {
+                    createVirtualDisplayAndLaunch(ctx, texture, width, height);
+                } else {
+                    // Texture ready before layout: wait one layout pass,
+                    // then use the view's real size.
+                    textureView.post(() -> {
+                        if (active && virtualDisplay == null && textureView.getWidth() > 0 && textureView.getHeight() > 0) {
+                            createVirtualDisplayAndLaunch(ctx, textureView.getSurfaceTexture(), textureView.getWidth(), textureView.getHeight());
+                        }
+                    });
+                }
+            }
+
+            @Override
+            public void onSurfaceTextureSizeChanged(SurfaceTexture texture, int width, int height) {
+                // The TextureView re-sizes its own buffer here; the
+                // virtual display is re-sized by resizeDisplayToWindow()
+                // when a resize gesture ends, so nothing to do here.
+            }
+
+            @Override
+            public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
+                FileLog.e("SilentFloatingWindow: TextureView surface destroyed while active=" + active);
+                if (active) {
+                    // The display's surface is dead: fall back to the
+                    // fullscreen app instead of a transparent window.
+                    AndroidUtilities.runOnUIThread(() -> recoverToMain());
+                }
+                // False: the TextureView owns this texture and releases
+                // it itself. We must never release it in teardown().
+                return false;
+            }
+
+            @Override
+            public void onSurfaceTextureUpdated(SurfaceTexture texture) {
+            }
+        });
         textureView.setOnTouchListener(new ContentTouchListener());
         contentContainer.addView(textureView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -741,7 +875,9 @@ public class SilentFloatingWindow {
     }
 
     private int clampWidth(int widthPx) {
-        int min = AndroidUtilities.dp(240);
+        // v2.0.21: 120dp minimum, so the window can shrink to a small
+        // corner bubble (was 240dp — half the screen on most phones).
+        int min = AndroidUtilities.dp(120);
         int maxByHeight = (int) ((screenHeightPx - barHeightPx - AndroidUtilities.dp(48)) * (fullWidth / (float) fullHeight));
         int max = Math.min(fullWidth, maxByHeight);
         if (max < min) {

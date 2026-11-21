@@ -15,7 +15,18 @@ import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.TranscribeButton;
 
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
+import java.util.UUID;
 
 /**
  * SilentGram F8: Voice message to text (server-side, like Telegram's own button).
@@ -36,16 +47,44 @@ import java.util.ArrayList;
  * Premium gating mirrors TranscribeButton EXACTLY (onTap + transcribePressed):
  * Premium users and free-in-chat transcriptions go straight through; trial
  * users go through while they have trials left; a message that was already
- * transcribed shows its stored text without a new request; anyone else sees
- * the lock message in the popup instead of a request. Every check and
- * request uses the message's own account (messageObject.currentAccount),
- * never a passed-in account. No trial/cooldown logic is bypassed, and no
- * Premium status is faked — the server still enforces Premium.
+ * transcribed shows its stored text without a new request; anyone else is
+ * transcribed by Groq Whisper through our own relay (see below) instead of
+ * seeing the lock message. Every check and request uses the message's own
+ * account (messageObject.currentAccount), never a passed-in account. No
+ * trial/cooldown logic is bypassed, and no Premium status is faked — the
+ * server still enforces Premium on the Telegram path.
+ *
+ * Groq fallback (non-Premium only): the voice file is downloaded if needed,
+ * then POSTed to our own Groq Whisper relay, which calls Groq's
+ * whisper-large-v3-turbo and returns {text}. The result is shown in the
+ * SAME popup, with the same Translate row below it. The relay holds the
+ * Groq key server-side (groq_key.txt); the app never sees or stores any
+ * key, and the relay URL is our own service address, not a secret. If the
+ * relay or key is missing, or Groq fails, the error is shown INSIDE the
+ * popup — never the Premium lock message, and the popup never closes
+ * silently. A Groq rate limit shows "busy, try again in a bit".
  */
 public class SilentVoiceTranscribe {
 
     private static final int MAX_TRIES = 3;
     private static final long RETRY_DELAY_MS = 5000;
+
+    // Groq Whisper relay (own Silent Hosting project 629). Hardcoded on
+    // purpose: it is our own service URL, not a secret — the Groq key
+    // lives only in groq_key.txt on the server, never in the app.
+    private static final String GROQ_RELAY_URL = "https://groq-whisper-relay-629.silenthost.site/transcribe";
+    private static final long GROQ_MAX_FILE_BYTES = 25L * 1024L * 1024L; // Groq's 25 MB file limit
+    private static final long GROQ_DOWNLOAD_TIMEOUT_MS = 60000;
+    private static final long GROQ_DOWNLOAD_POLL_MS = 500;
+    private static final int GROQ_CONNECT_TIMEOUT_MS = 15000;
+    private static final int GROQ_READ_TIMEOUT_MS = 120000;
+
+    // Plain literals (not R.string): new string resources would need a
+    // strings.xml edit, which is outside this change. If these messages
+    // ever need translating, move them to strings.xml as
+    // SilentTranscribeGroqNotSetup / SilentTranscribeGroqBusy.
+    private static final String GROQ_NOT_SETUP_TEXT = "Transcription service is not set up yet.";
+    private static final String GROQ_BUSY_TEXT = "Transcription is busy — try again in a bit.";
 
     public static void transcribe(Context context, int account, MessageObject msg) {
         if (context == null) {
@@ -178,14 +217,197 @@ public class SilentVoiceTranscribe {
         }
         // Eligibility is TranscribeButton.onTap exactly: Premium, free in
         // this chat, or a trial left (a cached transcription is handled
-        // above). Anyone else sees the lock message in the popup.
+        // above). Anyone else is transcribed by Groq Whisper through our
+        // own relay instead of seeing the Premium lock message — the
+        // Telegram path is untouched, and no trial logic is bypassed.
         if (!UserConfig.getInstance(acc).isPremium()
                 && !TranscribeButton.isFreeTranscribeInChat(msg)
                 && !TranscribeButton.canTranscribeTrial(msg)) {
-            resultView.setText(LocaleController.getString(R.string.SilentTranscribePremium));
+            transcribeViaGroq(acc, msg, dialog, resultView, transcript);
             return;
         }
         requestTranscription(context, acc, msg, dialog, resultView, transcript, 1);
+    }
+
+    /** Result of one Groq relay call: either transcribed text, or an error kind. */
+    private static final class GroqResult {
+        final String text;
+        final String errorKind; // null on success; "not_setup", "busy" or "failed"
+
+        private GroqResult(String text, String errorKind) {
+            this.text = text;
+            this.errorKind = errorKind;
+        }
+
+        static GroqResult ok(String text) {
+            return new GroqResult(text, null);
+        }
+
+        static GroqResult error(String errorKind) {
+            return new GroqResult(null, errorKind);
+        }
+    }
+
+    /**
+     * Groq Whisper path, for non-Premium users only. Runs on a background
+     * thread: makes sure the voice file is downloaded, POSTs it to our own
+     * relay, and shows the returned text in the SAME popup (so the Translate
+     * button works on it exactly like on Telegram's text). Every failure is
+     * shown inside the popup; the Premium lock message is never shown here.
+     */
+    private static void transcribeViaGroq(int account, MessageObject msg,
+            AlertDialog dialog, TextView resultView, String[] transcript) {
+        new Thread(() -> {
+            GroqResult result = GroqResult.error("failed");
+            TLRPC.Document document = msg.getDocument();
+            if (document != null) {
+                File file = FileLoader.getInstance(account).getPathToMessage(msg.messageOwner);
+                if (file != null && !TextUtils.isEmpty(file.getAbsolutePath())) {
+                    if (!file.exists() || file.length() == 0) {
+                        // Not downloaded yet: start the download and wait for
+                        // the file to appear (voice notes are small, so this
+                        // is normally a second or two; 60s is the hard cap).
+                        FileLoader.getInstance(account).loadFile(document, msg, 1, 0);
+                        long waited = 0;
+                        while (waited < GROQ_DOWNLOAD_TIMEOUT_MS && (!file.exists() || file.length() == 0)) {
+                            try {
+                                Thread.sleep(GROQ_DOWNLOAD_POLL_MS);
+                            } catch (InterruptedException e) {
+                                break;
+                            }
+                            waited += GROQ_DOWNLOAD_POLL_MS;
+                        }
+                    }
+                    if (file.exists() && file.length() > 0 && file.length() <= GROQ_MAX_FILE_BYTES) {
+                        String filename = FileLoader.getDocumentFileName(document);
+                        if (TextUtils.isEmpty(filename)) {
+                            filename = "voice.ogg";
+                        }
+                        String mimeType = document.mime_type;
+                        if (TextUtils.isEmpty(mimeType)) {
+                            mimeType = "audio/ogg";
+                        }
+                        result = uploadVoiceToGroq(file, filename, mimeType);
+                    }
+                }
+            }
+            final GroqResult done = result;
+            AndroidUtilities.runOnUIThread(() -> {
+                if (!dialog.isShowing()) {
+                    return;
+                }
+                if (done.errorKind == null && !TextUtils.isEmpty(done.text)) {
+                    transcript[0] = done.text;
+                    resultView.setText(done.text);
+                    if (dialog.getButton(DialogInterface.BUTTON_POSITIVE) != null) {
+                        dialog.getButton(DialogInterface.BUTTON_POSITIVE).setEnabled(true);
+                    }
+                } else if ("not_setup".equals(done.errorKind)) {
+                    resultView.setText(GROQ_NOT_SETUP_TEXT);
+                } else if ("busy".equals(done.errorKind)) {
+                    resultView.setText(GROQ_BUSY_TEXT);
+                } else {
+                    resultView.setText(LocaleController.getString(R.string.SilentTranscribeFailed));
+                }
+            });
+        }, "silent-groq-transcribe").start();
+    }
+
+    /**
+     * POSTs one voice file to the Groq relay as multipart/form-data and
+     * returns the transcribed text. Maps the relay's errors: 503 /
+     * groq_key_missing means the server key is not set up yet; 429 /
+     * groq_rate_limited means Groq is busy; anything else is a plain
+     * failure. Never throws — every problem comes back as a GroqResult.
+     */
+    private static GroqResult uploadVoiceToGroq(File file, String filename, String mimeType) {
+        String boundary = "----SilentGramGroq" + UUID.randomUUID().toString();
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) new URL(GROQ_RELAY_URL).openConnection();
+            conn.setConnectTimeout(GROQ_CONNECT_TIMEOUT_MS);
+            conn.setReadTimeout(GROQ_READ_TIMEOUT_MS);
+            conn.setDoOutput(true);
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("User-Agent", "SilentGram");
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+            conn.setChunkedStreamingMode(0);
+            try (OutputStream out = conn.getOutputStream()) {
+                String partHeader = "--" + boundary + "\r\n"
+                        + "Content-Disposition: form-data; name=\"file\"; filename=\"" + filename + "\"\r\n"
+                        + "Content-Type: " + mimeType + "\r\n\r\n";
+                out.write(partHeader.getBytes("UTF-8"));
+                try (FileInputStream in = new FileInputStream(file)) {
+                    byte[] buffer = new byte[8192];
+                    int read;
+                    while ((read = in.read(buffer)) != -1) {
+                        out.write(buffer, 0, read);
+                    }
+                }
+                out.write(("\r\n--" + boundary + "--\r\n").getBytes("UTF-8"));
+                out.flush();
+            }
+            int code = conn.getResponseCode();
+            String body = readGroqResponse(conn, code);
+            String error = null;
+            String text = null;
+            if (!TextUtils.isEmpty(body)) {
+                try {
+                    JSONObject json = new JSONObject(body);
+                    text = json.optString("text", null);
+                    error = json.optString("error", null);
+                } catch (Throwable e) {
+                    FileLog.e(e);
+                }
+            }
+            if (code == HttpURLConnection.HTTP_OK && !TextUtils.isEmpty(text)) {
+                return GroqResult.ok(text);
+            }
+            if (code == 503 || "groq_key_missing".equals(error)) {
+                return GroqResult.error("not_setup");
+            }
+            if (code == 429 || "groq_rate_limited".equals(error)) {
+                return GroqResult.error("busy");
+            }
+            return GroqResult.error("failed");
+        } catch (Throwable e) {
+            FileLog.e(e);
+            return GroqResult.error("failed");
+        } finally {
+            if (conn != null) {
+                conn.disconnect();
+            }
+        }
+    }
+
+    /** Reads the relay response body (error stream for HTTP >= 400). */
+    private static String readGroqResponse(HttpURLConnection conn, int code) {
+        InputStream stream = null;
+        try {
+            stream = code >= HttpURLConnection.HTTP_BAD_REQUEST ? conn.getErrorStream() : conn.getInputStream();
+            if (stream == null) {
+                return null;
+            }
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, "UTF-8"))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    sb.append(line);
+                }
+            }
+            return sb.toString();
+        } catch (Throwable e) {
+            FileLog.e(e);
+            return null;
+        } finally {
+            if (stream != null) {
+                try {
+                    stream.close();
+                } catch (Throwable e) {
+                    FileLog.e(e);
+                }
+            }
+        }
     }
 
     private static void requestTranscription(Context context, int account, MessageObject msg,

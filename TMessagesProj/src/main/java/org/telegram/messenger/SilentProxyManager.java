@@ -97,6 +97,18 @@ import java.util.concurrent.atomic.AtomicReference;
  *    unchanged: dead proxies are only cleared when live >= 3 and
  *    live > dead, so a dead phone network never mass-clears the list.
  *
+ * SilentGram v2.0.21: the shed below compared the fastest verified
+ * proxy OVERALL, which usually IS ours, so bestVerified == current
+ * and no shed ever fired. The gate now judges the fastest verified
+ * PUBLIC proxy separately (see tryConnectFastest) and sheds to it
+ * when the current proxy is ours and its ms is sane (see
+ * OWN_SHED_MAX_MS). Every round also logs a one-line diagnostic
+ * (see logRoundDiagnostic) with the candidate and verified counts,
+ * the best verified public proxy, the current proxy, and whether
+ * the shed fired or why not — so a device test shows whether a
+ * fast public proxy never verified, never made the kept 10, or
+ * lost the gate.
+ *
  * SilentGram S (fast first connect — why v2.0.8 took a minute to connect):
  * 1) The startup round waited for the API-fastest proxy's probe before
  *    connecting to any slower verified one, and the API's latency is
@@ -273,6 +285,14 @@ public class SilentProxyManager {
     private static final AtomicBoolean roundRunning = new AtomicBoolean(false);
     // Consecutive watcher rounds the current proxy failed verification.
     private static volatile int watcherUnstableRounds;
+    // SilentGram v2.0.21: outcome of the shed decision in the current
+    // round (written by tryConnectFastest, read by logRoundDiagnostic),
+    // and the last round diagnostic line (written by
+    // logRoundDiagnostic, readable via getLastRoundDiagnostic for a
+    // future proxy-page row). Only address:port keys are ever stored
+    // here, never proxy secrets.
+    private static volatile String lastShedOutcome = "not evaluated yet";
+    private static volatile String lastRoundDiagnostic = "";
 
     // Latency (ms) of the currently active proxy, -1 if unknown.
     private static final AtomicLong currentLatencyMs = new AtomicLong(-1);
@@ -865,6 +885,10 @@ public class SilentProxyManager {
         }
         bestInfo.set(null);
         bestLatencyMs.set(Long.MAX_VALUE);
+        // SilentGram v2.0.21: a fresh round gets a fresh shed verdict —
+        // a stale one from the previous round would mislabel this
+        // round's diagnostic (see logRoundDiagnostic).
+        lastShedOutcome = "not evaluated yet";
         // Fastest-first by effective latency (unknown sorts last). The
         // connect gate below walks this order, so the winner is always the
         // lowest-latency LIVE proxy.
@@ -1046,6 +1070,9 @@ public class SilentProxyManager {
                 // Safety net: if the last probe's gate call was missed, decide
                 // now that every probe resolved.
                 tryConnectFastest(ranked, state, gateLock, decisionMade, connectedOnce, activeLatency);
+                // SilentGram v2.0.21: report this round before cleanup /
+                // pruning changes the picture (see logRoundDiagnostic).
+                logRoundDiagnostic(ranked, state, watcherRound, openRound, current, activeLatency, nativeCheckBudget.get());
                 // SilentGram K7: drop proxies that are dead this round — only
                 // when the round proves the user's own network is fine.
                 cleanupDeadProxies(ranked, state);
@@ -1382,6 +1409,9 @@ public class SilentProxyManager {
             if (!UserConfig.getInstance(UserConfig.selectedAccount).isClientActivated()) {
                 SharedConfig.ProxyInfo cur = SharedConfig.currentProxy;
                 if (cur != null && isOwnProxy(cur)) {
+                    // SilentGram v2.0.21: record the pin for the round
+                    // diagnostic — the shed is deliberately off here.
+                    lastShedOutcome = "no shed: pre-login pinned to ours";
                     decisionMade.set(true);
                     return;
                 }
@@ -1411,6 +1441,11 @@ public class SilentProxyManager {
                 }
                 int bestVerified = -1;
                 long bestVerifiedMs = Long.MAX_VALUE;
+                // SilentGram v2.0.21: the fastest handshake-verified
+                // PUBLIC proxy, judged separately from the overall
+                // fastest (which usually IS ours — see the shed below).
+                int bestVerifiedPublic = -1;
+                long bestVerifiedPublicMs = Long.MAX_VALUE;
                 int bestUnverified = -1;
                 long bestUnverifiedMs = Long.MAX_VALUE;
                 for (int i = 0; i < ranked.size(); i++) {
@@ -1432,28 +1467,48 @@ public class SilentProxyManager {
                             bestVerifiedMs = ms;
                             bestVerified = i;
                         }
+                        if (!isOwnProxy(info) && ms < bestVerifiedPublicMs) {
+                            bestVerifiedPublicMs = ms;
+                            bestVerifiedPublic = i;
+                        }
                     } else if (ms < bestUnverifiedMs) {
                         bestUnverifiedMs = ms;
                         bestUnverified = i;
                     }
                 }
                 if (bestVerified >= 0) {
-                    // SilentGram A: OUR proxy is first-connect + fallback
-                    // only — never the permanent home (VPS bandwidth).
-                    // It usually has the LOWEST measured ms, so the 50ms
-                    // bar in tryConnectCandidate below could never be
-                    // beaten by a public proxy and the app sat on ours
-                    // forever. When the current proxy is ours, ANY
-                    // verified public proxy with a sane latency wins
-                    // immediately (bar = dead, so any verified proxy
-                    // beats it); if none is sane, the normal bar below
-                    // keeps us on ours.
-                    if (SharedConfig.currentProxy != null && isOwnProxy(SharedConfig.currentProxy)
-                            && !sameProxy(ranked.get(bestVerified), SharedConfig.currentProxy)
-                            && bestVerifiedMs <= OWN_SHED_MAX_MS) {
-                        FileLog.d("SilentProxy: A shedding our proxy for fastest verified public " + proxyKey(ranked.get(bestVerified)) + " (" + bestVerifiedMs + "ms)");
-                        tryConnectCandidate(ranked, state, bestVerified, decisionMade, connectedOnce, Long.MAX_VALUE);
-                        return;
+                    // SilentGram A + v2.0.21: OUR proxy is first-connect
+                    // + fallback only — never the permanent home (VPS
+                    // bandwidth). The old shed compared the fastest
+                    // verified proxy OVERALL, which usually IS ours, so
+                    // the "not the current proxy" check failed and the
+                    // app sat on ours forever even with a 20ms public
+                    // proxy verified. Judge the fastest verified PUBLIC
+                    // proxy separately instead: when the current proxy
+                    // is ours, it wins immediately if its ms is sane
+                    // (<= OWN_SHED_MAX_MS), whatever ours measures —
+                    // the 50ms bar below is not consulted for the shed.
+                    // If that public proxy then fails, the watchdog
+                    // returns to ours and the next round re-evaluates
+                    // to the next-fastest verified public proxy. If no
+                    // public proxy is sane, fall through to the normal
+                    // 50ms bar below, which may still switch on a clear
+                    // speed win, or keep us on ours.
+                    if (SharedConfig.currentProxy != null && isOwnProxy(SharedConfig.currentProxy)) {
+                        if (bestVerifiedPublic >= 0 && bestVerifiedPublicMs <= OWN_SHED_MAX_MS) {
+                            lastShedOutcome = "shed to " + proxyKey(ranked.get(bestVerifiedPublic)) + " (" + bestVerifiedPublicMs + "ms)";
+                            FileLog.d("SilentProxy: v2.0.21 shedding our proxy for fastest verified public " + proxyKey(ranked.get(bestVerifiedPublic)) + " (" + bestVerifiedPublicMs + "ms)");
+                            if (tryConnectCandidate(ranked, state, bestVerifiedPublic, decisionMade, connectedOnce, Long.MAX_VALUE)) {
+                                return;
+                            }
+                            lastShedOutcome = "shed to " + proxyKey(ranked.get(bestVerifiedPublic)) + " (" + bestVerifiedPublicMs + "ms) FAILED to enable";
+                        } else if (bestVerifiedPublic < 0) {
+                            lastShedOutcome = "no shed: no verified public proxy this round";
+                        } else {
+                            lastShedOutcome = "no shed: best verified public " + proxyKey(ranked.get(bestVerifiedPublic)) + " (" + bestVerifiedPublicMs + "ms) > " + OWN_SHED_MAX_MS + "ms";
+                        }
+                    } else {
+                        lastShedOutcome = "no shed: current proxy is not ours";
                     }
                     tryConnectCandidate(ranked, state, bestVerified, decisionMade, connectedOnce, bar);
                 } else if (bestUnverified >= 0 && currentProxyState(ranked, state) == 2) {
@@ -1977,6 +2032,124 @@ public class SilentProxyManager {
         } catch (Throwable e) {
             FileLog.e(e);
         }
+    }
+
+    /**
+     * SilentGram v2.0.21: one-line report card for a finished probe
+     * round, in FileLog (logcat) and kept in lastRoundDiagnostic for
+     * a future proxy-page row. It says exactly why a fast public
+     * proxy did or did not win: candidates = every proxy probed this
+     * round (a watcher round probes at most the kept 10, so a 20ms
+     * proxy outside the kept set never appears here at all);
+     * verified = handshake-verified (state 1); tcpOnly = TCP-live
+     * but handshake-failed OR never got a native check (state 3 —
+     * the native-check budget covers only 10 candidates a round, so
+     * a proxy ranked past it can never verify); dead = TCP failed;
+     * pending = still probing when the round's wait expired, so the
+     * gate never judged the full set. Best verified PUBLIC is the
+     * lowest-ms handshake-verified proxy that is not ours, shown
+     * before the watchdog-block filter ("BLOCKED" when the fastest
+     * one is blocked — a blocked winner hides behind the next one).
+     * savedKept is the kept-set size at round start (see
+     * lastCandidates). Only address:port keys are logged, never
+     * proxy secrets.
+     */
+    private static void logRoundDiagnostic(List<SharedConfig.ProxyInfo> ranked, int[] state,
+            boolean watcherRound, boolean openRound, SharedConfig.ProxyInfo currentAtStart,
+            long activeLatency, int nativeBudgetLeft) {
+        int pending = 0, verified = 0, dead = 0, tcpOnly = 0;
+        int verifiedPublic = 0, verifiedPublicAny = 0, verifiedOwn = 0;
+        int bestPublicIdx = -1;
+        long bestPublicMs = Long.MAX_VALUE;
+        int bestPublicAnyIdx = -1;
+        long bestPublicAnyMs = Long.MAX_VALUE;
+        for (int i = 0; i < ranked.size(); i++) {
+            if (state[i] == 0) {
+                pending++;
+                continue;
+            }
+            if (state[i] == 2) {
+                dead++;
+                continue;
+            }
+            if (state[i] == 3) {
+                tcpOnly++;
+                continue;
+            }
+            if (state[i] != 1) {
+                continue;
+            }
+            verified++;
+            long ms = latencyForDecision(proxyKey(ranked.get(i)));
+            if (ms < 0) {
+                continue;
+            }
+            if (isOwnProxy(ranked.get(i))) {
+                verifiedOwn++;
+                continue;
+            }
+            if (ms < bestPublicAnyMs) {
+                bestPublicAnyMs = ms;
+                bestPublicAnyIdx = i;
+            }
+            verifiedPublicAny++;
+            if (isProxyBlocked(proxyKey(ranked.get(i)))) {
+                continue;
+            }
+            verifiedPublic++;
+            if (ms < bestPublicMs) {
+                bestPublicMs = ms;
+                bestPublicIdx = i;
+            }
+        }
+        SharedConfig.ProxyInfo curNow = SharedConfig.currentProxy;
+        String curNowKey = curNow == null ? "none" : proxyKey(curNow);
+        long curNowMs = currentProxyMeasuredLatency(ranked, state, currentLatencyMs.get());
+        String curNowMsStr = curNowMs == Long.MAX_VALUE ? "dead" : (curNowMs < 0 ? "unknown" : curNowMs + "ms");
+        String curStartKey = currentAtStart == null ? "none" : proxyKey(currentAtStart);
+        String curStartMsStr = activeLatency == Long.MAX_VALUE ? "dead" : (activeLatency < 0 ? "unknown" : activeLatency + "ms");
+        String shed;
+        if (pending > 0) {
+            shed = "NOT EVALUATED: round incomplete, " + pending + " still probing (gate never judged the full set)";
+        } else if (!UserConfig.getInstance(UserConfig.selectedAccount).isClientActivated()) {
+            shed = "no shed: pre-login pinned to ours";
+        } else if (currentAtStart == null) {
+            shed = "no shed: no current proxy at round start";
+        } else if (!isOwnProxy(currentAtStart)) {
+            shed = "no shed needed: current at start was not ours (" + curStartKey + ")";
+        } else if (curNow != null && !isOwnProxy(curNow)) {
+            shed = "SHED FIRED: left ours for " + curNowKey + " (" + curNowMsStr + ") — gate said: "
+                    + ("not evaluated yet".equals(lastShedOutcome) ? "switched via dead-current fast path (not the shed branch)" : lastShedOutcome);
+        } else if ("not evaluated yet".equals(lastShedOutcome)) {
+            shed = "not evaluated: gate took the dead-current fast path and no verified proxy connected";
+        } else {
+            shed = lastShedOutcome;
+        }
+        String bestPublicStr;
+        if (bestPublicIdx >= 0) {
+            bestPublicStr = proxyKey(ranked.get(bestPublicIdx)) + " " + bestPublicMs + "ms";
+        } else if (bestPublicAnyIdx >= 0) {
+            bestPublicStr = proxyKey(ranked.get(bestPublicAnyIdx)) + " " + bestPublicAnyMs + "ms BLOCKED";
+        } else {
+            bestPublicStr = "none";
+        }
+        int savedKept = lastCandidates == null ? -1 : lastCandidates.size();
+        String line = (watcherRound ? "watcher" : (openRound ? "open" : "fetch"))
+                + " round: candidates=" + ranked.size() + " savedKept=" + savedKept
+                + " verified=" + verified + " (public=" + verifiedPublic + ", own=" + verifiedOwn
+                + ", publicBlocked=" + (verifiedPublicAny - verifiedPublic) + ")"
+                + " tcpOnly=" + tcpOnly + " dead=" + dead + " pending=" + pending
+                + " nativeBudgetLeft=" + nativeBudgetLeft
+                + " bestPublic=" + bestPublicStr
+                + " current=" + curNowKey + " " + curNowMsStr + " (was " + curStartKey + " " + curStartMsStr + ")"
+                + " shed: " + shed;
+        lastRoundDiagnostic = line;
+        FileLog.d("SilentProxy: v2.0.21 round diag: " + line);
+    }
+
+    /** Last round diagnostic line (see logRoundDiagnostic), for the proxy page. */
+    public static String getLastRoundDiagnostic() {
+        return lastRoundDiagnostic;
     }
 
     /**
