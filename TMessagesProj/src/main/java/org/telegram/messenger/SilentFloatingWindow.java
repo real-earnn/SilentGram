@@ -137,6 +137,10 @@ public class SilentFloatingWindow {
      * so a device test names the failing step instead of silently falling
      * back. */
     private String lastStartError;
+    /** Result of the last frame check ("OK: ..." / "FAILED: ...", null =
+     * not run yet) and when it ran — read by the debug report. */
+    private volatile String lastFrameCheck;
+    private volatile long lastFrameCheckAtMs;
 
     private SilentFloatingWindow() {
     }
@@ -147,6 +151,68 @@ public class SilentFloatingWindow {
 
     public String getLastStartError() {
         return lastStartError;
+    }
+
+    /** Read-only state for the debug report. -1 = no display. */
+    public int getVirtualDisplayId() {
+        try {
+            return virtualDisplay != null && virtualDisplay.getDisplay() != null
+                    ? virtualDisplay.getDisplay().getDisplayId() : -1;
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    /** Display the floating activity is running on, -1 = no activity. */
+    public int getActivityDisplayId() {
+        try {
+            return floatingActivity != null
+                    ? floatingActivity.getWindowManager().getDefaultDisplay().getDisplayId() : -1;
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    /** Last frame-check result ("OK: ..." / "FAILED: ..."), null = not run yet. */
+    public String getLastFrameCheck() {
+        return lastFrameCheck;
+    }
+
+    /** Wall-clock time of the last frame check, 0 = never ran. */
+    public long getLastFrameCheckAtMs() {
+        return lastFrameCheckAtMs;
+    }
+
+    public int getWindowWidthPx() {
+        return windowWidthPx;
+    }
+
+    public int getWindowHeightPx() {
+        return windowHeightPx;
+    }
+
+    public int getWindowX() {
+        return windowParams != null ? windowParams.x : 0;
+    }
+
+    public int getWindowY() {
+        return windowParams != null ? windowParams.y : 0;
+    }
+
+    public int getDisplayWidthPx() {
+        return displayWidthPx;
+    }
+
+    public int getDisplayHeightPx() {
+        return displayHeightPx;
+    }
+
+    public int getScreenWidthPx() {
+        return screenWidthPx;
+    }
+
+    public int getScreenHeightPx() {
+        return screenHeightPx;
     }
 
     public void setFloatingActivity(SilentFloatingActivity activity) {
@@ -391,6 +457,8 @@ public class SilentFloatingWindow {
                             + " textureAvailable=" + textureAvailable
                             + " view=" + tvW + "x" + tvH
                             + " pixels=" + lit + "/" + sampled;
+                    lastFrameCheck = (lit == 0 ? "FAILED: " : "OK: ") + state;
+                    lastFrameCheckAtMs = System.currentTimeMillis();
                     if (lit == 0) {
                         lastStartError = "floating content black (no frames)";
                         FileLog.e("SilentFloatingWindow: frame check FAILED, no frames: " + state);

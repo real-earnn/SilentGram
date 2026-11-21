@@ -86,6 +86,41 @@ public class SilentVoiceTranscribe {
     private static final String GROQ_NOT_SETUP_TEXT = "Transcription service is not set up yet.";
     private static final String GROQ_BUSY_TEXT = "Transcription is busy — try again in a bit.";
 
+    // Last transcription outcome, for the debug report (in-memory only,
+    // never persisted). The text is the user's own voice message content.
+    private static volatile String lastVttSource; // "telegram", "groq" or "cached"
+    private static volatile String lastVttText;
+    private static volatile String lastVttError; // null on success
+    private static volatile long lastVttAtMs;
+
+    /** The Groq relay URL (our own service address, not a secret). */
+    public static String getGroqRelayUrl() {
+        return GROQ_RELAY_URL;
+    }
+
+    public static String getLastVttSource() {
+        return lastVttSource;
+    }
+
+    public static String getLastVttText() {
+        return lastVttText;
+    }
+
+    public static String getLastVttError() {
+        return lastVttError;
+    }
+
+    public static long getLastVttAtMs() {
+        return lastVttAtMs;
+    }
+
+    private static void recordVttResult(String source, String text, String error) {
+        lastVttSource = source;
+        lastVttText = text;
+        lastVttError = error;
+        lastVttAtMs = System.currentTimeMillis();
+    }
+
     public static void transcribe(Context context, int account, MessageObject msg) {
         if (context == null) {
             return;
@@ -191,6 +226,7 @@ public class SilentVoiceTranscribe {
         // transcribed shows our lock instead of its text.
         if (!TextUtils.isEmpty(msg.messageOwner.voiceTranscription)) {
             transcript[0] = msg.messageOwner.voiceTranscription;
+            recordVttResult("cached", msg.messageOwner.voiceTranscription, null);
             resultView.setText(msg.messageOwner.voiceTranscription);
             if (dialog.getButton(DialogInterface.BUTTON_POSITIVE) != null) {
                 dialog.getButton(DialogInterface.BUTTON_POSITIVE).setEnabled(true);
@@ -298,15 +334,19 @@ public class SilentVoiceTranscribe {
                 }
                 if (done.errorKind == null && !TextUtils.isEmpty(done.text)) {
                     transcript[0] = done.text;
+                    recordVttResult("groq", done.text, null);
                     resultView.setText(done.text);
                     if (dialog.getButton(DialogInterface.BUTTON_POSITIVE) != null) {
                         dialog.getButton(DialogInterface.BUTTON_POSITIVE).setEnabled(true);
                     }
                 } else if ("not_setup".equals(done.errorKind)) {
+                    recordVttResult("groq", null, "not_setup");
                     resultView.setText(GROQ_NOT_SETUP_TEXT);
                 } else if ("busy".equals(done.errorKind)) {
+                    recordVttResult("groq", null, "busy");
                     resultView.setText(GROQ_BUSY_TEXT);
                 } else {
+                    recordVttResult("groq", null, "failed");
                     resultView.setText(LocaleController.getString(R.string.SilentTranscribeFailed));
                 }
             });
@@ -446,6 +486,7 @@ public class SilentVoiceTranscribe {
                     }
                     if (!TextUtils.isEmpty(text)) {
                         transcript[0] = text;
+                        recordVttResult("telegram", text, null);
                         if (isFinal) {
                             resultView.setText(text);
                             if (dialog.getButton(DialogInterface.BUTTON_POSITIVE) != null) {
@@ -476,6 +517,7 @@ public class SilentVoiceTranscribe {
                 });
             } else {
                 if (err != null && err.text != null && err.text.startsWith("FLOOD_WAIT_")) {
+                    recordVttResult("telegram", null, "flood_wait");
                     MessagesController.getInstance(account).updateTranscribeAudioTrialCurrentNumber(0);
                     MessagesController.getInstance(account).updateTranscribeAudioTrialCooldownUntil(
                             ConnectionsManager.getInstance(account).getCurrentTime() + Utilities.parseInt(err.text));
@@ -490,6 +532,7 @@ public class SilentVoiceTranscribe {
                 }
                 AndroidUtilities.runOnUIThread(() -> {
                     if (dialog.isShowing()) {
+                        recordVttResult("telegram", null, "failed");
                         resultView.setText(LocaleController.getString(R.string.SilentTranscribeFailed));
                     }
                 });

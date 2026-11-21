@@ -125,7 +125,9 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
     // SilentGram v2.0.18: the last 1:1 call's facts, stashed by VoIPService
     // at makeInstance time (version + SERVER-sent TCP flags). Read here so
     // the proxy page shows whether the server offered a TCP reflector.
-    private static String getLastCallFactsText() {
+    // Public so the debug report reuses the same mechanism (and the same
+    // keys) instead of duplicating it.
+    public static String getLastCallFactsText() {
         try {
             android.content.SharedPreferences prefs = org.telegram.messenger.ApplicationLoader.applicationContext.getSharedPreferences("silentgram", android.content.Context.MODE_PRIVATE);
             String facts = prefs.getString("sg_last_call_facts", null);
@@ -138,6 +140,17 @@ public class ProxyListActivity extends BaseFragment implements NotificationCente
             return null;
         }
     }
+
+    /** Last known-good call-relay probe result (static: survives page opens), or null if never probed. */
+    public static String getLastCallRelayStatusText() {
+        return lastCallRelayOkText;
+    }
+
+    /** Wall-clock time the relay was last OK, 0 = never. */
+    public static long getLastCallRelayOkMs() {
+        return lastCallRelayOkMs;
+    }
+
     private static final int CALL_RELAY_PROBE_ATTEMPTS = 3;
     private static final int CALL_RELAY_TCP_TIMEOUT_MS = 4000;
     private static final int CALL_RELAY_UDP_TIMEOUT_MS = 3000;

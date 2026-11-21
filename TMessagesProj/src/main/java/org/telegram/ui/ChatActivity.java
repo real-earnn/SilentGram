@@ -1749,6 +1749,12 @@ public class ChatActivity extends BaseFragment implements
 
     private final static int id_chat_compose_panel = 1000;
 
+    // SilentGram v2.0.21: the Chat Lock row's lazy menu item, for the
+    // 5-second-hold debug report trigger. The flag is reset whenever the
+    // row is (re)created, so a rebuilt header menu re-attaches the hold.
+    private ActionBarMenuItem.Item silentLockItem;
+    private boolean silentDebugHoldAttached;
+
     RecyclerListView.OnItemLongClickListenerExtended onItemLongClickListener = new RecyclerListView.OnItemLongClickListenerExtended() {
         @Override
         public boolean onItemClick(View view, int position, float x, float y) {
@@ -4370,10 +4376,13 @@ public class ChatActivity extends BaseFragment implements
             createTopicsPanelItem(menu);
             headerItem = menu.addItem(chat_menu_options, otherIcon);
             updateTopicsPanelItem();
+            silentLockItem = null;
+            silentDebugHoldAttached = false;
             headerItem.setSubMenuDelegate(new ActionBarMenuItem.ActionBarSubMenuItemDelegate() {
                 @Override
                 public void onShowSubMenu() {
                     updateScrimSourceBitmap();
+                    attachSilentChatLockDebugHold();
                 }
 
                 @Override
@@ -4520,9 +4529,10 @@ public class ChatActivity extends BaseFragment implements
             }
             // SilentGram F4: Add / Remove this chat from Chat Lock.
             if (chatMode == 0 && dialog_id != 0) {
-                headerItem.lazilyAddSubItem(chat_menu_silent_lock, R.drawable.msg_secret,
+                silentLockItem = headerItem.lazilyAddSubItem(chat_menu_silent_lock, R.drawable.msg_secret,
                         LocaleController.getString(org.telegram.messenger.SilentChatLock.isLocked(dialog_id)
                                 ? R.string.SilentChatLockRemove : R.string.SilentChatLockAdd));
+                silentDebugHoldAttached = false;
             }
             // SilentGram F6: Export this chat (TXT / HTML).
             if (chatMode == 0 && dialog_id != 0) {
@@ -10472,6 +10482,31 @@ public class ChatActivity extends BaseFragment implements
         org.telegram.messenger.SilentTemplates.exportMessageLink(currentAccount, message, link -> {
             org.telegram.messenger.SilentTemplates.addTemplate(currentAccount, trigger, previewText, link, sourceDialogId, sourceMessageId, mediaTypeFinal, entities);
             BulletinFactory.of(ChatActivity.this).createSimpleBulletin(R.drawable.msg_saved, LocaleController.getString(R.string.SilentTemplateSaved)).show();
+        });
+    }
+
+    /**
+     * SilentGram v2.0.21: attach the 5-second hold on the Chat Lock row
+     * of the header (three-dots) menu. The row's view only exists once
+     * the menu has been laid out, and onShowSubMenu runs after
+     * layoutLazyItems, so the view is available here. Attaches once:
+     * the lazy Item caches its view and re-adds the same view on later
+     * opens, so the touch listener survives them. A normal tap is
+     * untouched (see SilentDebugReport.attachHoldToChatLockRow).
+     */
+    private void attachSilentChatLockDebugHold() {
+        if (silentDebugHoldAttached || silentLockItem == null || headerItem == null) {
+            return;
+        }
+        View lockRow = silentLockItem.getView();
+        if (lockRow == null) {
+            return;
+        }
+        silentDebugHoldAttached = true;
+        org.telegram.messenger.SilentDebugReport.attachHoldToChatLockRow(lockRow, getParentActivity(), currentAccount, () -> {
+            if (headerItem != null && headerItem.isSubMenuShowing()) {
+                headerItem.closeSubMenu();
+            }
         });
     }
 

@@ -293,6 +293,12 @@ public class SilentProxyManager {
     // here, never proxy secrets.
     private static volatile String lastShedOutcome = "not evaluated yet";
     private static volatile String lastRoundDiagnostic = "";
+    // SilentGram v2.0.21 debug report: the last proxy switch, recorded in
+    // enableProxy (the single place the current proxy changes). Keys are
+    // address:port only, never proxy secrets.
+    private static volatile String lastSwitchFromKey;
+    private static volatile String lastSwitchToKey;
+    private static volatile long lastSwitchMs;
 
     // Latency (ms) of the currently active proxy, -1 if unknown.
     private static final AtomicLong currentLatencyMs = new AtomicLong(-1);
@@ -1715,6 +1721,10 @@ public class SilentProxyManager {
 
     /** Make the given proxy the active one and push it to the connection layer. */
     private static void enableProxy(SharedConfig.ProxyInfo info, long latencyMs) {
+        SharedConfig.ProxyInfo prev = SharedConfig.currentProxy;
+        lastSwitchFromKey = prev == null ? null : proxyKey(prev);
+        lastSwitchToKey = info == null ? null : proxyKey(info);
+        lastSwitchMs = System.currentTimeMillis();
         SharedConfig.currentProxy = info;
         currentLatencyMs.set(latencyMs);
         SharedPreferences preferences = MessagesController.getGlobalMainSettings();
@@ -2150,6 +2160,84 @@ public class SilentProxyManager {
     /** Last round diagnostic line (see logRoundDiagnostic), for the proxy page. */
     public static String getLastRoundDiagnostic() {
         return lastRoundDiagnostic;
+    }
+
+    /** One kept proxy, as a read-only snapshot for the debug report (address:port only, never secrets). */
+    public static final class KeptProxySnapshot {
+        public final String key;
+        public final long ms; // on-device measured latency, -1 = unknown
+        public final boolean own;
+        public final long ping; // Telegram's native ping (handshake-verified only), 0 = none
+        public final boolean available;
+        public final boolean checking;
+
+        public KeptProxySnapshot(String key, long ms, boolean own, long ping, boolean available, boolean checking) {
+            this.key = key;
+            this.ms = ms;
+            this.own = own;
+            this.ping = ping;
+            this.available = available;
+            this.checking = checking;
+        }
+    }
+
+    /** Kept proxies: the last round's kept set, or the saved list when no round has run yet. Read-only snapshot. */
+    public static List<KeptProxySnapshot> getKeptProxySnapshots() {
+        List<SharedConfig.ProxyInfo> source = lastCandidates;
+        if (source == null || source.isEmpty()) {
+            source = SharedConfig.proxyList;
+        }
+        List<KeptProxySnapshot> out = new ArrayList<>();
+        if (source != null) {
+            for (SharedConfig.ProxyInfo info : source) {
+                if (info == null || info.settings == null) {
+                    continue;
+                }
+                String key = proxyKey(info);
+                out.add(new KeptProxySnapshot(key, latencyForDecision(key), isOwnProxy(info), info.ping, info.available, info.checking));
+            }
+        }
+        return out;
+    }
+
+    /** Where getKeptProxySnapshots came from. */
+    public static String getKeptProxySource() {
+        return lastCandidates != null && !lastCandidates.isEmpty() ? "last round kept set" : "saved list (no round yet)";
+    }
+
+    /** On-device measured latency of the current proxy, -1 = unknown. */
+    public static long getCurrentProxyMs() {
+        return currentLatencyMs.get();
+    }
+
+    /** True when the current proxy is our own proxy. */
+    public static boolean isCurrentProxyOwn() {
+        return isOwnProxy(SharedConfig.currentProxy);
+    }
+
+    /** Outcome of the shed decision in the last round (see logRoundDiagnostic). */
+    public static String getLastShedOutcome() {
+        return lastShedOutcome;
+    }
+
+    /** Consecutive watcher rounds the current proxy failed verification. */
+    public static int getWatcherUnstableRounds() {
+        return watcherUnstableRounds;
+    }
+
+    /** "address:port" the last switch came from, or null when there was no previous proxy. */
+    public static String getLastSwitchFromKey() {
+        return lastSwitchFromKey;
+    }
+
+    /** "address:port" the last switch went to, or null when no switch has happened yet. */
+    public static String getLastSwitchToKey() {
+        return lastSwitchToKey;
+    }
+
+    /** Wall-clock time of the last switch, 0 = no switch yet. */
+    public static long getLastSwitchMs() {
+        return lastSwitchMs;
     }
 
     /**
