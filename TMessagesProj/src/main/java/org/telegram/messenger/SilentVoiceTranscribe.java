@@ -25,6 +25,7 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.UUID;
 
@@ -63,6 +64,17 @@ import java.util.UUID;
  * relay or key is missing, or Groq fails, the error is shown INSIDE the
  * popup — never the Premium lock message, and the popup never closes
  * silently. A Groq rate limit shows "busy, try again in a bit".
+ *
+ * Quotas (the relay enforces them; the app only identifies the user):
+ * every request also sends a "user_hash" multipart field — the SHA-256
+ * hex of "silentgram-vtt:" + this account's Telegram user id, so the
+ * raw id is never sent — and a "duration_seconds" field with the voice
+ * message's duration in seconds (MessageObject.getDuration(), from the
+ * audio attribute on the document; 0 when unavailable). The relay caps
+ * each user at 20 transcriptions per UTC day and guards the shared Groq
+ * org quota (2,000 transcriptions / 8 audio hours per day); both quota
+ * errors are shown INSIDE the popup as plain text, like every other
+ * Groq error. The hash is never logged in full (never logged at all).
  */
 public class SilentVoiceTranscribe {
 
@@ -85,6 +97,14 @@ public class SilentVoiceTranscribe {
     // SilentTranscribeGroqNotSetup / SilentTranscribeGroqBusy.
     private static final String GROQ_NOT_SETUP_TEXT = "Transcription service is not set up yet.";
     private static final String GROQ_BUSY_TEXT = "Transcription is busy — try again in a bit.";
+    private static final String GROQ_DAILY_QUOTA_TEXT = "Today's free transcription limit is used up — try again tomorrow";
+    private static final String GROQ_SHARED_QUOTA_TEXT = "Transcription service is busy today";
+
+    // Prefix hashed together with the account's Telegram user id to form
+    // the per-account identifier sent to the relay ("user_hash"). The raw
+    // user id is never sent — only this SHA-256 hex, so the relay can cap
+    // each user at 20 transcriptions/day without learning who they are.
+    private static final String GROQ_USER_HASH_PREFIX = "silentgram-vtt:";
 
     // Last transcription outcome, for the debug report (in-memory only,
     // never persisted). The text is the user's own voice message content.
@@ -268,7 +288,7 @@ public class SilentVoiceTranscribe {
     /** Result of one Groq relay call: either transcribed text, or an error kind. */
     private static final class GroqResult {
         final String text;
-        final String errorKind; // null on success; "not_setup", "busy" or "failed"
+        final String errorKind; // null on success; "not_setup", "busy", "daily_quota", "shared_quota" or "failed"
 
         private GroqResult(String text, String errorKind) {
             this.text = text;
@@ -323,7 +343,21 @@ public class SilentVoiceTranscribe {
                         if (TextUtils.isEmpty(mimeType)) {
                             mimeType = "audio/ogg";
                         }
-                        result = uploadVoiceToGroq(file, filename, mimeType);
+                        // Voice duration in whole seconds, from the audio
+                        // attribute on the document (MessageObject
+                        // .getDuration()); 0 when the metadata has none —
+                        // the relay treats 0 as "unknown" and clamps any
+                        // absurd value itself, so this can never crash.
+                        int durationSeconds = 0;
+                        try {
+                            durationSeconds = (int) Math.round(msg.getDuration());
+                            if (durationSeconds < 0) {
+                                durationSeconds = 0;
+                            }
+                        } catch (Throwable e) {
+                            durationSeconds = 0;
+                        }
+                        result = uploadVoiceToGroq(file, filename, mimeType, computeGroqUserHash(account), durationSeconds);
                     }
                 }
             }
@@ -345,6 +379,12 @@ public class SilentVoiceTranscribe {
                 } else if ("busy".equals(done.errorKind)) {
                     recordVttResult("groq", null, "busy");
                     resultView.setText(GROQ_BUSY_TEXT);
+                } else if ("daily_quota".equals(done.errorKind)) {
+                    recordVttResult("groq", null, "daily_quota");
+                    resultView.setText(GROQ_DAILY_QUOTA_TEXT);
+                } else if ("shared_quota".equals(done.errorKind)) {
+                    recordVttResult("groq", null, "shared_quota");
+                    resultView.setText(GROQ_SHARED_QUOTA_TEXT);
                 } else {
                     recordVttResult("groq", null, "failed");
                     resultView.setText(LocaleController.getString(R.string.SilentTranscribeFailed));
@@ -354,13 +394,45 @@ public class SilentVoiceTranscribe {
     }
 
     /**
-     * POSTs one voice file to the Groq relay as multipart/form-data and
-     * returns the transcribed text. Maps the relay's errors: 503 /
-     * groq_key_missing means the server key is not set up yet; 429 /
-     * groq_rate_limited means Groq is busy; anything else is a plain
-     * failure. Never throws — every problem comes back as a GroqResult.
+     * Per-account identifier for the Groq relay's daily cap: the SHA-256
+     * hex of "silentgram-vtt:" + this account's Telegram user id. The raw
+     * user id is never sent, and the hash itself is never logged (not even
+     * in part). Returns null when there is no signed-in user id, in which
+     * case the relay puts the request in its "anonymous" bucket.
      */
-    private static GroqResult uploadVoiceToGroq(File file, String filename, String mimeType) {
+    private static String computeGroqUserHash(int account) {
+        try {
+            long userId = UserConfig.getInstance(account).getClientUserId();
+            if (userId <= 0) {
+                return null;
+            }
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest((GROQ_USER_HASH_PREFIX + userId).getBytes("UTF-8"));
+            StringBuilder hex = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                hex.append(Character.forDigit((b >> 4) & 0xF, 16));
+                hex.append(Character.forDigit(b & 0xF, 16));
+            }
+            return hex.toString();
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
+    /**
+     * POSTs one voice file to the Groq relay as multipart/form-data and
+     * returns the transcribed text. Besides the file it sends two text
+     * fields: "user_hash" (SHA-256 of "silentgram-vtt:" + user id, or
+     * omitted when there is none) and "duration_seconds" (voice duration
+     * in whole seconds, 0 when unknown). Maps the relay's errors: 503 /
+     * groq_key_missing means the server key is not set up yet; 429 /
+     * groq_rate_limited means Groq is busy; 429 / daily_quota_used_up
+     * means this user already used today's 20 free transcriptions; 429 /
+     * shared_quota_exhausted means the shared Groq org quota for today is
+     * used up; anything else is a plain failure. Never throws — every
+     * problem comes back as a GroqResult.
+     */
+    private static GroqResult uploadVoiceToGroq(File file, String filename, String mimeType, String userHash, int durationSeconds) {
         String boundary = "----SilentGramGroq" + UUID.randomUUID().toString();
         HttpURLConnection conn = null;
         try {
@@ -384,7 +456,18 @@ public class SilentVoiceTranscribe {
                         out.write(buffer, 0, read);
                     }
                 }
-                out.write(("\r\n--" + boundary + "--\r\n").getBytes("UTF-8"));
+                out.write("\r\n".getBytes("UTF-8"));
+                if (!TextUtils.isEmpty(userHash)) {
+                    String hashPart = "--" + boundary + "\r\n"
+                            + "Content-Disposition: form-data; name=\"user_hash\"\r\n\r\n"
+                            + userHash + "\r\n";
+                    out.write(hashPart.getBytes("UTF-8"));
+                }
+                String durationPart = "--" + boundary + "\r\n"
+                        + "Content-Disposition: form-data; name=\"duration_seconds\"\r\n\r\n"
+                        + durationSeconds + "\r\n";
+                out.write(durationPart.getBytes("UTF-8"));
+                out.write(("--" + boundary + "--\r\n").getBytes("UTF-8"));
                 out.flush();
             }
             int code = conn.getResponseCode();
@@ -402,6 +485,12 @@ public class SilentVoiceTranscribe {
             }
             if (code == HttpURLConnection.HTTP_OK && !TextUtils.isEmpty(text)) {
                 return GroqResult.ok(text);
+            }
+            if ("daily_quota_used_up".equals(error)) {
+                return GroqResult.error("daily_quota");
+            }
+            if ("shared_quota_exhausted".equals(error)) {
+                return GroqResult.error("shared_quota");
             }
             if (code == 503 || "groq_key_missing".equals(error)) {
                 return GroqResult.error("not_setup");
