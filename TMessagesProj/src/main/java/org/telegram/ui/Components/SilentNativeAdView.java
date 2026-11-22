@@ -43,8 +43,16 @@ import java.util.Locale;
  * The close X hides the ad for the current chat open (owner decides
  * what "hide" means: the adapter collapses the row, the bot strip
  * hides itself). It never reports a click to AdMob.
+ *
+ * Composition, not inheritance: NativeAdView is a FINAL class in
+ * play-services-ads 24.9.0 and cannot be subclassed (that was the
+ * v2.0.28 build failure). This class is a FrameLayout holding a
+ * private inner NativeAdView; the card/strip layouts are built
+ * INSIDE the inner NativeAdView, so the registered asset views
+ * (headline, body, icon, call-to-action) are descendants of it,
+ * which the AdMob SDK requires for impression/click tracking.
  */
-public class SilentNativeAdView extends NativeAdView {
+public class SilentNativeAdView extends FrameLayout {
 
     public static final int MODE_CARD = 0;
     public static final int MODE_STRIP = 1;
@@ -55,6 +63,9 @@ public class SilentNativeAdView extends NativeAdView {
 
     private final int mode;
     private final Theme.ResourcesProvider resourcesProvider;
+
+    /** The real AdMob view; all asset views live inside it. */
+    private final NativeAdView nativeAdView;
 
     private View cardContainer;
     private ImageView iconView;
@@ -75,6 +86,9 @@ public class SilentNativeAdView extends NativeAdView {
         this.mode = mode;
         this.resourcesProvider = resourcesProvider;
         setLayoutParams(new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
+        nativeAdView = new NativeAdView(context);
+        nativeAdView.setLayoutParams(new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
+        addView(nativeAdView);
         if (mode == MODE_STRIP) {
             buildStrip(context);
         } else {
@@ -183,7 +197,7 @@ public class SilentNativeAdView extends NativeAdView {
         ctaView.setPadding(dp(8), dp(4), dp(8), dp(4));
         bottomRow.addView(ctaView, LayoutHelper.createLinear(LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT));
 
-        addView(card);
+        nativeAdView.addView(card);
     }
 
     private void buildStrip(Context context) {
@@ -245,7 +259,7 @@ public class SilentNativeAdView extends NativeAdView {
         bodyView = null;
         ratingView = null;
 
-        addView(strip);
+        nativeAdView.addView(strip);
     }
 
     /** Re-apply theme colors (called on build and on every bind, so a theme change refreshes the card). */
@@ -283,7 +297,8 @@ public class SilentNativeAdView extends NativeAdView {
      * Bind a loaded NativeAd to this view. The SDK fills the
      * registered asset views (headline, body, icon, call-to-action)
      * from the ad; the star line is filled here because it is a
-     * TextView, not a RatingBar.
+     * TextView, not a RatingBar. All registrations go to the inner
+     * NativeAdView, which owns the asset views as descendants.
      */
     public void bindAd(NativeAd ad) {
         if (ad == null) {
@@ -292,13 +307,13 @@ public class SilentNativeAdView extends NativeAdView {
         }
         applyColors();
         boundAd = ad;
-        setHeadlineView(headlineView);
+        nativeAdView.setHeadlineView(headlineView);
         if (bodyView != null) {
-            setBodyView(bodyView);
+            nativeAdView.setBodyView(bodyView);
         }
-        setIconView(iconView);
-        setCallToActionView(ctaView);
-        setNativeAd(ad);
+        nativeAdView.setIconView(iconView);
+        nativeAdView.setCallToActionView(ctaView);
+        nativeAdView.setNativeAd(ad);
         // Asset visibility: the SDK leaves an empty view when the
         // asset is missing, so hide those views ourselves.
         if (ad.getIcon() == null) {
@@ -330,7 +345,7 @@ public class SilentNativeAdView extends NativeAdView {
     public void unbindAd() {
         boundAd = null;
         try {
-            setNativeAd(null);
+            nativeAdView.setNativeAd(null);
         } catch (Throwable ignored) {
         }
     }
