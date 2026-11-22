@@ -312,6 +312,10 @@ public class SilentFloatingWindow {
      * display, so a normal 3-5s first paint cannot trigger a teardown
      * of a display that is still starting up. 0 = no launch yet. */
     private long floatingLaunchAtMs;
+    /** v2.0.27: whether the activity-recreate rung has already run for the current virtual display (reset in rebindDisplayToTexture / start() / teardown()). */
+    private boolean activityRecreateDoneForDisplay;
+    /** v2.0.27: last time tryRecreateFloatingActivity() ran — 10s cooldown so a recreate that did not take cannot loop. */
+    private long lastActivityRecreateAtMs;
     /** v2.0.26: proxy IME (see activateProxyIme). The soft keyboard is
      * another app's window, so it can never be placed on the
      * OWN_CONTENT_ONLY virtual display — and the floating field's own
@@ -579,6 +583,8 @@ public class SilentFloatingWindow {
         lastStartError = null;
         lastFrameRecoveryAtMs = 0;
         consecutiveFrameFailures = 0;
+        activityRecreateDoneForDisplay = false;
+        lastActivityRecreateAtMs = 0;
         if (active) {
             // Safety net: if the window was minimized to the pill and
             // the toggle is hit again, bring it back instead of
@@ -925,6 +931,11 @@ public class SilentFloatingWindow {
             if (virtualDisplay != null && virtualDisplay.getDisplay() != null) {
                 int displayId = virtualDisplay.getDisplay().getDisplayId();
                 consecutiveFrameFailures = 0;
+                // v2.0.27: fresh cold-start grace + fresh recreate chance for
+                // the new display — without this, a slow post-rebind paint
+                // gets zero grace and triggers another rebind ~7s later.
+                floatingLaunchAtMs = SystemClock.uptimeMillis();
+                activityRecreateDoneForDisplay = false;
                 FileLog.d("SilentFloatingWindow: virtual display id=" + displayId + " size=" + displayWidthPx + "x" + displayHeightPx + " dpi=" + displayDensityDpi);
                 return displayId;
             }
@@ -1388,6 +1399,35 @@ public class SilentFloatingWindow {
      * against a black window is invisible. Called from the frame check
      * on the first failed sample (before the destructive display
      * rebind) and from onFloatingActivityResumed(). */
+    /** v2.0.27: recreate the floating activity in place on the SAME virtual display, to kick a stuck first frame. Activity.recreate() destroys + recreates it like a configuration change, so SilentFloatingActivity.onDestroy skips teardown (isChangingConfigurations()) and the overlay + display survive; the new instance reports in through setFloatingActivity(), which forces its first traversal. One recreate per display; returns false when there is nothing safe to recreate. */
+    private boolean tryRecreateFloatingActivity() {
+        if (activityRecreateDoneForDisplay) {
+            return false;
+        }
+        SilentFloatingActivity fa = floatingActivity;
+        if (fa == null || fa.isFinishing()) {
+            return false;
+        }
+        long now = SystemClock.uptimeMillis();
+        if (now - lastActivityRecreateAtMs < 10000) {
+            return false;
+        }
+        try {
+            FileLog.e("SilentFloatingWindow: recreating floating activity to kick first frame");
+            fa.recreate();
+        } catch (Exception e) {
+            FileLog.e(e);
+            return false;
+        }
+        activityRecreateDoneForDisplay = true;
+        lastActivityRecreateAtMs = now;
+        // Fresh cold-start grace for the new instance, so the next checks
+        // wait for its first paint instead of judging it instantly.
+        floatingLaunchAtMs = now;
+        consecutiveFrameFailures = 0;
+        return true;
+    }
+
     private void nudgeDisplayForFrames() {
         if (!active || minimized || virtualDisplay == null || textureView == null) {
             return;
@@ -1664,6 +1704,17 @@ public class SilentFloatingWindow {
                     FileLog.e("SilentFloatingWindow: frame check FAILED once with activity on vd + valid surface, nudging display: " + state);
                     nudgeDisplayForFrames();
                     scheduleFrameCheck(2000);
+                    return;
+                }
+                // v2.0.27: second consecutive failure with the activity on the
+                // virtual display and a valid surface — the display is healthy,
+                // so do not tear it down yet. Recreate the activity instead
+                // (the v2.0.25 manual-resize cure, done programmatically);
+                // if the fresh window is still black, fall through to the
+                // display rebind below. Gated on resumed: a stopped activity
+                // draws nothing by design, and recreating it cannot help.
+                if (floatingResumed && tryRecreateFloatingActivity()) {
+                    scheduleFrameCheck(3000);
                     return;
                 }
             }
@@ -1983,6 +2034,8 @@ public class SilentFloatingWindow {
         consecutiveFrameFailures = 0;
         lastFrameRecoveryAtMs = 0;
         floatingLaunchAtMs = 0;
+        activityRecreateDoneForDisplay = false;
+        lastActivityRecreateAtMs = 0;
         loadingView = null;
         loadingVisible = false;
         deactivateProxyIme();
