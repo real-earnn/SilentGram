@@ -36,6 +36,17 @@ public class ColoredImageSpan extends ReplacementSpan {
     private int size;
     private int sizeWidth;
 
+    // v2.0.26: density this span was constructed at (AndroidUtilities.density
+    // / application density) and the bounds built for it — see
+    // getDensityFactor(). A span instance can outlive the density it was
+    // built in: MessageObject.messageText is built once per MessageObject
+    // and shared by the fullscreen and floating-window dialogs, and
+    // DialogMediaIconsHelper caches its spans statically, so a span built
+    // in fullscreen keeps phone-pixel bounds inside the virtual display.
+    private float constructedScale = 1f;
+    private int constructedWidth;
+    private int constructedHeight;
+
     public static final int ALIGN_DEFAULT = 0;
     public static final int ALIGN_BASELINE = 1;
     public static final int ALIGN_CENTER = 2;
@@ -76,9 +87,38 @@ public class ColoredImageSpan extends ReplacementSpan {
             }
             int w = Math.max(1, Math.round(drawable.getIntrinsicWidth() * scale));
             int h = Math.max(1, Math.round(drawable.getIntrinsicHeight() * scale));
+            constructedScale = scale;
+            constructedWidth = w;
+            constructedHeight = h;
             drawable.setBounds(0, 0, w, h);
         }
         this.verticalAlignment = verticalAlignment;
+    }
+
+    /** v2.0.26: factor to bring the bounds frozen at construction time up
+     * to the CURRENT density. 1 in the density the span was built in (so
+     * fullscreen is unchanged), ~0.44 for a span built in fullscreen and
+     * now drawn inside the floating window's virtual display, ~2.27 the
+     * other way round. 1 for spans with an explicit size (setSize,
+     * setRelativeSize, setWidth) — those paths are left exactly as they
+     * are. The drawable is loaded from the application context (phone
+     * density) by the int-res constructor, so the constructed bounds are
+     * phone pixels scaled by constructedScale; multiplying by this factor
+     * re-derives the size for the current density without ever mutating
+     * shared state at measure time. */
+    private float getDensityFactor() {
+        if (size != 0 || sizeWidth != 0 || isRelativeSize || drawable == null || constructedWidth <= 0 || constructedHeight <= 0 || constructedScale <= 0) {
+            return 1f;
+        }
+        float currentScale = 1f;
+        try {
+            float appDensity = ApplicationLoader.applicationContext.getResources().getDisplayMetrics().density;
+            if (appDensity > 0) {
+                currentScale = AndroidUtilities.density / appDensity;
+            }
+        } catch (Exception ignored) {
+        }
+        return currentScale / constructedScale;
     }
 
     private boolean isRelativeSize;
@@ -140,7 +180,13 @@ public class ColoredImageSpan extends ReplacementSpan {
             return (int) (Math.abs(scaleX) * sizeWidth);
         // v2.0.24: reserve the (density-scaled) bounds width, not the
         // phone-density intrinsic width — see the constructor.
-        return (int) (Math.abs(scaleX) * Math.abs(spaceScaleX) * (size != 0 ? size : drawable.getBounds().width()));
+        // v2.0.26: re-derive it for the CURRENT density — the bounds were
+        // frozen at construction time and this span may since have moved
+        // to the other density (cached MessageObject.messageText,
+        // DialogMediaIconsHelper's static spans).
+        float densityFactor = getDensityFactor();
+        int width = size != 0 ? size : densityFactor == 1f ? drawable.getBounds().width() : Math.max(1, Math.round(constructedWidth * densityFactor));
+        return (int) (Math.abs(scaleX) * Math.abs(spaceScaleX) * width);
     }
 
     @Override
@@ -169,6 +215,14 @@ public class ColoredImageSpan extends ReplacementSpan {
         }
 
         canvas.save();
+        // v2.0.26: re-bind to the current-density size before drawing —
+        // see getDensityFactor(). Bounds are scratch here (getSize()
+        // never reads them), so a span shared by the fullscreen and
+        // floating-window dialogs draws at the right size in each.
+        float densityFactor = getDensityFactor();
+        if (densityFactor != 1f) {
+            drawable.setBounds(0, 0, Math.max(1, Math.round(constructedWidth * densityFactor)), Math.max(1, Math.round(constructedHeight * densityFactor)));
+        }
         int transY = bottom - (drawable != null ? drawable.getBounds().bottom : bottom);
         if (verticalAlignment == ALIGN_BASELINE) {
 //            transY -= paint.getFontMetricsInt().descent;

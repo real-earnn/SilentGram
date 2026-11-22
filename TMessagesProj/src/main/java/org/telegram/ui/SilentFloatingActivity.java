@@ -245,7 +245,18 @@ public class SilentFloatingActivity extends LaunchActivity {
         if (LaunchActivity.instance == this) {
             LaunchActivity.instance = null;
         }
-        SilentFloatingWindow.getInstance().onFloatingActivityDestroyed(this);
+        // v2.0.26: a destroy for a configuration change is NOT a real
+        // close — the system recreates this activity on the SAME virtual
+        // display, so the overlay + display must survive it. Before this
+        // guard, any unhandled config change (a resize changes the
+        // virtual display's density, and `density` was not in
+        // configChanges) tore the whole floating window down here, and
+        // the recreated activity landed on the phone display instead:
+        // the user saw the FULL app after resizing. Only a genuine
+        // destroy (expand / close / finish) tears the window down.
+        if (!isChangingConfigurations()) {
+            SilentFloatingWindow.getInstance().onFloatingActivityDestroyed(this);
+        }
         super.onDestroy();
     }
 

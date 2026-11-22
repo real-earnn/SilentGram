@@ -1805,6 +1805,10 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 	// not double-fire; a mid-call stream-mode flip still re-delivers.
 	private boolean groupJoinPayloadDelivered;
 	private boolean groupJoinPayloadStreamMode;
+	// SilentGram v2.0.26: whether the delivered payload also carried
+	// transport (see deliverGroupJoinPayload) — a stream payload that
+	// gains transport must re-deliver even in the same stream mode.
+	private boolean groupJoinPayloadTransportDelivered;
 	// SilentGram v2.0.24: RTC log path per group instance (CAMERA /
 	// SCREEN), kept so the group-call facts can parse the SG-UDP
 	// markers out of the log at stop time. The local in
@@ -1828,17 +1832,39 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 		}
 		try {
 			boolean stream = new JSONObject(myParams.data).optBoolean("stream");
-			if (groupJoinPayloadDelivered && stream == groupJoinPayloadStreamMode) {
+			boolean hasTransport = joinPayloadHasTransport(myParams.data);
+			if (groupJoinPayloadDelivered && stream == groupJoinPayloadStreamMode && hasTransport == groupJoinPayloadTransportDelivered) {
 				return;
 			}
 			groupJoinPayloadDelivered = true;
 			groupJoinPayloadStreamMode = stream;
+			groupJoinPayloadTransportDelivered = hasTransport;
 			currentGroupModeStreaming = stream;
+			// SilentGram v2.0.26: a channel livestream's join payload
+			// says {"stream":true,...} — but it may ALSO carry a
+			// transport object. Broadcast-only was the whole story
+			// before: prepareForStream never starts the network
+			// manager, so no UDP socket, no relay, and the
+			// STATE_BOUND fix cannot apply. When transport is
+			// present, deliver it too: setJoinResponsePayload enters
+			// RTC mode keeping the broadcast alive until ICE connects
+			// (fork transition), so the livestream gets the same
+			// relayed UDP leg as a group call. With no transport,
+			// broadcast-only is all the server offered and the parts
+			// pipeline stays the path — the facts say which case this
+			// was.
 			if (stream) {
 				tgVoip[CAPTURE_DEVICE_CAMERA].prepareForStream(groupCall != null && groupCall.call != null && groupCall.call.rtmp_stream);
+				appendGroupCallFact(" stream");
+				if (hasTransport) {
+					logGroupJoinPayload(myParams.data);
+					tgVoip[CAPTURE_DEVICE_CAMERA].setJoinResponsePayload(myParams.data);
+					appendGroupCallFact("+rtc");
+				}
 			} else {
 				logGroupJoinPayload(myParams.data);
 				tgVoip[CAPTURE_DEVICE_CAMERA].setJoinResponsePayload(myParams.data);
+				appendGroupCallFact(" rtc");
 			}
 			String candidates = groupCandidatesSummary(myParams.data);
 			if (candidates != null) {
@@ -1887,11 +1913,24 @@ public class VoIPService extends Service implements SensorEventListener, AudioMa
 		}
 	}
 
+	// SilentGram v2.0.26: true when a join payload carries an ICE
+	// transport object (ufrag/pwd/candidates). A {"stream":true}
+	// livestream payload may still carry one — that is the case where
+	// the livestream can also take the relayed RTC leg. Pure check,
+	// shared with LivePlayer; no secrets read.
+	public static boolean joinPayloadHasTransport(String payloadJson) {
+		try {
+			return new JSONObject(payloadJson).optJSONObject("transport") != null;
+		} catch (Exception e) {
+			return false;
+		}
+	}
+
 	// Compact "ip:port proto=x type=y;..." summary of the server's ICE
 	// candidates from a join payload. Null when the payload carries no
 	// candidates. Mirrors logGroupJoinPayload's loop (which logs the
 	// same line to the FileLog); no secrets — ufrag/pwd are not in it.
-	private static String groupCandidatesSummary(String payloadJson) {
+	public static String groupCandidatesSummary(String payloadJson) {
 		try {
 			JSONObject object = new JSONObject(payloadJson);
 			JSONObject transport = object.optJSONObject("transport");

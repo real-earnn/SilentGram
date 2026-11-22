@@ -134,6 +134,18 @@ public class LivePlayer implements NotificationCenter.NotificationCenterDelegate
     // word in the facts).
     private String liveLogFilePath;
     private boolean liveFactEstablished;
+    // SilentGram v2.0.26: broadcast-mode success signals — a livestream
+    // in stream mode never reaches STATE_ESTABLISHED (no UDP leg), so
+    // the first downloaded stream part / first rendered frame are what
+    // prove it works; the destroy-time outcome word uses these when
+    // there was no RTC leg. liveFactCarryover keeps a "no-params"
+    // marker across the one re-join below (init() would otherwise
+    // overwrite the facts with a fresh attempt line).
+    // liveNoParamsRejoinDone caps that re-join at one per player.
+    private boolean liveFactPartsOk;
+    private boolean liveFactFrameShown;
+    private String liveFactCarryover;
+    private boolean liveNoParamsRejoinDone;
     private final HashMap<String, Integer> currentStreamRequestTimestamp = new HashMap<>();
 
     private TLRPC.GroupCallParticipant participant;
@@ -181,6 +193,15 @@ public class LivePlayer implements NotificationCenter.NotificationCenterDelegate
             @Override
             public synchronized void onFrame(VideoFrame frame) {
                 super.onFrame(frame);
+                // SilentGram v2.0.26: first rendered frame — in
+                // broadcast mode this is the livestream working (no
+                // ESTABLISHED ever arrives there).
+                synchronized (LivePlayer.this) {
+                    if (!liveFactFrameShown) {
+                        liveFactFrameShown = true;
+                        appendLiveCallFact(" frame");
+                    }
+                }
                 if (emptyStream) {
                     AndroidUtilities.runOnUIThread(() -> setEmptyStream(false));
                 }
@@ -302,13 +323,60 @@ public class LivePlayer implements NotificationCenter.NotificationCenterDelegate
                                 return;
                             }
 
+                            // SilentGram v2.0.26: the old either/or here
+                            // is why a channel livestream never got the
+                            // relayed UDP leg. A livestream join payload
+                            // says {"stream":true,...} and prepareForStream
+                            // alone never starts the network manager — no
+                            // UDP socket, no relay, the STATE_BOUND fix
+                            // cannot apply — video then depends only on
+                            // the getFile parts pipeline. When the payload
+                            // ALSO carries transport, deliver it too: the
+                            // JNI forces RTC mode keeping the broadcast
+                            // alive until ICE connects (fork transition),
+                            // i.e. the same relayed route as group calls.
+                            // A null payload (no connection update inline
+                            // in the join response — the central dispatcher
+                            // drops late ones, MessagesController:19648)
+                            // must NOT fall through to broadcast: re-join
+                            // once instead so the payload can arrive inline.
                             final boolean isChannelStreaming;
-                            if (params != null && !params.data.startsWith("{\"stream\":true")) {
+                            if (params == null || (!params.data.startsWith("{\"stream\":true") && !VoIPService.joinPayloadHasTransport(params.data))) {
                                 isChannelStreaming = false;
+                                appendLiveCallFact(" no-params");
+                                if (!liveNoParamsRejoinDone) {
+                                    liveNoParamsRejoinDone = true;
+                                    liveFactCarryover = " no-params";
+                                    AndroidUtilities.runOnUIThread(() -> {
+                                        if (destroyed || instance == null) {
+                                            return;
+                                        }
+                                        Utilities.globalQueue.postRunnable(instance::stopGroup);
+                                        srcs.clear();
+                                        instance = null;
+                                        init();
+                                    }, 2000);
+                                }
+                            } else if (!params.data.startsWith("{\"stream\":true")) {
+                                isChannelStreaming = false;
+                                appendLiveCallFact(" rtc");
+                                String candidates = VoIPService.groupCandidatesSummary(params.data);
+                                if (candidates != null) {
+                                    appendLiveCallFact(" candidates=[" + candidates + "]");
+                                }
                                 instance.setJoinResponsePayload(params.data);
                             } else {
                                 isChannelStreaming = !isRtmpStream;
+                                appendLiveCallFact(" stream");
                                 instance.prepareForStream(isRtmpStream);
+                                if (VoIPService.joinPayloadHasTransport(params.data)) {
+                                    String candidates = VoIPService.groupCandidatesSummary(params.data);
+                                    if (candidates != null) {
+                                        appendLiveCallFact(" candidates=[" + candidates + "]");
+                                    }
+                                    appendLiveCallFact("+rtc");
+                                    instance.setJoinResponsePayload(params.data);
+                                }
                             }
                             if (outgoing) {
                                 instance.setMuteMicrophone(isMuted);
@@ -375,6 +443,23 @@ public class LivePlayer implements NotificationCenter.NotificationCenterDelegate
                                                     if (DialogObject.getPeerDialogId(r.participants.get(i).peer) == dialogId) {
                                                         participant = r.participants.get(i);
                                                         break;
+                                                    }
+                                                }
+                                                // SilentGram v2.0.26: a channel livestream's video
+                                                // participant is not always the channel peer — an
+                                                // admin streaming as themselves has peer == the
+                                                // admin user, so the dialogId match above misses
+                                                // and the player used to end at setEmptyStream
+                                                // with no video output ever registered (no parts
+                                                // requested, black screen). Fall back to the
+                                                // first participant that actually has video: for
+                                                // a livestream that IS the stream.
+                                                if (participant == null) {
+                                                    for (int i = 0; i < r.participants.size(); ++i) {
+                                                        if (r.participants.get(i).video != null) {
+                                                            participant = r.participants.get(i);
+                                                            break;
+                                                        }
                                                     }
                                                 }
 
@@ -486,6 +571,16 @@ public class LivePlayer implements NotificationCenter.NotificationCenterDelegate
                         if (response != null) {
                             TLRPC.TL_upload_file res = (TLRPC.TL_upload_file) response;
                             FileLog.d("[LivePlayer] received in "+(System.currentTimeMillis() - startTime)+"ms getFile{time_ms=" + timestamp + (duration == 500 ? ", scale = 1" : "") + ", video_channel = " + videoChannel + ", video_quality = " + quality+ "}: " + res.bytes.limit() + " bytes");
+                            // SilentGram v2.0.26: first downloaded stream
+                            // part — in broadcast mode this is the
+                            // livestream working (no ESTABLISHED ever
+                            // arrives there).
+                            synchronized (LivePlayer.this) {
+                                if (!liveFactPartsOk) {
+                                    liveFactPartsOk = true;
+                                    appendLiveCallFact(" parts=ok");
+                                }
+                            }
                             instance.onStreamPartAvailable(timestamp, res.bytes.buffer, res.bytes.limit(), responseTime, videoChannel, quality);
                         } else {
                             if ("GROUPCALL_INVALID".equalsIgnoreCase(error.text)) {
@@ -692,6 +787,12 @@ public class LivePlayer implements NotificationCenter.NotificationCenterDelegate
                     .putLong("sg_last_group_call_facts_ms", System.currentTimeMillis()).apply();
         } catch (Exception ignored) {
         }
+        // SilentGram v2.0.26: keep the previous attempt's no-params
+        // marker across the one re-join (this overwrite would erase it).
+        if (liveFactCarryover != null) {
+            appendLiveCallFact(liveFactCarryover);
+            liveFactCarryover = null;
+        }
     }
 
     private void appendLiveCallFact(String suffix) {
@@ -736,7 +837,12 @@ public class LivePlayer implements NotificationCenter.NotificationCenterDelegate
             // as the 1:1 path, parsed out of this livestream's RTC log.
             try {
                 String liveLog = liveLogFilePath != null ? VoIPService.getStringFromFile(liveLogFilePath) : null;
-                appendLiveCallFact(" \u00b7 " + VoIPService.parseSgUdpOutcome(liveLog) + (liveFactEstablished ? " ended" : " failed"));
+                // SilentGram v2.0.26: a broadcast-only livestream never
+                // reaches ESTABLISHED, so a downloaded part or a shown
+                // frame counts as success too — "failed" must mean
+                // nothing ever arrived, not "no UDP leg".
+                boolean liveWorked = liveFactEstablished || liveFactPartsOk || liveFactFrameShown;
+                appendLiveCallFact(" \u00b7 " + VoIPService.parseSgUdpOutcome(liveLog) + (liveWorked ? " ended" : " failed"));
             } catch (Exception ignored) {
             }
             Utilities.globalQueue.postRunnable(instance::stopGroup);

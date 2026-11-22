@@ -6,6 +6,7 @@ import android.app.ActivityOptions;
 import android.app.Dialog;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Matrix;
 import android.graphics.Outline;
@@ -27,10 +28,18 @@ import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
+import android.view.ViewTreeObserver;
 import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputMethodManager;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.PopupWindow;
+import android.widget.ProgressBar;
+import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
@@ -38,6 +47,7 @@ import java.util.ArrayList;
 import org.telegram.ui.ActionBar.ActionBarPopupWindow;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ChatActivity;
+import org.telegram.ui.Components.ChatActivityEnterView;
 import org.telegram.ui.LaunchActivity;
 import org.telegram.ui.SilentFloatingActivity;
 import org.telegram.utils.pip.PipCoordinator;
@@ -119,13 +129,18 @@ import org.telegram.utils.settings.SharedSettings;
  *   process-level and stays alive.
  *
  * Honest limits (device test decides the details):
- * - The soft keyboard should render inside the window (it is drawn on the
- *   virtual display); if an OEM blocks IME on virtual displays, typing
- *   falls back to a hardware keyboard / voice input.
- *   Note: VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY (required so the display
- *   can be created at all) may itself keep the IME off the display on
- *   some devices — whether the keyboard appears inside the window is a
- *   device-test question.
+ * - The soft keyboard opens on the PHONE screen, not inside the window
+ *   (v2.0.26 proxy IME): the virtual display is OWN_CONTENT_ONLY, a
+ *   private display, so no other app's window — including the keyboard
+ *   — can ever be placed on it. A 1x1 transparent EditText in the
+ *   overlay window serves input instead, and its InputConnection is
+ *   the floating field's own connection, so typing lands in the
+ *   floating chat. Telegram's own hideKeyboard(field) calls still
+ *   target the virtual display's token and are ignored by the IME
+ *   service while the proxy is served, so the manager hides the
+ *   keyboard itself on content taps outside the input bar, on focus
+ *   loss and on Home — the emoji panel opening is the one case where
+ *   the keyboard can stay up until the user taps the panel or BACK.
  * - The virtual display is fixed portrait; rotating the phone does not
  *   rotate the floating window (it is re-clamped to stay on screen).
  * - Group calls / live streams keep their own content PiP and win over
@@ -285,6 +300,99 @@ public class SilentFloatingWindow {
      * frame check so the debug report can tell a stopped activity
      * (black because nothing draws) from a stuck surface. */
     private boolean floatingResumed;
+    /** v2.0.26: overlay-drawn loading indicator (see buildOverlay):
+     * shown while the virtual display has not delivered a first frame
+     * yet, hidden the moment a frame check samples lit pixels. */
+    private View loadingView;
+    private boolean loadingVisible;
+    /** v2.0.26: uptime (SystemClock.uptimeMillis) of the first virtual
+     * display creation for this window — the frame check grants an 8s
+     * cold-start grace from here (see runFrameCheck): a black sample
+     * inside the grace only nudges and re-polls, it never rebuilds the
+     * display, so a normal 3-5s first paint cannot trigger a teardown
+     * of a display that is still starting up. 0 = no launch yet. */
+    private long floatingLaunchAtMs;
+    /** v2.0.26: proxy IME (see activateProxyIme). The soft keyboard is
+     * another app's window, so it can never be placed on the
+     * OWN_CONTENT_ONLY virtual display — and the floating field's own
+     * showSoftInput therefore shows nothing. The proxy is a 1x1
+     * transparent EditText in the OVERLAY window (default display):
+     * it takes focus, the IME opens on the phone screen as usual, and
+     * its InputConnection is the floating field's own connection, so
+     * typing lands in the floating chat. Null until buildOverlay runs. */
+    private ImeProxyEditText imeProxyEdit;
+    /** The floating EditText currently served by the proxy, or null. */
+    private EditText imeTarget;
+    /** True while the proxy IME is the active input (proxy focused and
+     * keyboard requested for it). */
+    private boolean imeActive;
+    /** True while the proxy's InputConnection is the target's own
+     * connection (delegation). False only in the fallback, where the
+     * proxy edits its own text and the watcher below copies it over. */
+    private boolean imeDelegationActive;
+    /** Guards the proxy text seeding against re-entrancy. */
+    private boolean syncingProxyText;
+    /** Floating decor the IME focus listener is attached to (null when
+     * not attached); the listener itself lives below. */
+    private View imeFocusDecor;
+    /** v2.0.26: fires on every focus change inside the floating
+     * activity. An EditText gaining focus (tap, or a screen that
+     * auto-focuses its field, e.g. search) activates the proxy IME;
+     * focus leaving every EditText deactivates it. Attached to the
+     * floating decor's ViewTreeObserver in setFloatingActivity — a
+     * different window from the overlay, so the proxy's own focus
+     * changes never re-trigger this listener. */
+    private final ViewTreeObserver.OnGlobalFocusChangeListener imeFocusListener = (oldFocus, newFocus) -> {
+        try {
+            if (!active || minimized) {
+                return;
+            }
+            if (newFocus instanceof EditText) {
+                final EditText target = (EditText) newFocus;
+                AndroidUtilities.runOnUIThread(() -> activateProxyIme(target));
+            } else if (imeActive) {
+                AndroidUtilities.runOnUIThread(this::deactivateProxyIme);
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    };
+    /** v2.0.26: fallback text sync, proxy -> floating field. Only used
+     * when delegation failed (the target's onCreateInputConnection
+     * returned null), so the IME edits the proxy's own text instead.
+     * Inert while delegation is active: the proxy's text never changes
+     * then, because the IME edits the target's Editable directly. */
+    private final android.text.TextWatcher proxyFallbackWatcher = new android.text.TextWatcher() {
+        @Override
+        public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+        }
+
+        @Override
+        public void onTextChanged(CharSequence s, int start, int before, int count) {
+        }
+
+        @Override
+        public void afterTextChanged(android.text.Editable s) {
+            if (syncingProxyText || imeDelegationActive) {
+                return;
+            }
+            EditText target = imeTarget;
+            if (target == null || !target.isAttachedToWindow() || imeProxyEdit == null) {
+                return;
+            }
+            try {
+                target.setText(s);
+                int sel = imeProxyEdit.getSelectionStart();
+                if (sel >= 0 && sel <= target.length()) {
+                    target.setSelection(sel);
+                } else {
+                    target.setSelection(target.length());
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+        }
+    };
     /** v2.0.25: last time the cooldown-blocked frame recovery toasted
      * (the recovery loop now reschedules itself, so the toast is
      * throttled to once a minute instead of every loop). */
@@ -441,6 +549,24 @@ public class SilentFloatingWindow {
             AndroidUtilities.cancelRunOnUIThread(launchWatchdog);
             launchWatchdog = null;
         }
+        // v2.0.26: first-paint kick. The activity is up but its first
+        // traversal on the virtual display can sit un-run until the
+        // system gets around to it — force layout + draw now, so the
+        // first frame is produced as early as the activity's own cold
+        // start allows, instead of waiting for the next display event.
+        // Also (re)attach the IME focus listener to this instance's
+        // decor (a config-change re-creation brings a new decor).
+        try {
+            View decor = activity != null && activity.getWindow() != null
+                    ? activity.getWindow().getDecorView() : null;
+            if (decor != null) {
+                decor.requestLayout();
+                decor.invalidate();
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        attachImeFocusListener(activity);
     }
 
     /**
@@ -921,7 +1047,322 @@ public class SilentFloatingWindow {
         if (!active || minimized) {
             return;
         }
+        // v2.0.26: Home backgrounds the floating activity — the system
+        // keyboard is showing on the phone screen for the proxy IME, and
+        // the overlay window stays visible above Home, so the keyboard
+        // would otherwise linger over the home screen. Hide it now.
+        deactivateProxyIme();
         scheduleFrameCheck(1000);
+    }
+
+    // ---------- loading indicator (v2.0.26) ----------
+
+    /** Show the overlay-drawn loading indicator (no-op if already up). */
+    private void showLoading() {
+        try {
+            if (loadingView != null && !loadingVisible) {
+                loadingVisible = true;
+                loadingView.setVisibility(View.VISIBLE);
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    /** Hide the loading indicator (no-op if already down). Called only
+     * from the frame check's OK path, so it hides on the first real
+     * frame and never before. */
+    private void hideLoading() {
+        try {
+            if (loadingView != null && loadingVisible) {
+                loadingVisible = false;
+                loadingView.setVisibility(View.GONE);
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    // ---------- proxy IME (v2.0.26) ----------
+
+    /** The proxy input view: a 1x1 transparent EditText in the overlay
+     * window whose InputConnection is the floating field's own
+     * connection (see activateProxyIme). Extends EditText so
+     * onCheckIsTextEditor() is true and the view can serve input. */
+    private class ImeProxyEditText extends EditText {
+        ImeProxyEditText(Context context) {
+            super(context);
+        }
+
+        @Override
+        public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
+            EditText target = imeTarget;
+            if (target != null && target.isAttachedToWindow()) {
+                try {
+                    // The target populates outAttrs from its own
+                    // inputType / imeOptions / hint, and the returned
+                    // connection edits the target's Editable directly —
+                    // mentions, spans, the send-on-enter handling and
+                    // the GIF/sticker commit-content path all run
+                    // exactly as if the IME were talking to the field.
+                    InputConnection ic = target.onCreateInputConnection(outAttrs);
+                    if (ic != null) {
+                        imeDelegationActive = true;
+                        return ic;
+                    }
+                } catch (Exception e) {
+                    FileLog.e(e);
+                }
+            }
+            // Fallback: the IME edits this proxy's own text, and the
+            // watcher copies it into the target (see
+            // proxyFallbackWatcher). Only reached when the target
+            // cannot hand out a connection.
+            imeDelegationActive = false;
+            return super.onCreateInputConnection(outAttrs);
+        }
+
+        @Override
+        public boolean checkInputConnectionProxy(View view) {
+            // The platform API for exactly this: tell the
+            // InputMethodManager that this view serves input for the
+            // floating field. With it, the IME forwards selection /
+            // extracted-text updates for the target to the keyboard,
+            // and Telegram's own showSoftInput(field) calls are treated
+            // as served (they ask the service to show the IME for the
+            // CURRENT input — the proxy — instead of being ignored).
+            EditText target = imeTarget;
+            return target != null && target == view;
+        }
+    }
+
+    /**
+     * Open the system keyboard for a text field inside the floating
+     * window — on the PHONE screen, as usual, not inside the window.
+     *
+     * Why a proxy is needed (verified against AOSP Android 10):
+     * the virtual display is VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY, so
+     * it is a private display: the WindowManager refuses windows from
+     * any other UID on it, and the keyboard is another app's window.
+     * The floating field's own requestFocus() + showSoftInput() runs
+     * fine in-process, but the IME service can never place its window
+     * on that display — so no keyboard ever appears. The overlay
+     * window, by contrast, lives on the default display and is
+     * focusable (no FLAG_NOT_FOCUSABLE), so a 1x1 transparent EditText
+     * inside it can serve input: the IME opens at the bottom of the
+     * phone and its InputConnection is the floating field's own, so
+     * every keystroke, composing span and editor action lands in the
+     * floating chat. The floating field itself keeps view focus in its
+     * own window (focus is per-window), so its cursor stays visible.
+     *
+     * Ordering: the target is focused first, then the proxy — the
+     * proxy's focusIn is what the InputMethodManager serves last, so
+     * Telegram's 100ms openKeyboardRunnable (which keeps calling
+     * showKeyboard on the field while it waits) cannot steal the
+     * session back: showSoftInput on a view served through a proxy is
+     * treated as served, and the service shows the IME for the current
+     * input — the proxy.
+     */
+    private void activateProxyIme(EditText target) {
+        if (!active || minimized || imeProxyEdit == null || target == null) {
+            return;
+        }
+        try {
+            if (!target.isAttachedToWindow()) {
+                return;
+            }
+            if (imeTarget == target && imeActive) {
+                // Already serving this field (e.g. the tap and the
+                // focus listener both fired): just re-ask for the
+                // keyboard, in case the user hid it with BACK.
+                InputMethodManager imm = (InputMethodManager) ApplicationLoader.applicationContext.getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (imm != null) {
+                    imm.showSoftInput(imeProxyEdit, InputMethodManager.SHOW_IMPLICIT);
+                }
+                return;
+            }
+            imeTarget = target;
+            // Seed the proxy's own text from the field (with spans).
+            // Inert while delegation is active — the IME never reads
+            // the proxy's Editable then — and the starting point for
+            // the fallback watcher when it is not.
+            try {
+                syncingProxyText = true;
+                imeProxyEdit.setText(target.getText());
+                int selStart = target.getSelectionStart();
+                int selEnd = target.getSelectionEnd();
+                if (selStart >= 0 && selEnd >= 0 && selEnd <= imeProxyEdit.length()) {
+                    imeProxyEdit.setSelection(selStart, selEnd);
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+            } finally {
+                syncingProxyText = false;
+            }
+            try {
+                target.requestFocus();
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            try {
+                imeProxyEdit.requestFocus();
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            InputMethodManager imm = (InputMethodManager) ApplicationLoader.applicationContext.getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null) {
+                imm.showSoftInput(imeProxyEdit, InputMethodManager.SHOW_IMPLICIT);
+            }
+            imeActive = true;
+            FileLog.d("SilentFloatingWindow: proxy IME activated for " + target.getClass().getSimpleName());
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    /** Hide the system keyboard and stop serving the floating field.
+     * No-op when nothing is being served. */
+    private void deactivateProxyIme() {
+        if (!imeActive && imeTarget == null) {
+            return;
+        }
+        imeTarget = null;
+        imeActive = false;
+        try {
+            InputMethodManager imm = (InputMethodManager) ApplicationLoader.applicationContext.getSystemService(Context.INPUT_METHOD_SERVICE);
+            if (imm != null && imeProxyEdit != null && imeProxyEdit.getWindowToken() != null) {
+                imm.hideSoftInputFromWindow(imeProxyEdit.getWindowToken(), 0);
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        try {
+            if (imeProxyEdit != null) {
+                imeProxyEdit.clearFocus();
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    /** (Re)attach the IME focus listener to an activity's decor. The
+     * old decor's listener is removed first (a config-change
+     * re-creation brings a new decor and a new observer). */
+    private void attachImeFocusListener(SilentFloatingActivity activity) {
+        detachImeFocusListener();
+        if (activity == null || activity.isFinishing()) {
+            return;
+        }
+        try {
+            View decor = activity.getWindow() != null ? activity.getWindow().getDecorView() : null;
+            if (decor == null) {
+                return;
+            }
+            imeFocusDecor = decor;
+            decor.getViewTreeObserver().addOnGlobalFocusChangeListener(imeFocusListener);
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    private void detachImeFocusListener() {
+        try {
+            if (imeFocusDecor != null) {
+                ViewTreeObserver observer = imeFocusDecor.getViewTreeObserver();
+                if (observer != null && observer.isAlive()) {
+                    observer.removeOnGlobalFocusChangeListener(imeFocusListener);
+                }
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        imeFocusDecor = null;
+    }
+
+    /** Deepest visible EditText containing (x, y) in virtual-display
+     * coordinates (the point the forwarded tap landed at), or null.
+     * Searches front-to-back inside the resolved top window, so a
+     * field inside a popup is found as well as one in the chat. */
+    private EditText findEditTextAt(View root, float x, float y) {
+        if (root == null || !root.isAttachedToWindow() || root.getVisibility() != View.VISIBLE) {
+            return null;
+        }
+        try {
+            int[] loc = new int[2];
+            root.getLocationOnScreen(loc);
+            if (x < loc[0] || x >= loc[0] + root.getWidth()
+                    || y < loc[1] || y >= loc[1] + root.getHeight()) {
+                return null;
+            }
+            if (root instanceof ViewGroup) {
+                ViewGroup group = (ViewGroup) root;
+                for (int i = group.getChildCount() - 1; i >= 0; i--) {
+                    EditText found = findEditTextAt(group.getChildAt(i), x, y);
+                    if (found != null) {
+                        return found;
+                    }
+                }
+            }
+            if (root instanceof EditText) {
+                return (EditText) root;
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        return null;
+    }
+
+    /** First view in the hierarchy that is an instance of cls, or null. */
+    private View findViewOfClass(View root, Class<?> cls) {
+        if (root == null) {
+            return null;
+        }
+        try {
+            if (cls.isInstance(root)) {
+                return root;
+            }
+            if (root instanceof ViewGroup) {
+                ViewGroup group = (ViewGroup) root;
+                for (int i = 0; i < group.getChildCount(); i++) {
+                    View found = findViewOfClass(group.getChildAt(i), cls);
+                    if (found != null) {
+                        return found;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        return null;
+    }
+
+    /** True when (x, y) in virtual-display coordinates is inside the
+     * chat's input bar (message field, send / emoji / attach buttons).
+     * Taps there must NOT hide the keyboard: the send button, for
+     * example, sends while the keyboard stays up, exactly as in the
+     * fullscreen app. */
+    private boolean isPointInEnterView(float x, float y) {
+        try {
+            SilentFloatingActivity fa = floatingActivity;
+            if (fa == null || fa.isFinishing()) {
+                return false;
+            }
+            View decor = fa.getWindow() != null ? fa.getWindow().getDecorView() : null;
+            if (decor == null) {
+                return false;
+            }
+            View enterView = findViewOfClass(decor, ChatActivityEnterView.class);
+            if (enterView == null || !enterView.isAttachedToWindow()) {
+                return false;
+            }
+            int[] loc = new int[2];
+            enterView.getLocationOnScreen(loc);
+            return x >= loc[0] && x < loc[0] + enterView.getWidth()
+                    && y >= loc[1] && y < loc[1] + enterView.getHeight();
+        } catch (Exception e) {
+            FileLog.e(e);
+            return false;
+        }
     }
 
     /** v2.0.25: replicate the user's manual resize — the one gesture
@@ -1052,6 +1493,10 @@ public class SilentFloatingWindow {
                 AndroidUtilities.runOnUIThread(() -> recoverToMain());
                 return;
             }
+            // v2.0.26: mark the launch for the frame check's cold-start
+            // grace (see runFrameCheck) — the first paint takes a few
+            // seconds while LaunchActivity cold-starts on the display.
+            floatingLaunchAtMs = SystemClock.uptimeMillis();
             if (!launchFloatingActivity(ctx)) {
                 FileLog.e("SilentFloatingWindow: floating activity launch failed: " + lastStartError);
                 AndroidUtilities.runOnUIThread(() -> recoverToMain());
@@ -1067,7 +1512,13 @@ public class SilentFloatingWindow {
             // failure, toasts it too, so a device test names the failing
             // step instead of leaving a silent transparent window; it
             // tears nothing down.
-            scheduleFrameCheck(5000);
+            // v2.0.26: first check at 800ms, not 5000ms — the loading
+            // indicator (see buildOverlay) hides on the first OK check,
+            // and a stuck first frame gets its nudge at ~1s instead of
+            // ~5s. The cold-start grace in runFrameCheck keeps this
+            // early check from ever rebuilding a display that is still
+            // starting up.
+            scheduleFrameCheck(800);
         } catch (Exception e) {
             lastStartError = "error: " + String.valueOf(e.getMessage());
             FileLog.e(e);
@@ -1160,7 +1611,37 @@ public class SilentFloatingWindow {
             lastFrameCheckAtMs = System.currentTimeMillis();
             if (lit != 0) {
                 consecutiveFrameFailures = 0;
+                // v2.0.26: first real frame — the loading indicator goes
+                // away now (it is the frame check's own signal, so the
+                // loader can never hide early or linger past the picture).
+                hideLoading();
                 FileLog.d("SilentFloatingWindow: frame check OK: " + state);
+                return;
+            }
+            // v2.0.26: no frame yet — the loading indicator stays up so
+            // the user sees the window is working, not dead.
+            showLoading();
+            // v2.0.26: cold-start grace. For the first 8s after the
+            // display was created the activity is still cold-starting
+            // (LaunchActivity init on the virtual display takes 3-5s on
+            // the user's phone), so a black sample here is EXPECTED, not
+            // a dead display. Never rebuild inside the grace: nudge the
+            // display (the un-stick that the manual resize proves works)
+            // and re-poll in 700ms. The consecutive-failure counter is
+            // reset, so the rebind below can only fire after the grace,
+            // on two consecutive failures of a display that had its
+            // chance to start. Without this, the early 800ms first
+            // check would rebuild a healthy display mid-startup and
+            // restart its cold start forever.
+            long sinceLaunch = floatingLaunchAtMs > 0
+                    ? SystemClock.uptimeMillis() - floatingLaunchAtMs : Long.MAX_VALUE;
+            if (sinceLaunch < 8000) {
+                consecutiveFrameFailures = 0;
+                lastFrameCheck = "WAITING: " + state;
+                lastFrameCheckAtMs = System.currentTimeMillis();
+                FileLog.d("SilentFloatingWindow: frame check waiting for first frames (cold start): " + state);
+                nudgeDisplayForFrames();
+                scheduleFrameCheck(700);
                 return;
             }
             // v2.0.23: the activity IS on the virtual display and the
@@ -1324,6 +1805,10 @@ public class SilentFloatingWindow {
         if (!active || minimized || rootView == null || windowManager == null) {
             return;
         }
+        // v2.0.26: the window is leaving the screen — hide the system
+        // keyboard with it (it is showing on the phone screen for the
+        // proxy IME, not inside the window).
+        deactivateProxyIme();
         preMinimizeX = windowParams.x;
         preMinimizeY = windowParams.y;
         minimized = true;
@@ -1497,6 +1982,12 @@ public class SilentFloatingWindow {
         launchActivity = null;
         consecutiveFrameFailures = 0;
         lastFrameRecoveryAtMs = 0;
+        floatingLaunchAtMs = 0;
+        loadingView = null;
+        loadingVisible = false;
+        deactivateProxyIme();
+        imeProxyEdit = null;
+        detachImeFocusListener();
         try {
             if (pillView != null && windowManager != null) {
                 windowManager.removeView(pillView);
@@ -1743,6 +2234,62 @@ public class SilentFloatingWindow {
         resizeLp.gravity = Gravity.BOTTOM | Gravity.RIGHT;
         rootView.addView(resizeGrip, resizeLp);
         resizeGrip.setOnTouchListener(new ResizeTouchListener());
+
+        // v2.0.26: loading indicator, drawn by the OVERLAY itself (it
+        // cannot depend on the virtual display's content — that is
+        // exactly what is not ready yet). Covers the content area only
+        // (below the top bar, so drag/expand/close stay usable while
+        // loading), solid dark so the transparent/black first paint
+        // never shows through. Not clickable and with no touch
+        // listener, so touches fall through it to the TextureView
+        // below. Hidden by the first OK frame check (hideLoading),
+        // shown again by any later black check.
+        FrameLayout loading = new FrameLayout(ctx);
+        loading.setBackgroundColor(0xFF1B1B1B);
+        FrameLayout.LayoutParams loadingLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        loadingLp.topMargin = barHeightPx;
+        LinearLayout loadingInner = new LinearLayout(ctx);
+        loadingInner.setOrientation(LinearLayout.VERTICAL);
+        loadingInner.setGravity(Gravity.CENTER);
+        FrameLayout.LayoutParams loadingInnerLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        loading.addView(loadingInner, loadingInnerLp);
+        ProgressBar spinner = new ProgressBar(ctx);
+        spinner.setIndeterminate(true);
+        spinner.setIndeterminateTintList(ColorStateList.valueOf(0xFFFFFFFF));
+        LinearLayout.LayoutParams spinnerLp = new LinearLayout.LayoutParams(
+                AndroidUtilities.dp(48), AndroidUtilities.dp(48));
+        spinnerLp.gravity = Gravity.CENTER_HORIZONTAL;
+        loadingInner.addView(spinner, spinnerLp);
+        TextView loadingText = new TextView(ctx);
+        loadingText.setText("Loading...");
+        loadingText.setTextColor(0xFFFFFFFF);
+        loadingText.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14);
+        loadingText.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams loadingTextLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        loadingTextLp.gravity = Gravity.CENTER_HORIZONTAL;
+        loadingTextLp.topMargin = AndroidUtilities.dp(12);
+        loadingInner.addView(loadingText, loadingTextLp);
+        loadingView = loading;
+        loadingVisible = true;
+        rootView.addView(loadingView, loadingLp);
+
+        // v2.0.26: proxy IME input (see activateProxyIme). A 1x1
+        // transparent EditText in the overlay window, tucked under the
+        // top bar: VISIBLE (an invisible/gone view cannot serve input)
+        // but 1px and fully transparent, so the user never sees it.
+        imeProxyEdit = new ImeProxyEditText(ctx);
+        FrameLayout.LayoutParams imeLp = new FrameLayout.LayoutParams(1, 1);
+        imeLp.gravity = Gravity.TOP | Gravity.LEFT;
+        imeProxyEdit.setAlpha(0f);
+        imeProxyEdit.setBackground(null);
+        imeProxyEdit.setCursorVisible(false);
+        imeProxyEdit.setTextColor(0x00000000);
+        imeProxyEdit.setHint("");
+        imeProxyEdit.addTextChangedListener(proxyFallbackWatcher);
+        rootView.addView(imeProxyEdit, imeLp);
     }
 
     // ---------- touch forwarding ----------
@@ -1813,6 +2360,26 @@ public class SilentFloatingWindow {
                 }
                 if (action == MotionEvent.ACTION_DOWN) {
                     touchTarget = target;
+                }
+            }
+            if (action == MotionEvent.ACTION_DOWN) {
+                // v2.0.26: keyboard (see activateProxyIme). A tap on a
+                // text field inside floating must open the system
+                // keyboard on the phone screen; a tap on plain content
+                // (not the field, not the input bar with send / emoji /
+                // attach) must hide it again — the floating field's own
+                // show/hide calls target the virtual display and the IME
+                // service ignores them, so the proxy is driven from the
+                // tap itself. The activation is posted, so it runs after
+                // this tap's own dispatch (and after Telegram's
+                // synchronous focus/showKeyboard on the field) and the
+                // proxy is the view the IME ends up serving.
+                EditText tappedField = findEditTextAt(target, copy.getX(), copy.getY());
+                if (tappedField != null) {
+                    final EditText field = tappedField;
+                    AndroidUtilities.runOnUIThread(() -> activateProxyIme(field));
+                } else if (target == decor && !isPointInEnterView(copy.getX(), copy.getY())) {
+                    deactivateProxyIme();
                 }
             }
             if (target != decor) {
@@ -2048,11 +2615,23 @@ public class SilentFloatingWindow {
         try {
             windowManager.updateViewLayout(rootView, windowParams);
         } catch (Exception e) {
-            // Overlay permission revoked (or the window died): tear down and
-            // try to bring the app back fullscreen.
+            // v2.0.26: a resize must NEVER open fullscreen on a transient
+            // WindowManager failure. updateViewLayout only throws when
+            // the view is not attached (or the window is already dead) —
+            // if the window is still attached, the layout update simply
+            // did not apply and the next gesture event / nudge retries
+            // it, so log and carry on floating. Only when the window is
+            // genuinely gone is there nothing left to float, and only
+            // then fall back to the fullscreen app.
             FileLog.e(e);
-            teardown();
-            relaunchMain(0);
+            try {
+                if (rootView == null || !rootView.isAttachedToWindow()) {
+                    teardown();
+                    relaunchMain(0);
+                }
+            } catch (Exception e2) {
+                FileLog.e(e2);
+            }
         }
     }
 

@@ -2056,7 +2056,7 @@ public class DialogCell extends BaseCell implements StoriesListPlaceProvider.Ava
                                 if (message.isReplyToStory()) {
                                     SpannableStringBuilder builder = new SpannableStringBuilder(messageString);
                                     builder.insert(0, "d ");
-                                    builder.setSpan(new ColoredImageSpan(ContextCompat.getDrawable(getContext(), R.drawable.msg_mini_replystory).mutate()), 0, 1, 0);
+                                    builder.setSpan(new ColoredImageSpan(ContextCompat.getDrawable(ApplicationLoader.applicationContext, R.drawable.msg_mini_replystory).mutate()), 0, 1, 0);
                                     messageString = builder;
                                 }
                                 if (thumbsCount > 0) {
@@ -2094,7 +2094,7 @@ public class DialogCell extends BaseCell implements StoriesListPlaceProvider.Ava
                                     drawForwardIcon = true;
                                     SpannableStringBuilder builder = new SpannableStringBuilder(messageString);
                                     builder.insert(0, "d ");
-                                    ColoredImageSpan coloredImageSpan = new ColoredImageSpan(ContextCompat.getDrawable(getContext(), R.drawable.mini_forwarded).mutate());
+                                    ColoredImageSpan coloredImageSpan = new ColoredImageSpan(ContextCompat.getDrawable(ApplicationLoader.applicationContext, R.drawable.mini_forwarded).mutate());
                                     coloredImageSpan.setAlpha(0.9f);
                                     builder.setSpan(coloredImageSpan, 0, 1, 0);
                                     messageString = builder;
@@ -2114,7 +2114,7 @@ public class DialogCell extends BaseCell implements StoriesListPlaceProvider.Ava
                 drawGiftIcon = true;
                 SpannableStringBuilder builder = new SpannableStringBuilder(messageString);
                 builder.insert(0, "d ");
-                ColoredImageSpan coloredImageSpan = new ColoredImageSpan(ContextCompat.getDrawable(getContext(), R.drawable.mini_gift).mutate());
+                ColoredImageSpan coloredImageSpan = new ColoredImageSpan(ContextCompat.getDrawable(ApplicationLoader.applicationContext, R.drawable.mini_gift).mutate());
                 coloredImageSpan.setScale(1.25f, 1.25f);
                 coloredImageSpan.spaceScaleX = 0.9f;
                 coloredImageSpan.setAlpha(0.9f);

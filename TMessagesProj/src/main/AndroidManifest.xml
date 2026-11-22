@@ -328,7 +328,7 @@
              preferred display) instead of stacking a second instance. -->
         <activity
             android:name="org.telegram.ui.SilentFloatingActivity"
-            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode|smallestScreenSize|screenLayout"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode|smallestScreenSize|screenLayout|density"
             android:excludeFromRecents="true"
             android:exported="false"
             android:hardwareAccelerated="true"
