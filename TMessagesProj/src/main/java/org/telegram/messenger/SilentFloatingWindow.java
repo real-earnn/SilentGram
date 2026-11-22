@@ -6,7 +6,6 @@ import android.app.ActivityOptions;
 import android.app.Dialog;
 import android.content.Context;
 import android.content.Intent;
-import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Matrix;
 import android.graphics.Outline;
@@ -38,7 +37,6 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupWindow;
-import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
@@ -300,11 +298,6 @@ public class SilentFloatingWindow {
      * frame check so the debug report can tell a stopped activity
      * (black because nothing draws) from a stuck surface. */
     private boolean floatingResumed;
-    /** v2.0.26: overlay-drawn loading indicator (see buildOverlay):
-     * shown while the virtual display has not delivered a first frame
-     * yet, hidden the moment a frame check samples lit pixels. */
-    private View loadingView;
-    private boolean loadingVisible;
     /** v2.0.26: uptime (SystemClock.uptimeMillis) of the first virtual
      * display creation for this window — the frame check grants an 8s
      * cold-start grace from here (see runFrameCheck): a black sample
@@ -1066,34 +1059,6 @@ public class SilentFloatingWindow {
         scheduleFrameCheck(1000);
     }
 
-    // ---------- loading indicator (v2.0.26) ----------
-
-    /** Show the overlay-drawn loading indicator (no-op if already up). */
-    private void showLoading() {
-        try {
-            if (loadingView != null && !loadingVisible) {
-                loadingVisible = true;
-                loadingView.setVisibility(View.VISIBLE);
-            }
-        } catch (Exception e) {
-            FileLog.e(e);
-        }
-    }
-
-    /** Hide the loading indicator (no-op if already down). Called only
-     * from the frame check's OK path, so it hides on the first real
-     * frame and never before. */
-    private void hideLoading() {
-        try {
-            if (loadingView != null && loadingVisible) {
-                loadingVisible = false;
-                loadingView.setVisibility(View.GONE);
-            }
-        } catch (Exception e) {
-            FileLog.e(e);
-        }
-    }
-
     // ---------- proxy IME (v2.0.26) ----------
 
     /** The proxy input view: a 1x1 transparent EditText in the overlay
@@ -1552,12 +1517,10 @@ public class SilentFloatingWindow {
             // failure, toasts it too, so a device test names the failing
             // step instead of leaving a silent transparent window; it
             // tears nothing down.
-            // v2.0.26: first check at 800ms, not 5000ms — the loading
-            // indicator (see buildOverlay) hides on the first OK check,
-            // and a stuck first frame gets its nudge at ~1s instead of
-            // ~5s. The cold-start grace in runFrameCheck keeps this
-            // early check from ever rebuilding a display that is still
-            // starting up.
+            // v2.0.26: first check at 800ms, not 5000ms — a stuck
+            // first frame gets its nudge at ~1s instead of ~5s. The
+            // cold-start grace in runFrameCheck keeps this early check
+            // from ever rebuilding a display that is still starting up.
             scheduleFrameCheck(800);
         } catch (Exception e) {
             lastStartError = "error: " + String.valueOf(e.getMessage());
@@ -1651,16 +1614,12 @@ public class SilentFloatingWindow {
             lastFrameCheckAtMs = System.currentTimeMillis();
             if (lit != 0) {
                 consecutiveFrameFailures = 0;
-                // v2.0.26: first real frame — the loading indicator goes
-                // away now (it is the frame check's own signal, so the
-                // loader can never hide early or linger past the picture).
-                hideLoading();
                 FileLog.d("SilentFloatingWindow: frame check OK: " + state);
                 return;
             }
-            // v2.0.26: no frame yet — the loading indicator stays up so
-            // the user sees the window is working, not dead.
-            showLoading();
+            // v2.0.28: no loading overlay any more (removed at the
+            // user's order) — the window shows the texture as-is, black
+            // until frames arrive, exactly like v2.0.25.
             // v2.0.26: cold-start grace. For the first 8s after the
             // display was created the activity is still cold-starting
             // (LaunchActivity init on the virtual display takes 3-5s on
@@ -2036,8 +1995,6 @@ public class SilentFloatingWindow {
         floatingLaunchAtMs = 0;
         activityRecreateDoneForDisplay = false;
         lastActivityRecreateAtMs = 0;
-        loadingView = null;
-        loadingVisible = false;
         deactivateProxyIme();
         imeProxyEdit = null;
         detachImeFocusListener();
@@ -2287,47 +2244,6 @@ public class SilentFloatingWindow {
         resizeLp.gravity = Gravity.BOTTOM | Gravity.RIGHT;
         rootView.addView(resizeGrip, resizeLp);
         resizeGrip.setOnTouchListener(new ResizeTouchListener());
-
-        // v2.0.26: loading indicator, drawn by the OVERLAY itself (it
-        // cannot depend on the virtual display's content — that is
-        // exactly what is not ready yet). Covers the content area only
-        // (below the top bar, so drag/expand/close stay usable while
-        // loading), solid dark so the transparent/black first paint
-        // never shows through. Not clickable and with no touch
-        // listener, so touches fall through it to the TextureView
-        // below. Hidden by the first OK frame check (hideLoading),
-        // shown again by any later black check.
-        FrameLayout loading = new FrameLayout(ctx);
-        loading.setBackgroundColor(0xFF1B1B1B);
-        FrameLayout.LayoutParams loadingLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        loadingLp.topMargin = barHeightPx;
-        LinearLayout loadingInner = new LinearLayout(ctx);
-        loadingInner.setOrientation(LinearLayout.VERTICAL);
-        loadingInner.setGravity(Gravity.CENTER);
-        FrameLayout.LayoutParams loadingInnerLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        loading.addView(loadingInner, loadingInnerLp);
-        ProgressBar spinner = new ProgressBar(ctx);
-        spinner.setIndeterminate(true);
-        spinner.setIndeterminateTintList(ColorStateList.valueOf(0xFFFFFFFF));
-        LinearLayout.LayoutParams spinnerLp = new LinearLayout.LayoutParams(
-                AndroidUtilities.dp(48), AndroidUtilities.dp(48));
-        spinnerLp.gravity = Gravity.CENTER_HORIZONTAL;
-        loadingInner.addView(spinner, spinnerLp);
-        TextView loadingText = new TextView(ctx);
-        loadingText.setText("Loading...");
-        loadingText.setTextColor(0xFFFFFFFF);
-        loadingText.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14);
-        loadingText.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams loadingTextLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        loadingTextLp.gravity = Gravity.CENTER_HORIZONTAL;
-        loadingTextLp.topMargin = AndroidUtilities.dp(12);
-        loadingInner.addView(loadingText, loadingTextLp);
-        loadingView = loading;
-        loadingVisible = true;
-        rootView.addView(loadingView, loadingLp);
 
         // v2.0.26: proxy IME input (see activateProxyIme). A 1x1
         // transparent EditText in the overlay window, tucked under the
