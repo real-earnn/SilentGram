@@ -28,6 +28,7 @@ import android.text.TextUtils;
 import androidx.core.graphics.ColorUtils;
 
 import org.telegram.messenger.AndroidUtilities;
+import org.telegram.messenger.ApplicationLoader;
 import org.telegram.messenger.ChatObject;
 import org.telegram.messenger.Emoji;
 import org.telegram.messenger.FileLog;
@@ -658,6 +659,11 @@ public class AvatarDrawable extends Drawable {
             }
         }
 
+        // v2.0.25: density-correct the icon sizes below — see
+        // getPhoneDensityScale(). The avatar icons were built once with
+        // phone-density sizes, so their intrinsic sizes are phone pixels
+        // while the avatar circle here is virtual-display pixels.
+        final float densityScale = getPhoneDensityScale();
         if (avatarType == AVATAR_TYPE_ARCHIVED) {
             if (archivedAvatarProgress != 0) {
                 backgroundPaint.setColor(ColorUtils.setAlphaComponent(getThemedColor(Theme.key_avatar_backgroundArchived), alpha));
@@ -678,8 +684,8 @@ public class AvatarDrawable extends Drawable {
                     Theme.dialogs_archiveAvatarDrawableRecolored = true;
                 }
             }
-            int w = Theme.dialogs_archiveAvatarDrawable.getIntrinsicWidth();
-            int h = Theme.dialogs_archiveAvatarDrawable.getIntrinsicHeight();
+            int w = Math.max(1, (int) (Theme.dialogs_archiveAvatarDrawable.getIntrinsicWidth() * densityScale));
+            int h = Math.max(1, (int) (Theme.dialogs_archiveAvatarDrawable.getIntrinsicHeight() * densityScale));
             int x = (size - w) / 2;
             int y = (size - h) / 2;
             canvas.save();
@@ -741,8 +747,25 @@ public class AvatarDrawable extends Drawable {
                 drawable = Theme.avatarDrawables[9];
             }
             if (drawable != null) {
-                final int w = (int) (drawable.getIntrinsicWidth() * scaleSize);
-                final int h = (int) (drawable.getIntrinsicHeight() * scaleSize);
+                // v2.0.25: Theme.avatarDrawables are loaded once per
+                // process from the application context (phone density —
+                // Theme.createCommonResources runs once, guarded by
+                // dividerPaint, and destroyResources() is empty so they
+                // are never reloaded for the virtual display) while this
+                // drawable is drawn inside the floating window's virtual
+                // display (different density). Intrinsic size is phone
+                // pixels, so the icon filled/overflowed the avatar circle
+                // (~2x too big: chats_saved 56px into a ~48px circle for
+                // Saved Messages, msg_folders_groups 48px into it for the
+                // Groups filter icon). Scale by the current density over
+                // the phone density; in fullscreen the factor is 1, so
+                // nothing changes there. A custom icon is NOT scaled: its
+                // only caller (DialogsActivity) loads it from the
+                // activity's own resources, so its intrinsic size is
+                // already in the current density.
+                float iconScale = customIconDrawable != null ? 1f : densityScale;
+                final int w = Math.max(1, (int) (drawable.getIntrinsicWidth() * scaleSize * iconScale));
+                final int h = Math.max(1, (int) (drawable.getIntrinsicHeight() * scaleSize * iconScale));
                 final int x = (size - w) / 2 + iconTx;
                 final int y = (size - h) / 2 + iconTy;
                 drawable.setBounds(x, y, x + w, y + h);
@@ -755,8 +778,11 @@ public class AvatarDrawable extends Drawable {
                 }
             }
         } else if (drawDeleted && Theme.avatarDrawables[1] != null) {
-            int w = Theme.avatarDrawables[1].getIntrinsicWidth();
-            int h = Theme.avatarDrawables[1].getIntrinsicHeight();
+            // v2.0.25: density-correct first (see densityScale above):
+            // ghost.webp is 64px at phone density (32dp) while the
+            // avatar circle is virtual-display pixels.
+            int w = Math.max(1, (int) (Theme.avatarDrawables[1].getIntrinsicWidth() * densityScale));
+            int h = Math.max(1, (int) (Theme.avatarDrawables[1].getIntrinsicHeight() * densityScale));
             if (isProfile) {
                 w *= scaleSize;
                 h *= scaleSize;
@@ -829,6 +855,24 @@ public class AvatarDrawable extends Drawable {
 
     private int getThemedColor(int key) {
         return Theme.getColor(key, resourcesProvider);
+    }
+
+    /** v2.0.25: current density over the phone (application-context)
+     * density — 1 in fullscreen, ~0.49 inside the floating window's
+     * virtual display. Drawables loaded once from the application
+     * context (Theme.avatarDrawables, dialogs_archiveAvatarDrawable)
+     * carry phone-pixel intrinsic sizes; multiplying by this makes them
+     * draw at their designed dp size in the current density. Same ratio
+     * ColoredImageSpan uses (v2.0.24). */
+    private static float getPhoneDensityScale() {
+        try {
+            float appDensity = ApplicationLoader.applicationContext.getResources().getDisplayMetrics().density;
+            if (appDensity > 0) {
+                return AndroidUtilities.density / appDensity;
+            }
+        } catch (Exception ignored) {
+        }
+        return 1f;
     }
 
     public void setRoundRadius(int roundRadius) {

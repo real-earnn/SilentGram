@@ -10,6 +10,7 @@ import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.text.SpannableString;
 import android.text.SpannableStringBuilder;
@@ -137,13 +138,38 @@ public class TableView extends TableLayout implements Theme.Colorable {
         }
         if (copyButton != null) {
             ImageView copyView = new ImageView(getContext());
-            copyView.setImageResource(R.drawable.msg_copy);
-            // v2.0.24: CENTER never scales — a drawable resolved at phone
-            // density overflowed the VD-sized box inside the floating
-            // window. CENTER_INSIDE scales it down into the box; a
-            // correctly-sized drawable is unaffected.
+            // v2.0.25: pin the icon to its designed 24dp in the CURRENT
+            // density, whichever density decoded it. msg_copy is a 24dp
+            // bitmap; retargeting the (mutated) BitmapDrawable to this
+            // view's resources makes its intrinsic exactly dp(24), so
+            // CENTER_INSIDE below draws it at design size — it cannot
+            // overflow the 30dp box (the v2.0.24 complaint) and cannot
+            // shrink below it either. mutate() first: the drawable is
+            // Resources-cached, and retargeting the shared instance
+            // would resize every other msg_copy in the app.
+            // v2.0.24's setAdjustViewBounds(true) is REMOVED: AOSP
+            // ImageView.setAdjustViewBounds(true) forces the scale type
+            // to FIT_CENTER, so the CENTER_INSIDE above never took
+            // effect — FIT_CENTER scales the icon to fill the whole
+            // 30dp box instead of drawing it at its 24dp design size.
+            Drawable copyDrawable = null;
+            try {
+                Drawable d = getContext().getResources().getDrawable(R.drawable.msg_copy);
+                if (d != null) {
+                    d = d.mutate();
+                    if (d instanceof BitmapDrawable) {
+                        ((BitmapDrawable) d).setTargetDensity(getContext().getResources().getDisplayMetrics());
+                    }
+                    copyDrawable = d;
+                }
+            } catch (Exception ignored) {
+            }
+            if (copyDrawable != null) {
+                copyView.setImageDrawable(copyDrawable);
+            } else {
+                copyView.setImageResource(R.drawable.msg_copy);
+            }
             copyView.setScaleType(ImageView.ScaleType.CENTER_INSIDE);
-            copyView.setAdjustViewBounds(true);
             ThemeBind.colorFilter(copyView, Theme.key_windowBackgroundWhiteBlueIcon, resourcesProvider, PorterDuff.Mode.SRC_IN);
             copyView.setOnClickListener(v -> {
                 AndroidUtilities.addToClipboard(text);

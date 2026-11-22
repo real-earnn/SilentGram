@@ -273,6 +273,22 @@ public class SilentFloatingWindow {
      * — 2s cooldown so a tap storm while the activity is still coming
      * back cannot spam startActivity. */
     private long lastResumeKickMs;
+    /** v2.0.25: last time nudgeDisplayForFrames() ran — 1s throttle so
+     * a tap storm or a burst of failed frame checks cannot jiggle the
+     * window continuously. */
+    private long lastNudgeMs;
+    /** v2.0.25: how many frame nudges have run (read by the debug report
+     * through the frame-check state string). */
+    private int nudgeCount;
+    /** v2.0.25: whether the floating activity is currently resumed —
+     * set by SilentFloatingActivity.onResume()/onPause(); read by the
+     * frame check so the debug report can tell a stopped activity
+     * (black because nothing draws) from a stuck surface. */
+    private boolean floatingResumed;
+    /** v2.0.25: last time the cooldown-blocked frame recovery toasted
+     * (the recovery loop now reschedules itself, so the toast is
+     * throttled to once a minute instead of every loop). */
+    private long lastFrameToastMs;
     /** v2.0.22: true while the floating activity's onPause() is running.
      * Fragment pause-dismissals (popups/dialogs) are suppressed only in
      * that window — Home pauses the floating activity and the popup on
@@ -391,6 +407,21 @@ public class SilentFloatingWindow {
      * it in — that file is owned by the coordinator. */
     public int getDisplayDensityDpi() {
         return displayDensityDpi;
+    }
+
+    /** v2.0.25: frame nudges run so far (see nudgeDisplayForFrames). */
+    public int getNudgeCount() {
+        return nudgeCount;
+    }
+
+    /** v2.0.25: whether the floating activity is currently resumed. */
+    public boolean isFloatingResumed() {
+        return floatingResumed;
+    }
+
+    /** v2.0.25: called by SilentFloatingActivity.onResume()/onPause(). */
+    public void setFloatingResumed(boolean resumed) {
+        floatingResumed = resumed;
     }
 
     public int getScreenWidthPx() {
@@ -853,6 +884,14 @@ public class SilentFloatingWindow {
             return;
         }
         lastResumeKickMs = now;
+        // v2.0.25: nudge the display the way a manual resize does
+        // BEFORE re-launching. The re-launch alone did not restore the
+        // picture: the activity is already on the virtual display, so a
+        // new intent to the existing singleTask only re-delivers
+        // onNewIntent — it does not re-run window layout there, and a
+        // stopped activity's window stays hidden. The nudge (a real
+        // display-change event) is what forces that re-evaluation.
+        nudgeDisplayForFrames();
         launchFloatingActivity(ApplicationLoader.applicationContext);
         try {
             View decor = floatingActivity.getWindow() != null ? floatingActivity.getWindow().getDecorView() : null;
@@ -864,6 +903,108 @@ public class SilentFloatingWindow {
             FileLog.e(e);
         }
         scheduleFrameCheck(1500);
+    }
+
+    /** v2.0.25: called from SilentFloatingActivity.onPause()
+     * (Home, screen off, or another activity covering the floating one).
+     * The v2.0.24 resume kick could only fire from onResume() — which
+     * the system never delivers after Home — or from the first tap.
+     * Start the frame-check loop NOW instead: it samples the TextureView,
+     * and while the picture is black it nudges the display (see
+     * nudgeDisplayForFrames) and, if that does not take, rebuilds it —
+     * so the picture is back before the user ever taps or resizes. The
+     * loop stops itself on the first OK check; a check is a 32x32 bitmap
+     * sample, so a black window costs one tiny sample every few seconds,
+     * not a busy loop. No-op while minimized (the hidden TextureView
+     * samples 0 pixels and would trigger a spurious recovery). */
+    public void onFloatingActivityBackgrounded() {
+        if (!active || minimized) {
+            return;
+        }
+        scheduleFrameCheck(1000);
+    }
+
+    /** v2.0.25: replicate the user's manual resize — the one gesture
+     * that provably brings the picture back — programmatically, with no
+     * tap and no resize needed. Two halves, matching the two things a
+     * manual resize does:
+     * (1) Virtual-display resize: virtualDisplay.resize() to 1px wider
+     * and back is a real display-change event through the system server,
+     * which re-runs window layout and visibility on the virtual display.
+     * The v2.0.24 re-launch could not do this: the activity is ALREADY
+     * on the virtual display, so a new intent to the existing singleTask
+     * only re-delivers onNewIntent — it does not re-run window layout,
+     * and a stopped activity's window stays hidden. A resize is the only
+     * app-side call that forces that re-evaluation. Done directly on the
+     * VirtualDisplay (not via resizeDisplayToWindow(), which no-ops when
+     * the size is unchanged) and restored to the exact size, so the
+     * bookkeeping (displayWidthPx/displayHeightPx) never drifts.
+     * (2) Overlay jiggle: the window grows 2px and back, so the
+     * TextureView re-allocates its SurfaceTexture buffers at the new
+     * size, dropping any stale queued buffers a stuck producer left
+     * behind. The position is restored exactly, so the window does not
+     * drift. Throttled to one nudge per second; a 2px jiggle for 250ms
+     * against a black window is invisible. Called from the frame check
+     * on the first failed sample (before the destructive display
+     * rebind) and from onFloatingActivityResumed(). */
+    private void nudgeDisplayForFrames() {
+        if (!active || minimized || virtualDisplay == null || textureView == null) {
+            return;
+        }
+        long now = SystemClock.uptimeMillis();
+        if (now - lastNudgeMs < 1000) {
+            return;
+        }
+        lastNudgeMs = now;
+        nudgeCount++;
+        FileLog.d("SilentFloatingWindow: frame nudge #" + nudgeCount + " (display " + displayWidthPx + "x" + displayHeightPx + ")");
+        try {
+            virtualDisplay.resize(displayWidthPx + 1, displayHeightPx, displayDensityDpi);
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        final int origWidth = windowWidthPx;
+        final int origX = windowParams != null ? windowParams.x : 0;
+        final int origY = windowParams != null ? windowParams.y : 0;
+        int bumpedWidth = origWidth;
+        try {
+            bumpedWidth = clampWidth(origWidth + 2);
+            if (bumpedWidth == origWidth) {
+                bumpedWidth = clampWidth(origWidth - 2);
+            }
+            if (bumpedWidth != origWidth) {
+                applyWindowWidth(bumpedWidth);
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+        final int finalBumpedWidth = bumpedWidth;
+        AndroidUtilities.runOnUIThread(() -> {
+            if (!active || minimized || virtualDisplay == null) {
+                return;
+            }
+            try {
+                virtualDisplay.resize(displayWidthPx, displayHeightPx, displayDensityDpi);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            try {
+                // Only restore the overlay if the user did not resize it
+                // meanwhile (their resize wins — the VD restore above
+                // already used the current bookkeeping size).
+                if (windowWidthPx == finalBumpedWidth || windowWidthPx == origWidth) {
+                    applyWindowWidth(origWidth);
+                    if (windowParams != null) {
+                        windowParams.x = origX;
+                        windowParams.y = origY;
+                    }
+                    updateLayout();
+                }
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+            scheduleFrameCheck(1500);
+        }, 250);
     }
 
     /**
@@ -1009,7 +1150,12 @@ public class SilentFloatingWindow {
                     + " surfaceValid=" + surfaceValid
                     + " textureAvailable=" + textureAvailable
                     + " view=" + tvW + "x" + tvH
-                    + " pixels=" + lit + "/" + sampled;
+                    + " pixels=" + lit + "/" + sampled
+                    // v2.0.25: resumed=false after Home means the activity
+                    // is stopped (nothing draws); nudge= counts the
+                    // display nudges run for this window.
+                    + " resumed=" + floatingResumed
+                    + " nudge=" + nudgeCount;
             lastFrameCheck = (lit == 0 ? "FAILED: " : "OK: ") + state;
             lastFrameCheckAtMs = System.currentTimeMillis();
             if (lit != 0) {
@@ -1028,8 +1174,15 @@ public class SilentFloatingWindow {
             if (activityOnVd && surfaceValid) {
                 consecutiveFrameFailures++;
                 if (consecutiveFrameFailures < 2) {
-                    FileLog.e("SilentFloatingWindow: frame check FAILED once with activity on vd + valid surface, waiting for another check: " + state);
-                    scheduleFrameCheck(5000);
+                    // v2.0.25: first failed sample — nudge the display the
+                    // way a manual resize does (see nudgeDisplayForFrames)
+                    // instead of just waiting 5s for a second failure: the
+                    // nudge is non-destructive (same display, same surface,
+                    // same activity), so it runs before the rebind below,
+                    // which tears the display down. Re-check in 2s.
+                    FileLog.e("SilentFloatingWindow: frame check FAILED once with activity on vd + valid surface, nudging display: " + state);
+                    nudgeDisplayForFrames();
+                    scheduleFrameCheck(2000);
                     return;
                 }
             }
@@ -1041,8 +1194,16 @@ public class SilentFloatingWindow {
             // after any resize must be recoverable, not just the first.
             long now = SystemClock.uptimeMillis();
             if (now - lastFrameRecoveryAtMs < 10000) {
-                SilentToast.show(ApplicationLoader.applicationContext,
-                        "Floating: no picture (" + state + ")", android.widget.Toast.LENGTH_LONG);
+                // v2.0.25: keep the loop alive past a cooldown-blocked
+                // recovery (the watchdog started by onPause/onStop has no
+                // other trigger), but toast at most once a minute so a
+                // dead display does not toast forever.
+                if (now - lastFrameToastMs > 60000) {
+                    lastFrameToastMs = now;
+                    SilentToast.show(ApplicationLoader.applicationContext,
+                            "Floating: no picture (" + state + ")", android.widget.Toast.LENGTH_LONG);
+                }
+                scheduleFrameCheck(10000);
                 return;
             }
             lastFrameRecoveryAtMs = now;
@@ -1450,13 +1611,20 @@ public class SilentFloatingWindow {
                 if (width > 0 && height > 0) {
                     createVirtualDisplayAndLaunch(ctx, texture, width, height);
                 } else {
-                    // Texture ready before layout: wait one layout pass,
-                    // then use the view's real size.
-                    textureView.post(() -> {
-                        if (active && virtualDisplay == null && textureView.getWidth() > 0 && textureView.getHeight() > 0) {
-                            createVirtualDisplayAndLaunch(ctx, textureView.getSurfaceTexture(), textureView.getWidth(), textureView.getHeight());
-                        }
-                    });
+                    // v2.0.25: texture ready before first layout (the
+                    // usual first-open case: addView only scheduled the
+                    // layout). The old single textureView.post() retry
+                    // usually ran before that layout too, so no display
+                    // was ever created and the window stayed transparent
+                    // until a resize forced onSurfaceTextureSizeChanged.
+                    // Create the display NOW at the known window content
+                    // size — currentDisplaySize() falls back to
+                    // windowWidthPx x (windowHeightPx - barHeightPx),
+                    // which is exactly the size the TextureView is about
+                    // to be laid out at — instead of gambling on the
+                    // retry. The size-change callback below still fires
+                    // on first layout and re-syncs if it differs.
+                    createVirtualDisplayAndLaunch(ctx, texture, displayWidthPx, displayHeightPx);
                 }
             }
 
