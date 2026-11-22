@@ -335,6 +335,12 @@ public class SilentFloatingWindow {
     /** Floating decor the IME focus listener is attached to (null when
      * not attached); the listener itself lives below. */
     private View imeFocusDecor;
+    /** v2.0.22: true while the window is minimized to the sidebar pill.
+     * v2.0.23: minimize HIDES the overlay (root view GONE, window 1x1
+     * off-screen) instead of detaching it — the TextureView keeps its
+     * texture, so restore re-shows the same display with no re-create
+     * and no re-launch. */
+    private boolean minimized;
     /** v2.0.26: fires on every focus change inside the floating
      * activity. An EditText gaining focus (tap, or a screen that
      * auto-focuses its field, e.g. search) activates the proxy IME;
@@ -403,12 +409,6 @@ public class SilentFloatingWindow {
      * top must survive it; fragment-cover pauses still dismiss normally.
      * Set/cleared by SilentFloatingActivity around super.onPause(). */
     private boolean pauseDismissalsSuppressed;
-    /** v2.0.22: true while the window is minimized to the sidebar pill.
-     * v2.0.23: minimize HIDES the overlay (root view GONE, window 1x1
-     * off-screen) instead of detaching it — the TextureView keeps its
-     * texture, so restore re-shows the same display with no re-create
-     * and no re-launch. */
-    private boolean minimized;
     /** Window position before minimize() shrank the overlay to 1x1
      * off-screen; restore puts it back here. */
     private int preMinimizeX;
