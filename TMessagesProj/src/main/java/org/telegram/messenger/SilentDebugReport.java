@@ -151,6 +151,7 @@ public class SilentDebugReport {
         putSection(root, "calls", buildCalls());
         putSection(root, "floating", buildFloating());
         putSection(root, "vtt", buildVtt(account));
+        putSection(root, "ads", buildAds());
         try {
             return root.toString(2);
         } catch (Throwable e) {
@@ -328,6 +329,48 @@ public class SilentDebugReport {
 
 
 
+
+    // SilentGram v2.0.28: AdMob Native Advanced ads (channels + bots).
+    // App ID / ad unit ID are public identifiers (embedded in the APK),
+    // not secrets. TEST vs REAL is shown explicitly: while the AdMob
+    // account application is declined (2026-11-23, twice), loads use
+    // Google's demo unit and the headline reads "Test Ad". A failed
+    // REAL-ad load (no fill / account not approved) is EXPECTED right
+    // now and is NOT a code bug — real ads need the account re-accepted
+    // AND the app Play-listed, linked, and readiness-reviewed.
+    private static JSONObject buildAds() {
+        try {
+            JSONObject ads = new JSONObject();
+            SilentAdsManager manager = SilentAdsManager.getInstance();
+            ads.put("initialized", manager.isInitialized());
+            String initError = manager.getInitError();
+            if (initError != null) {
+                ads.put("initError", cap(initError, 300));
+            }
+            ads.put("mode", SilentAdsManager.isTestMode() ? "TEST (demo IDs — AdMob account declined, real ads will not fill yet)" : "REAL");
+            ads.put("appId", SilentAdsManager.APP_ID);
+            ads.put("appIdUsed", SilentAdsManager.getActiveAppId());
+            ads.put("adUnit", SilentAdsManager.NATIVE_AD_UNIT_ID);
+            ads.put("adUnitUsed", SilentAdsManager.getActiveAdUnitId());
+            ads.put("lastLoad", manager.getLastLoadState());
+            ads.put("lastLoadAt", SilentAdsManager.formatTime(manager.getLastLoadAtMs()));
+            ads.put("loadAttempts", manager.getLoadAttempts());
+            ads.put("pool", manager.getPoolSize());
+            String placement = manager.getLastShownPlacement();
+            if (placement == null) {
+                ads.put("lastShown", "none yet");
+            } else {
+                ads.put("lastShown", placement + " @ " + SilentAdsManager.formatTime(manager.getLastShownAtMs()));
+                ads.put("lastShownDialog", manager.getLastShownDialog());
+            }
+            ads.put("note", SilentAdsManager.isTestMode()
+                    ? "TEST mode: demo ads always fill; headline reads 'Test Ad'. RELEASE: set USE_TEST_ADS=false in SilentAdsManager + swap manifest APPLICATION_ID to the real App ID once the AdMob account is approved and the app is published + linked."
+                    : "REAL mode: a failed load (no fill / account not approved) is EXPECTED until the AdMob account is re-accepted and the app is Play-listed + linked. Never click own ads.");
+            return ads;
+        } catch (Throwable e) {
+            return sectionError("ads", e);
+        }
+    }
 
     private static void showDialog(Activity activity, final String report) {
         Context context = activity;

@@ -26,8 +26,20 @@ public class ChatMessagesMetadataController {
     public void checkMessages(ChatActivity.ChatActivityAdapter chatAdapter, int maxAdapterPosition, int minAdapterPosition, long currentTime) {
         ArrayList<MessageObject> messages = chatAdapter.getMessages();
         if (!chatActivity.isInScheduleMode() && maxAdapterPosition >= 0 && minAdapterPosition >= 0) {
-            int from = minAdapterPosition - chatAdapter.messagesStartRow - 10;
-            int to = maxAdapterPosition - chatAdapter.messagesStartRow + 10;
+            // SilentAds: min/maxAdapterPosition are adapter positions; ad
+            // rows carry no message, so translate to message indices. If
+            // an edge position is itself an ad row, step to the nearest
+            // message row (newest side steps down, oldest side steps up).
+            int from = chatAdapter.messageIndexForPosition(minAdapterPosition);
+            if (from < 0) {
+                from = chatAdapter.messageIndexForPosition(minAdapterPosition + 1);
+            }
+            int to = chatAdapter.messageIndexForPosition(maxAdapterPosition);
+            if (to < 0) {
+                to = chatAdapter.messageIndexForPosition(maxAdapterPosition - 1);
+            }
+            from -= 10;
+            to += 10;
             if (from < 0) {
                 from = 0;
             }

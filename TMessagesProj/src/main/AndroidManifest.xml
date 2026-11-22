@@ -109,6 +109,9 @@
         android:usesCleartextTraffic="true"
         android:enableOnBackInvokedCallback="true"
     >
+        <!-- SilentGram v2.0.28: AdMob App ID — TEST ID for this build (AdMob account application declined twice, 2026-11-23; real ads will not fill until it is re-accepted and the app is published + linked). -->
+        <!-- RELEASE SWITCH: replace the value below with the real App ID ca-app-pub-1963262096178695~6236657040 AND set USE_TEST_ADS=false in SilentAdsManager to go live. -->
+        <meta-data android:name="com.google.android.gms.ads.APPLICATION_ID" android:value="ca-app-pub-3940256099942544~3347511713" />
         <!-- usesCleartextTraffic for browser supporting opening http:// links -->
 
         <activity-alias

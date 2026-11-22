@@ -189,6 +189,7 @@ import org.telegram.messenger.RichQuote;
 import org.telegram.messenger.SecretChatHelper;
 import org.telegram.messenger.SendMessagesHelper;
 import org.telegram.messenger.SharedConfig;
+import org.telegram.messenger.SilentAdsManager;
 import org.telegram.messenger.SilentFloatingWindow;
 import org.telegram.messenger.SvgHelper;
 import org.telegram.messenger.Timer;
@@ -357,6 +358,7 @@ import java.io.FileWriter;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.URLDecoder;
+import com.google.android.gms.ads.nativead.NativeAd;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
@@ -364,6 +366,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.TreeSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
@@ -588,6 +591,10 @@ public class ChatActivity extends BaseFragment implements
     @Nullable
     private ImageView closeReportSpam;
     private BotAdView botAdView;
+    // SilentGram v2.0.28: AdMob Native Advanced ad strip for bot chats (top, below the action bar).
+    private SilentNativeAdView silentBotAdView;
+    private boolean silentBotAdDismissed;
+    private Runnable silentBotStripPoolListener;
     private TextView chatWithAdminTextView;
     private FragmentContextView fragmentContextView;
     private FrameLayout fragmentContextViewWrapper;
@@ -1801,7 +1808,7 @@ public class ChatActivity extends BaseFragment implements
         for (int i = 0; i < messages.size(); i++) {
             if (GramWallet.messageMatchesTransaction(messages.get(i), transaction)) {
                 chatListView.stopScroll();
-                chatLayoutManager.scrollToPositionWithOffset(chatAdapter.messagesStartRow + i, 0);
+                chatLayoutManager.scrollToPositionWithOffset(chatAdapter.positionForMessageIndex(i), 0);
                 break;
             }
         }
@@ -1816,7 +1823,7 @@ public class ChatActivity extends BaseFragment implements
         if (isInsideContainer) {
             return;
         }
-        int indexOfMessage = position - chatAdapter.messagesStartRow;
+        int indexOfMessage = chatAdapter.messageIndexForPosition(position);
         if (indexOfMessage < 0 || indexOfMessage >= messages.size()) {
             return;
         }
@@ -1833,7 +1840,7 @@ public class ChatActivity extends BaseFragment implements
             boolean limitReached;
             @Override
             public void onSelectionChanged(int position, boolean selected, float x, float y) {
-                int i = position - chatAdapter.messagesStartRow;
+                int i = chatAdapter.messageIndexForPosition(position);
                 if (unselect) {
                     selected = !selected;
                 }
@@ -1865,7 +1872,7 @@ public class ChatActivity extends BaseFragment implements
 
             @Override
             public boolean canSelect(int position) {
-                int i = position - chatAdapter.messagesStartRow;
+                int i = chatAdapter.messageIndexForPosition(position);
                 if (i >= 0 && i < messages.size()) {
                     MessageObject messageObject = messages.get(i);
                     if (messageObject.contentType == 0) {
@@ -1882,14 +1889,14 @@ public class ChatActivity extends BaseFragment implements
 
             @Override
             public int checkPosition(int position, boolean selectionTop) {
-                int i = position - chatAdapter.messagesStartRow;
+                int i = chatAdapter.messageIndexForPosition(position);
                 if (i >= 0 && i < messages.size()) {
                     MessageObject messageObject = messages.get(i);
                     if (messageObject.contentType == 0 && messageObject.hasValidGroupId()) {
                         MessageObject.GroupedMessages groupedMessages = groupedMessagesMap.get(messageObject.getGroupId());
                         if (groupedMessages != null) {
                             MessageObject messageObject1 = groupedMessages.messages.get(selectionTop ? 0 : groupedMessages.messages.size() - 1);
-                            return chatAdapter.messagesStartRow + messages.indexOf(messageObject1);
+                            return chatAdapter.positionForMessageIndex(messages.indexOf(messageObject1));
                         }
                     }
                 }
@@ -3368,6 +3375,19 @@ public class ChatActivity extends BaseFragment implements
     @Override
     public void onFragmentDestroy() {
         super.onFragmentDestroy();
+        // SilentAds v2.0.28: destroy every pooled/bound ad and drop the
+        // pool listeners, so a destroyed chat leaks no NativeAd.
+        if (chatAdapter != null) {
+            chatAdapter.silentDestroyAds();
+        }
+        if (silentBotStripPoolListener != null) {
+            SilentAdsManager.getInstance().removePoolListener(silentBotStripPoolListener);
+            silentBotStripPoolListener = null;
+        }
+        if (silentBotAdView != null) {
+            silentBotAdView.destroyAd();
+            silentBotAdView = null;
+        }
         if (messageMetricsView != null) {
             messageMetricsView.finish();
         }
@@ -6767,7 +6787,7 @@ public class ChatActivity extends BaseFragment implements
             @Override
             protected boolean hasSiblingChild(int position) {
                 if (position >= chatAdapter.messagesStartRow && position < chatAdapter.messagesEndRow) {
-                    int index = position - chatAdapter.messagesStartRow;
+                    int index = chatAdapter.messageIndexForPosition(position);
                     if (index >= 0 && index < chatAdapter.getMessages().size()) {
                         MessageObject message = chatAdapter.getMessages().get(index);
                         MessageObject.GroupedMessages group = getValidGroupedMessage(message);
@@ -6891,7 +6911,7 @@ public class ChatActivity extends BaseFragment implements
             @Override
             public int getSpanSize(int position) {
                 if (position >= chatAdapter.messagesStartRow && position < chatAdapter.messagesEndRow) {
-                    int idx = position - chatAdapter.messagesStartRow;
+                    int idx = chatAdapter.messageIndexForPosition(position);
                     if (idx >= 0 && idx < chatAdapter.getMessages().size()) {
                         MessageObject message = chatAdapter.getMessages().get(idx);
                         MessageObject.GroupedMessages groupedMessages = getValidGroupedMessage(message);
@@ -9591,7 +9611,7 @@ public class ChatActivity extends BaseFragment implements
         }
         chatAdapter.updateRowsSafe();
         if (index >= 0) {
-            int newPosition = chatAdapter.messagesStartRow + index;
+            int newPosition = chatAdapter.positionForMessageIndex(index);
             chatLayoutManager.scrollToPositionWithOffset(newPosition, offset);
         }
         chatAdapter.notifyDataSetChanged(animated);
@@ -11412,6 +11432,53 @@ public class ChatActivity extends BaseFragment implements
         topPanelLayout.addView(botAdView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
         topPanelLayout.setPriority(botAdView, 10);
         topPanelLayout.setDebugName(botAdView, "bot add view");
+    }
+
+    // SilentAds v2.0.28: the bot top strip — a small full-width NativeAd
+    // card just below the action bar (same mechanism as upstream BotAdView,
+    // priority 9, just under the upstream bot ad's 10). Shown only when
+    // Telegram's own bot sponsored ad is not showing; the strip takes its
+    // ad from the shared pool and rebinds when a refill lands.
+    private void createSilentBotAdView() {
+        if (topPanelLayout == null || silentBotAdView != null || getContext() == null) {
+            return;
+        }
+
+        silentBotAdView = new SilentNativeAdView(getContext(), SilentNativeAdView.MODE_STRIP, themeDelegate);
+        silentBotAdView.setPlacement("bot-top", getSilentAdsDialogLabel());
+        silentBotAdView.setOnCloseListener(() -> {
+            silentBotAdDismissed = true;
+            if (silentBotAdView != null) {
+                silentBotAdView.destroyAd();
+            }
+            updateTopPanel(false);
+        });
+        topPanelLayout.addView(silentBotAdView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
+        topPanelLayout.setPriority(silentBotAdView, 9);
+        topPanelLayout.setDebugName(silentBotAdView, "silent bot ad strip");
+    }
+
+    /** Bind a pooled ad to the bot strip; while the pool is empty the strip stays hidden (no blank bar). */
+    private void silentBindBotAdStrip() {
+        if (silentBotAdView == null || !isSilentBotAdsEnabled() || silentBotAdDismissed) {
+            return;
+        }
+        if (silentBotAdView.getBoundAd() != null) {
+            return;
+        }
+        if (silentBotStripPoolListener == null) {
+            silentBotStripPoolListener = () -> {
+                silentBindBotAdStrip();
+                updateTopPanel(false);
+            };
+            SilentAdsManager.getInstance().addPoolListener(silentBotStripPoolListener);
+        }
+        NativeAd ad = SilentAdsManager.getInstance().takeAd();
+        if (ad == null) {
+            SilentAdsManager.getInstance().ensureLoaded();
+            return;
+        }
+        silentBotAdView.bindAd(ad);
     }
 
     private void createBizBotButton() {
@@ -13646,7 +13713,8 @@ public class ChatActivity extends BaseFragment implements
             int end = chatLayoutManager.findLastVisibleItemPosition();
             for (int i = chatLayoutManager.findFirstVisibleItemPosition(); i <= end; i++) {
                 if (i >= chatAdapter.messagesStartRow && i < chatAdapter.messagesEndRow) {
-                    TLRPC.Message message = messages.get(i - chatAdapter.messagesStartRow).messageOwner;
+                    MessageObject silentMessage = chatAdapter.getSilentMessageAtPosition(i);
+                    TLRPC.Message message = silentMessage == null ? null : silentMessage.messageOwner;
                     if (message != null) {
                         boolean scrollDown = message.date < date;
                         if (isSecretChat()) {
@@ -14108,14 +14176,14 @@ public class ChatActivity extends BaseFragment implements
                 int messageIndex = -1;
                 for (int i = 0; i < messages.size(); i++) {
                     if (messages.get(i).messageOwner.id == firstItemMid) {
-                        int firstMessagePosition = chatAdapter.messagesStartRow + i;
+                        int firstMessagePosition = chatAdapter.positionForMessageIndex(i);
                         firstItemVisible = chatFirstItemPosition <= firstMessagePosition && chatLastItemPosition >= firstMessagePosition;
                         if (firstItemVisible) {
                             break;
                         }
                     }
                     if (messages.get(i).messageOwner.id == lastItemMid) {
-                        int lastMessagePosition = chatAdapter.messagesStartRow + i;
+                        int lastMessagePosition = chatAdapter.positionForMessageIndex(i);
                         lastItemVisible = chatFirstItemPosition <= lastMessagePosition && chatLastItemPosition >= lastMessagePosition;
                         if (lastItemVisible) {
                             break;
@@ -14129,7 +14197,7 @@ public class ChatActivity extends BaseFragment implements
                 if (!firstItemVisible && !lastItemVisible && messageIndex != -1) {
                     int messageHeight = getHeightForMessage(messages.get(messageIndex), true);
                     int offset = (chatListView.getHeight() - messageHeight) / 2;
-                    chatLayoutManager.scrollToPositionWithOffset(chatAdapter.messagesStartRow + messageIndex, offset);
+                    chatLayoutManager.scrollToPositionWithOffset(chatAdapter.positionForMessageIndex(messageIndex), offset);
                 }
             }
         }
@@ -17744,7 +17812,7 @@ public class ChatActivity extends BaseFragment implements
                 if (minDateChild.getAlpha() != 1.0f) {
                     minDateChild.setAlpha(1.0f);
                 }
-                if (chatListView.getChildAdapterPosition(minDateChild) == chatAdapter.messagesStartRow + (reversed ? 0 : messages.size() - 1)) {
+                if (chatListView.getChildAdapterPosition(minDateChild) == chatAdapter.positionForMessageIndex(reversed ? 0 : messages.size() - 1)) {
                     if (minDateChild.getAlpha() != 1.0f) {
                         minDateChild.setAlpha(1.0f);
                     }
@@ -17766,7 +17834,7 @@ public class ChatActivity extends BaseFragment implements
             }
             float offset = minDateChild.getY() + minDateChild.getMeasuredHeight() - clipTop;
             if (offset > floatingDateView.getMeasuredHeight() && offset < floatingDateView.getMeasuredHeight() * 2) {
-                if (chatListView.getChildAdapterPosition(minDateChild) == chatAdapter.messagesStartRow + (reversed ? 0 : messages.size() - 1)) {
+                if (chatListView.getChildAdapterPosition(minDateChild) == chatAdapter.positionForMessageIndex(reversed ? 0 : messages.size() - 1)) {
                     showFloatingView = false;
                     if (minDateChild.getAlpha() != 1.0f) {
                         minDateChild.setAlpha(1.0f);
@@ -17811,7 +17879,7 @@ public class ChatActivity extends BaseFragment implements
                 } else if (minTopicChild instanceof ChatMessageCell) {
                     ((ChatMessageCell) minTopicChild).setShowTopic(true);
                 }
-                if (chatListView.getChildAdapterPosition(minTopicChild) == chatAdapter.messagesStartRow + (reversed ? 0 : messages.size() - 1)) {
+                if (chatListView.getChildAdapterPosition(minTopicChild) == chatAdapter.positionForMessageIndex(reversed ? 0 : messages.size() - 1)) {
                     if (minTopicChild instanceof ChatActionCell) {
                         ((ChatActionCell) minTopicChild).setShowTopic(true);
                     } else if (minTopicChild instanceof ChatMessageCell) {
@@ -17836,7 +17904,7 @@ public class ChatActivity extends BaseFragment implements
             }
             float offset = minTopicChild.getY() + minTopicChild.getPaddingTop() - clipTopicTop;
             if (offset > floatingTopicSeparator.getMeasuredHeight() && offset < floatingTopicSeparator.getMeasuredHeight() * 2) {
-                if (chatListView.getChildAdapterPosition(minTopicChild) == chatAdapter.messagesStartRow + (reversed ? 0 : messages.size() - 1)) {
+                if (chatListView.getChildAdapterPosition(minTopicChild) == chatAdapter.positionForMessageIndex(reversed ? 0 : messages.size() - 1)) {
                     showFloatingView = false;
                     if (minTopicChild instanceof ChatActionCell) {
                         ((ChatActionCell) minTopicChild).setShowTopic(true);
@@ -18281,11 +18349,11 @@ public class ChatActivity extends BaseFragment implements
                 int end = chatLayoutManager.findLastVisibleItemPosition();
                 for (int i = chatLayoutManager.findFirstVisibleItemPosition(); i <= end; i++) {
                     if (i >= chatAdapter.messagesStartRow && i < chatAdapter.messagesEndRow) {
-                        MessageObject messageObject = chatAdapter.getMessages().get(i - chatAdapter.messagesStartRow);
-                        if (messageObject.getId() == 0 || messageObject.isSponsored()) {
+                        MessageObject messageObject = chatAdapter.getSilentMessageAtPosition(i);
+                        if (messageObject == null || messageObject.getId() == 0 || messageObject.isSponsored()) {
                             continue;
                         }
-                        scrollFromIndex = i - chatAdapter.messagesStartRow;
+                        scrollFromIndex = chatAdapter.messageIndexForPosition(i);
                         boolean scrollDown = messageObject.getId() < id;
                         if (isSecretChat()) {
                             scrollDown = !scrollDown;
@@ -18321,7 +18389,7 @@ public class ChatActivity extends BaseFragment implements
                 }
 
                 chatAdapter.updateRowsSafe();
-                int position = chatAdapter.messagesStartRow + chatAdapter.getMessages().indexOf(object);
+                int position = chatAdapter.positionForMessageIndex(chatAdapter.getMessages().indexOf(object));
 
                 updateVisibleRows();
                 boolean found = false;
@@ -22975,7 +23043,7 @@ public class ChatActivity extends BaseFragment implements
                     if (scrollToMessageObject != null) {
                         int scrollToIndex = messages.indexOf(scrollToMessageObject);
                         if (scrollToIndex > 0) {
-                            chatLayoutManager.scrollToPositionWithOffset(chatAdapter.messagesStartRow + scrollToIndex, top);
+                            chatLayoutManager.scrollToPositionWithOffset(chatAdapter.positionForMessageIndex(scrollToIndex), top);
                         }
                     }
                 }
@@ -23044,7 +23112,7 @@ public class ChatActivity extends BaseFragment implements
                                 if (chatAdapter.loadingUpRow >= 0 && !messages.isEmpty() && (messages.get(messages.size() - 1) == scrollToMessage || messages.get(messages.size() - 2) == scrollToMessage)) {
                                     chatLayoutManager.scrollToPositionWithOffset(chatAdapter.loadingUpRow, yOffset, bottom);
                                 } else {
-                                    chatLayoutManager.scrollToPositionWithOffset(chatAdapter.messagesStartRow + messages.indexOf(scrollToMessage), yOffset, bottom);
+                                    chatLayoutManager.scrollToPositionWithOffset(chatAdapter.positionForMessageIndex(messages.indexOf(scrollToMessage)), yOffset, bottom);
                                 }
                             }
                         }
@@ -23093,23 +23161,36 @@ public class ChatActivity extends BaseFragment implements
                         }
                         int insertStart = chatAdapter.messagesEndRow;
                         int loadingUpRow = chatAdapter.loadingUpRow;
+                        // SilentAds: older history may grow the frozen middle-ad slots;
+                        // the inserted range must cover the new ad rows too.
+                        int silentAdsBefore = chatAdapter.silentMiddleAdCount();
+                        chatAdapter.silentAdSlotGrowthAllowed = true;
                         chatAdapter.updateRowsInternal();
+                        int silentNewAdSlots = chatAdapter.silentMiddleAdCount() - silentAdsBefore;
                         if (loadingUpRow >= 0 && chatAdapter.loadingUpRow < 0) {
                             chatAdapter.notifyItemRemoved(loadingUpRow);
                         }
                         if (newRowsCount > 0) {
                             if (moveCurrentDateObject) {
-                                chatAdapter.notifyItemRemoved(insertStart - 1);
-                                chatAdapter.notifyItemRangeInserted(insertStart - 1, newRowsCount + 1);
+                                if (chatAdapter.isSilentChannelAdsActive()) {
+                                    // The date object moves inside the message range; ad
+                                    // slots shift with it, so take the safe full refresh.
+                                    chatAdapter.updateRowsSafe();
+                                } else {
+                                    chatAdapter.notifyItemRemoved(insertStart - 1);
+                                    chatAdapter.notifyItemRangeInserted(insertStart - 1, newRowsCount + 1);
+                                }
                             } else {
                                 chatAdapter.notifyItemChanged(insertStart - 1);
-                                chatAdapter.notifyItemRangeInserted(insertStart, newRowsCount);
+                                chatAdapter.notifyItemRangeInserted(insertStart, newRowsCount + silentNewAdSlots);
                             }
+                        } else if (silentNewAdSlots > 0) {
+                            chatAdapter.notifyItemRangeInserted(insertStart, silentNewAdSlots);
                         }
                         if (!postponedScroll && scrollToMessageObject != null) {
                             int scrollToIndex = messages.indexOf(scrollToMessageObject);
                             if (scrollToIndex > 0) {
-                                chatLayoutManager.scrollToPositionWithOffset(chatAdapter.messagesStartRow + scrollToIndex, top);
+                                chatLayoutManager.scrollToPositionWithOffset(chatAdapter.positionForMessageIndex(scrollToIndex), top);
                             }
                         }
                     } else if (chatAdapter.loadingUpRow >= 0 && endReached[loadIndex] && (loadIndex == 0 && mergeDialogId == 0 || loadIndex == 1)) {
@@ -23161,7 +23242,7 @@ public class ChatActivity extends BaseFragment implements
                         if (chatListItemAnimator != null) {
                             chatListItemAnimator.groupWillChanged(groupedMessages);
                         }
-                        chatAdapter.notifyItemRangeChanged(idx + chatAdapter.messagesStartRow, groupedMessages.messages.size());
+                        chatAdapter.silentNotifyMessageRangeChanged(idx, groupedMessages.messages.size());
                     }
                 }
             }
@@ -23190,9 +23271,9 @@ public class ChatActivity extends BaseFragment implements
                     }
                 }
                 if (dateObjectIndex >= 0) {
-                    chatLayoutManager.scrollToPositionWithOffset(chatAdapter.messagesStartRow + dateObjectIndex, (int) (AndroidUtilities.dp(4)), false);
+                    chatLayoutManager.scrollToPositionWithOffset(chatAdapter.positionForMessageIndex(dateObjectIndex), (int) (AndroidUtilities.dp(4)), false);
                 } else if (closeDateObjectIndex >= 0) {
-                    chatLayoutManager.scrollToPositionWithOffset(chatAdapter.messagesStartRow + closeDateObjectIndex, chatListView.getMeasuredHeight() / 2 - AndroidUtilities.dp(24), false);
+                    chatLayoutManager.scrollToPositionWithOffset(chatAdapter.positionForMessageIndex(closeDateObjectIndex), chatListView.getMeasuredHeight() / 2 - AndroidUtilities.dp(24), false);
                 }
             }
         }
@@ -23278,7 +23359,7 @@ public class ChatActivity extends BaseFragment implements
                         chatScrollHelperCallback.lastBottom = false;
                         chatScrollHelperCallback.lastItemOffset = yOffset;
                         chatScrollHelperCallback.lastPadding = (int) chatListViewPaddingTop;
-                        chatScrollHelper.scrollToPosition(chatScrollHelperCallback.position = chatAdapter.messagesStartRow + k, chatScrollHelperCallback.offset = yOffset, chatScrollHelperCallback.bottom = false, true);
+                        chatScrollHelper.scrollToPosition(chatScrollHelperCallback.position = chatAdapter.positionForMessageIndex(k), chatScrollHelperCallback.offset = yOffset, chatScrollHelperCallback.bottom = false, true);
                     }
                 }
             }
@@ -23338,7 +23419,7 @@ public class ChatActivity extends BaseFragment implements
                 for (int i = 0; i < messages.size(); ++i) {
                     MessageObject messageObject = messages.get(i);
                     if (messageObject != null && messageObject.getId() == messageId) {
-                        final int position = chatAdapter.messagesStartRow + i;
+                        final int position = chatAdapter.positionForMessageIndex(i);
                         if (position >= 0 && position < chatAdapter.getItemCount()) {
                             chatLayoutManager.scrollToPositionWithOffset(position, clearOnLoadAndScrollOffset);
                         }
@@ -24802,7 +24883,7 @@ public class ChatActivity extends BaseFragment implements
                                 groupedMessages.calculate();
                                 int index = messages.indexOf(messageObject);
                                 if (chatAdapter != null && !chatAdapter.isFiltered && index >= 0) {
-                                    chatAdapter.notifyItemRangeChanged(index + chatAdapter.messagesStartRow, updateCount);
+                                    chatAdapter.silentNotifyMessageRangeChanged(index, updateCount);
                                 }
                             }
                         }
@@ -24855,7 +24936,7 @@ public class ChatActivity extends BaseFragment implements
 
                     int index = messages.indexOf(messageObject);
                     if (index >= 0 && index < messages.size()) {
-                        int position = index + chatAdapter.messagesStartRow;
+                        int position = chatAdapter.positionForMessageIndex(index);
                         chatAdapter.updateRowAtPosition(position);
                         if (args.length > 3 && args[3] != null || messageObject.messageOwner.voiceTranscriptionOpen) {
                             for (int i = 0; i < chatListView.getChildCount(); ++i) {
@@ -24891,7 +24972,7 @@ public class ChatActivity extends BaseFragment implements
                     }
                     int index = messages.indexOf(messageObject);
                     if (index >= 0 && index < messages.size()) {
-                        int position = index + chatAdapter.messagesStartRow;
+                        int position = chatAdapter.positionForMessageIndex(index);
                         chatAdapter.updateRowAtPosition(position);
                     }
                 }
@@ -25397,7 +25478,7 @@ public class ChatActivity extends BaseFragment implements
                                     if (updatedRows == null) {
                                         updatedRows = new ArrayList<>();
                                     }
-                                    updatedRows.add(row + chatAdapter.messagesStartRow);
+                                    updatedRows.add(chatAdapter.positionForMessageIndex(row));
                                 }
                                 messageObject.animateComments = true;
                             }
@@ -25415,7 +25496,7 @@ public class ChatActivity extends BaseFragment implements
                                 MessageObject messageObject = groupedMessages.messages.get(groupedMessages.messages.size() - 1);
                                 int index = messages.indexOf(messageObject);
                                 if (index >= 0 && !chatAdapter.isFiltered) {
-                                    chatAdapter.notifyItemRangeChanged(index + chatAdapter.messagesStartRow, groupedMessages.messages.size());
+                                    chatAdapter.silentNotifyMessageRangeChanged(index, groupedMessages.messages.size());
                                 }
                             }
                         }
@@ -26629,7 +26710,7 @@ public class ChatActivity extends BaseFragment implements
                                 if (updatedRows == null) {
                                     updatedRows = new ArrayList<>();
                                 }
-                                updatedRows.add(row + chatAdapter.messagesStartRow);
+                                updatedRows.add(chatAdapter.positionForMessageIndex(row));
                             }
                         }
                     }
@@ -26648,7 +26729,7 @@ public class ChatActivity extends BaseFragment implements
                     MessageObject messageObject = groupedMessages.messages.get(groupedMessages.messages.size() - 1);
                     int index = messages.indexOf(messageObject);
                     if (index >= 0 && !chatAdapter.isFiltered) {
-                        chatAdapter.notifyItemRangeChanged(index + chatAdapter.messagesStartRow, groupedMessages.messages.size());
+                        chatAdapter.silentNotifyMessageRangeChanged(index, groupedMessages.messages.size());
                     }
                 }
             }
@@ -26977,7 +27058,7 @@ public class ChatActivity extends BaseFragment implements
                         }
                         messages.set(i, messageObject);
                         if (type != MessageObject.TYPE_ACTION_WALLPAPER && chatAdapter.messagesStartRow >= 0) {
-                            chatAdapter.notifyItemChanged(chatAdapter.messagesStartRow + i);
+                            chatAdapter.notifyItemChanged(chatAdapter.positionForMessageIndex(i));
                         }
                         break;
                     }
@@ -27530,7 +27611,7 @@ public class ChatActivity extends BaseFragment implements
                         messages.add(placeToPaste, dateObj);
                         if (chatAdapter != null && chatAdapter.messagesStartRow >= 0) {
                             chatAdapter.checkRemoveBotForumRowsStartThreadRow(false);
-                            chatAdapter.notifyItemInserted(chatAdapter.messagesStartRow + placeToPaste);
+                            chatAdapter.notifyItemInserted(chatAdapter.positionForMessageIndex(placeToPaste));
                         }
                     }
                 }
@@ -27550,7 +27631,7 @@ public class ChatActivity extends BaseFragment implements
                             dateObj.stableId = lastStableId++;
                             messages.add(0, dateObj);
                             if (chatAdapter != null && chatAdapter.messagesStartRow >= 0) {
-                                chatAdapter.notifyItemInserted(chatAdapter.messagesStartRow + 0);
+                                chatAdapter.notifyItemInserted(chatAdapter.positionForMessageIndex(0));
                             }
                             unreadMessageObject = dateObj;
                             scrollToMessage = unreadMessageObject;
@@ -27568,7 +27649,7 @@ public class ChatActivity extends BaseFragment implements
                         MessageObject.GroupedMessages group = groupedMessagesMap.get(prevMessage.getGroupId());
                         if (group != null && group.messages.size() > 1) {
                             int size = group.messages.size();
-                            chatAdapter.notifyItemRangeChanged(chatAdapter.messagesStartRow + 1, size - 1);
+                            chatAdapter.silentNotifyMessageRangeChanged(1, size - 1);
                         }
                     }
                 }
@@ -27583,8 +27664,8 @@ public class ChatActivity extends BaseFragment implements
                 }
                 if (chatAdapter != null) {
                     chatAdapter.checkRemoveBotForumRowsStartThreadRow(false);
-                    chatAdapter.notifyItemChanged(chatAdapter.messagesStartRow + placeToPaste);
-                    chatAdapter.notifyItemInserted(chatAdapter.messagesStartRow + placeToPaste);
+                    chatAdapter.notifyItemChanged(chatAdapter.positionForMessageIndex(placeToPaste));
+                    chatAdapter.notifyItemInserted(chatAdapter.positionForMessageIndex(placeToPaste));
                 }
                 if ((obj.isOut() || chatMode == MODE_WELCOME_MESSAGES) && waitingForSendingMessageLoad) {
                     waitingForSendingMessageLoad = false;
@@ -27683,7 +27764,7 @@ public class ChatActivity extends BaseFragment implements
                     }
                     int scrollToIndex = messages.indexOf(scrollToMessage);
                     if (child != null && scrollToIndex >= 0) {
-                        chatLayoutManager.scrollToPositionWithOffset(chatAdapter.messagesStartRow + scrollToIndex, getScrollingOffsetForView(child));
+                        chatLayoutManager.scrollToPositionWithOffset(chatAdapter.positionForMessageIndex(scrollToIndex), getScrollingOffsetForView(child));
                     }
                 }
                 if (newMentionsCount != 0 && sideControlsButtonsLayout != null) {
@@ -27719,8 +27800,8 @@ public class ChatActivity extends BaseFragment implements
                     moveScrollToLastMessage(false);
                 } else {
                     int index = messages.indexOf(messageObject);
-                    if (chatLayoutManager != null && index > 0 && (chatLayoutManager.findViewByPosition(chatAdapter.messagesStartRow + index) != null || chatLayoutManager.findViewByPosition(chatAdapter.messagesStartRow + index - 1) != null)) {
-                        chatLayoutManager.scrollToPositionWithOffset(chatAdapter.messagesStartRow + messages.indexOf(messageObject), getScrollOffsetForMessage(messageObject), false);
+                    if (chatLayoutManager != null && index > 0 && (chatLayoutManager.findViewByPosition(chatAdapter.positionForMessageIndex(index)) != null || chatLayoutManager.findViewByPosition(chatAdapter.positionForMessageIndex(index - 1)) != null)) {
+                        chatLayoutManager.scrollToPositionWithOffset(chatAdapter.positionForMessageIndex(messages.indexOf(messageObject)), getScrollOffsetForMessage(messageObject), false);
                     } else {
                         AndroidUtilities.runOnUIThread(() -> scrollToMessageId(mid, 0, false, 0, true, 0));
                     }
@@ -28363,7 +28444,7 @@ public class ChatActivity extends BaseFragment implements
                         }
                         silentApplyDeletedTombstone(obj);
                         if (chatAdapter != null && !chatAdapter.isFiltered) {
-                            silentTombstoneIndexes.add(chatAdapter.messagesStartRow + index);
+                            silentTombstoneIndexes.add(chatAdapter.positionForMessageIndex(index));
                         }
                         updated = true;
                         continue;
@@ -28401,9 +28482,9 @@ public class ChatActivity extends BaseFragment implements
                         if (messagesSearchAdapter != null) {
                             messagesSearchAdapter.notifyDataSetChanged();
                         }
-                        removedIndexes.add(chatAdapter.messagesStartRow + index);
+                        removedIndexes.add(chatAdapter.positionForMessageIndex(index));
                         if (thanos && !sent && !obj.scheduledSent && removed != null && removed.messageOwner != null && removed.messageOwner.send_state == MessageObject.MESSAGE_SEND_STATE_SENT && currentTime - removed.messageOwner.date >= (currentChat != null || currentUser != null && currentUser.bot ? 2 : 0)) {
-                            thanosMessagesIndexes.add(chatAdapter.messagesStartRow + index);
+                            thanosMessagesIndexes.add(chatAdapter.positionForMessageIndex(index));
                             removed.deletedByThanos = LiteMode.isEnabled(LiteMode.FLAG_CHAT_THANOS);
                         }
                     }
@@ -28432,7 +28513,7 @@ public class ChatActivity extends BaseFragment implements
                         if (dindex >= 0 && dindex < messages.size()) {
                             messages.remove(dindex);
                             if (chatAdapter != null && !chatAdapter.isFiltered) {
-                                removedIndexes.add(chatAdapter.messagesStartRow + dindex);
+                                removedIndexes.add(chatAdapter.positionForMessageIndex(dindex));
                             }
                         }
                     }
@@ -28449,7 +28530,7 @@ public class ChatActivity extends BaseFragment implements
                             if (dindex >= 0 && dindex < messages.size()) {
                                 messages.remove(dindex);
                                 if (chatAdapter != null && !chatAdapter.isFiltered) {
-                                    removedIndexes.add(chatAdapter.messagesStartRow + dindex);
+                                    removedIndexes.add(chatAdapter.positionForMessageIndex(dindex));
                                 }
                             }
                         }
@@ -28468,7 +28549,7 @@ public class ChatActivity extends BaseFragment implements
                                 if (chatAdapter != null && dindex >= 0 && dindex < chatAdapter.filteredMessages.size()) {
                                     chatAdapter.filteredMessages.remove(dindex);
                                     if (chatAdapter.isFiltered) {
-                                        removedIndexes.add(chatAdapter.messagesStartRow + dindex);
+                                        removedIndexes.add(chatAdapter.positionForMessageIndex(dindex));
                                     }
                                 }
                             }
@@ -28510,7 +28591,7 @@ public class ChatActivity extends BaseFragment implements
                     int index = chatAdapter.getMessages().indexOf(messageObject);
                     if (index >= 0) {
                         if (chatAdapter != null && !chatAdapter.isFrozen) {
-                            chatAdapter.notifyItemRangeChanged(index + chatAdapter.messagesStartRow, newGroupsSizes.get(groupedMessages.groupId));
+                            chatAdapter.silentNotifyMessageRangeChanged(index, newGroupsSizes.get(groupedMessages.groupId));
                         }
                     }
                 }
@@ -28597,7 +28678,7 @@ public class ChatActivity extends BaseFragment implements
                         chatAdapter.notifyItemRemoved(0);
                     }
                 } else {
-                    chatAdapter.notifyItemRangeChanged(chatAdapter.messagesStartRow, chatAdapter.getMessages().size());
+                    chatAdapter.notifyItemRangeChanged(chatAdapter.messagesStartRow, chatAdapter.messagesEndRow - chatAdapter.messagesStartRow);
                 }
             }
             updateVisibleRows();
@@ -28791,7 +28872,7 @@ public class ChatActivity extends BaseFragment implements
                     messageObject.copyStableParams(old);
                     messages.set(index, messageObject);
                     if (chatAdapter != null && !chatAdapter.isFiltered) {
-                        chatAdapter.updateRowAtPosition(chatAdapter.messagesStartRow + index);
+                        chatAdapter.updateRowAtPosition(chatAdapter.positionForMessageIndex(index));
                     }
                     if (index2 >= 0) {
                         dayArr.set(index2, messageObject);
@@ -28799,7 +28880,7 @@ public class ChatActivity extends BaseFragment implements
                 } else {
                     messages.remove(index);
                     if (chatAdapter != null && !chatAdapter.isFiltered) {
-                        chatAdapter.notifyItemRemoved(chatAdapter.messagesStartRow + index);
+                        chatAdapter.silentNotifyMessageRemoved(index);
                     }
                     MessageObject conversionMsg = conversionMessages.get(old.getId());
                     if (conversionMsg != null) {
@@ -28810,21 +28891,11 @@ public class ChatActivity extends BaseFragment implements
                         int prevUserNameTimeRow = chatAdapter.userNameTimeRow;
                         int prevUserPhotoTimeRow = chatAdapter.userPhotoTimeRow;
                         if (!chatAdapter.isFiltered) {
-                            chatAdapter.notifyItemRemoved(chatAdapter.messagesStartRow + index);
-                            if (messages.isEmpty()) {
-                                if (prevLoadingUpRow >= 0) {
-                                    chatAdapter.notifyItemRemoved(0);
-                                }
-                                if (prevLoadingDownRow >= 0) {
-                                    chatAdapter.notifyItemRemoved(0);
-                                }
-                                if (prevUserNameTimeRow >= 0) {
-                                    chatAdapter.notifyItemRemoved(0);
-                                }
-                                if (prevUserPhotoTimeRow >= 0) {
-                                    chatAdapter.notifyItemRemoved(0);
-                                }
-                            }
+                            // SilentAds: silentNotifyMessageRemoved full-refreshes when the
+                            // removal drops a middle-ad slot (or empties the list), which
+                            // also removes any loading/user rows — the individual removals
+                            // above are subsumed by that refresh.
+                            chatAdapter.silentNotifyMessageRemoved(index);
                         }
                     }
                     if (index2 >= 0) {
@@ -28838,21 +28909,8 @@ public class ChatActivity extends BaseFragment implements
                             int prevUserNameTimeRow = chatAdapter.userNameTimeRow;
                             int prevUserPhotoTimeRow = chatAdapter.userPhotoTimeRow;
                             if (!chatAdapter.isFiltered) {
-                                chatAdapter.notifyItemRemoved(chatAdapter.messagesStartRow + index);
-                                if (messages.isEmpty()) {
-                                    if (prevLoadingUpRow >= 0) {
-                                        chatAdapter.notifyItemRemoved(0);
-                                    }
-                                    if (prevLoadingDownRow >= 0) {
-                                        chatAdapter.notifyItemRemoved(0);
-                                    }
-                                    if (prevUserNameTimeRow >= 0) {
-                                        chatAdapter.notifyItemRemoved(0);
-                                    }
-                                    if (prevUserPhotoTimeRow >= 0) {
-                                        chatAdapter.notifyItemRemoved(0);
-                                    }
-                                }
+                                // SilentAds: see conversionMsg branch above.
+                                chatAdapter.silentNotifyMessageRemoved(index);
                             }
                         }
                     }
@@ -28871,7 +28929,7 @@ public class ChatActivity extends BaseFragment implements
                     final int index = messages.indexOf(messageObject);
                     if (index >= 0) {
                         if (chatAdapter != null) {
-                            chatAdapter.notifyItemRangeChanged(index + chatAdapter.messagesStartRow, groupedMessages.messages.size());
+                            chatAdapter.silentNotifyMessageRangeChanged(index, groupedMessages.messages.size());
                             if (chatListItemAnimator != null) {
                                 chatListItemAnimator.groupWillChanged(groupedMessages);
                             }
@@ -31079,6 +31137,60 @@ public class ChatActivity extends BaseFragment implements
         }
     }
 
+    // SilentGram v2.0.28: AdMob Native Advanced ads.
+    // Channels: broadcast channels only (not megagroups), only when the
+    // user is NOT an admin/creator of the channel, only for NON-Premium
+    // users. Never in private chats, groups, saved messages or secret
+    // chats — Telegram shows ads only in channels and bots.
+    public boolean isSilentChannelAdsEnabled() {
+        if (chatMode != MODE_DEFAULT || currentEncryptedChat != null) {
+            return false;
+        }
+        if (getUserConfig().isPremium()) {
+            return false;
+        }
+        if (currentChat == null) {
+            return false;
+        }
+        if (!ChatObject.isChannel(currentChat) || currentChat.megagroup) {
+            return false;
+        }
+        if (currentChat.creator || currentChat.admin_rights != null) {
+            return false;
+        }
+        return true;
+    }
+
+    // Bots: the top strip below the action bar, non-Premium only, and
+    // only when Telegram's own bot sponsored ad is not showing (we
+    // layer on top of the upstream system, never replace it).
+    public boolean isSilentBotAdsEnabled() {
+        if (chatMode != MODE_DEFAULT || currentEncryptedChat != null) {
+            return false;
+        }
+        if (getUserConfig().isPremium()) {
+            return false;
+        }
+        if (currentUser == null || !currentUser.bot) {
+            return false;
+        }
+        if (MessagesController.isSupportUser(currentUser)) {
+            return false;
+        }
+        return true;
+    }
+
+    /** Short human label for the debug report (title/username only, no ids). */
+    public String getSilentAdsDialogLabel() {
+        if (currentChat != null && currentChat.title != null) {
+            return "channel: " + currentChat.title;
+        }
+        if (currentUser != null) {
+            return "bot: " + UserObject.getUserName(currentUser);
+        }
+        return "";
+    }
+
     public void updateTopPanel(boolean animated) {
         checkLinksHidden();
         if (chatMode != 0 && chatMode != MODE_SUGGESTIONS || topPanelLayout == null) {
@@ -31164,6 +31276,9 @@ public class ChatActivity extends BaseFragment implements
         boolean showAddProfilePicture = UserObject.isBot(currentUser) && currentUser.bot_can_edit && currentUser.photo == null;
         boolean showBizBot = currentEncryptedChat == null && preferences.getLong("dialog_botid" + did, 0) != 0 || DEBUG_TOP_PANELS;
         boolean showBotAd = currentUser != null && currentUser.bot && messages.size() >= 2 && botSponsoredMessage != null;
+        // SilentAds: the bot top strip (non-Premium only, only when
+        // Telegram's own bot sponsored ad is not showing).
+        boolean showSilentBotAd = isSilentBotAdsEnabled() && !showBotAd && !silentBotAdDismissed;
         if (showRestartTopic) {
             shownRestartTopic = true;
         }
@@ -31171,7 +31286,7 @@ public class ChatActivity extends BaseFragment implements
             shownTranslateTopic = true;
         }
         boolean showRestartTopic1 = (showRestartTopic || shownRestartTopic) && !(showReport || showBlock || showGeo);
-        if (show || showReport || showBlock || showGeo || showTranslate || showBizBot || showRestartTopic1) {
+        if (show || showReport || showBlock || showGeo || showTranslate || showBizBot || showRestartTopic1 || showSilentBotAd) {
             createTopPanel();
             if (topChatPanelView == null) {
                 return;
@@ -31193,6 +31308,10 @@ public class ChatActivity extends BaseFragment implements
             if (translateButton != null) {
                 translateButton.updateText();
             }
+        }
+        if (showSilentBotAd) {
+            createSilentBotAdView();
+            silentBindBotAdStrip();
         }
         if (showAddProfilePicture) {
             createAddProfilePictureButton();
@@ -31343,6 +31462,9 @@ public class ChatActivity extends BaseFragment implements
             topPanelLayout.setViewVisible(translateButton, showTranslate, animated);
             topPanelLayout.setViewVisible(bizBotButton, showBizBot, animated);
             topPanelLayout.setViewVisible(botAdView, showBotAd, animated);
+            // SilentAds: the strip only becomes visible once it actually
+            // has an ad bound (never a blank bar while the pool is empty).
+            topPanelLayout.setViewVisible(silentBotAdView, showSilentBotAd && silentBotAdView != null && silentBotAdView.getBoundAd() != null, animated);
             topPanelLayout.setViewVisible(addProfilePictureButton, showAddProfilePicture, animated);
         }
 
@@ -31889,7 +32011,7 @@ public class ChatActivity extends BaseFragment implements
                     } else {
                         yOffset = scrollToMessagePosition;
                     }
-                    chatLayoutManager.scrollToPositionWithOffset(chatAdapter.messagesStartRow + messages.indexOf(scrollToMessage), yOffset, bottom);
+                    chatLayoutManager.scrollToPositionWithOffset(chatAdapter.positionForMessageIndex(messages.indexOf(scrollToMessage)), yOffset, bottom);
                 }
             } else {
                 moveScrollToLastMessage(false);
@@ -32106,7 +32228,7 @@ public class ChatActivity extends BaseFragment implements
                             boolean ignore = false;
                             int count = 0;
                             for (int a = position - 1; a >= chatAdapter.messagesStartRow; a--) {
-                                int num = a - chatAdapter.messagesStartRow;
+                                int num = chatAdapter.messageIndexForPosition(a);
                                 if (num < 0 || num >= messages.size()) {
                                     continue;
                                 }
@@ -32502,7 +32624,7 @@ public class ChatActivity extends BaseFragment implements
                         MessageObject messageObject = groupedMessages.messages.get(groupedMessages.messages.size() - 1);
                         int idx = messages.indexOf(messageObject);
                         if (idx >= 0) {
-                            chatAdapter.notifyItemRangeChanged(idx + chatAdapter.messagesStartRow, groupedMessages.messages.size());
+                            chatAdapter.silentNotifyMessageRangeChanged(idx, groupedMessages.messages.size());
                             chatListView.setItemAnimator(null);
                         }
                     }
@@ -35125,12 +35247,12 @@ public class ChatActivity extends BaseFragment implements
                     filteredMessage.reactionsChanged = true;
                 }
                 if (index >= 0) {
-                    chatAdapter.notifyItemChanged(chatAdapter.messagesStartRow + index);
+                    chatAdapter.notifyItemChanged(chatAdapter.positionForMessageIndex(index));
                 }
             } else {
                 int index = messages.indexOf(messageInList);
                 if (index >= 0) {
-                    chatAdapter.notifyItemChanged(chatAdapter.messagesStartRow + index);
+                    chatAdapter.notifyItemChanged(chatAdapter.positionForMessageIndex(index));
                 }
             }
         }
@@ -37134,7 +37256,7 @@ public class ChatActivity extends BaseFragment implements
                 if (child instanceof ChatMessageCell && ((ChatMessageCell) child).getMessageObject() == unreadMessageObject) {
                     int unreadMessageIndex =  messages.indexOf(unreadMessageObject);
                     if (unreadMessageIndex >= 0) {
-                        lastVisibleItem = chatAdapter.messagesStartRow + messages.indexOf(unreadMessageObject);
+                        lastVisibleItem = chatAdapter.positionForMessageIndex(messages.indexOf(unreadMessageObject));
                         top =  getScrollingOffsetForView(child);
                     }
                     break;
@@ -37235,7 +37357,7 @@ public class ChatActivity extends BaseFragment implements
                 if (child instanceof ChatMessageCell && ((ChatMessageCell) child).getMessageObject() == unreadMessageObject) {
                     int unreadMessageIndex =  messages.indexOf(unreadMessageObject);
                     if (unreadMessageIndex >= 0) {
-                        lastVisibleItem = chatAdapter.messagesStartRow + messages.indexOf(unreadMessageObject);
+                        lastVisibleItem = chatAdapter.positionForMessageIndex(messages.indexOf(unreadMessageObject));
                         top =  getScrollingOffsetForView(child);
                     }
                     break;
@@ -38386,7 +38508,7 @@ public class ChatActivity extends BaseFragment implements
         }
         messages.remove(index);
         if (chatAdapter != null && !chatAdapter.isFiltered) {
-            chatAdapter.notifyItemRemoved(chatAdapter.messagesStartRow + index);
+            chatAdapter.silentNotifyMessageRemoved(index);
         }
     }
 
@@ -38397,7 +38519,11 @@ public class ChatActivity extends BaseFragment implements
         }
         messages.remove(index);
         if (chatAdapter != null && !chatAdapter.isFiltered) {
-            chatAdapter.notifyItemRemoved(chatAdapter.messagesStartRow + index, true);
+            if (chatAdapter.silentAdCountChangesOnRemove()) {
+                chatAdapter.updateRowsSafe();
+            } else {
+                chatAdapter.notifyItemRemoved(chatAdapter.positionForMessageIndex(index), true);
+            }
         }
     }
 
@@ -39136,6 +39262,298 @@ public class ChatActivity extends BaseFragment implements
         public int messagesStartRow;
         private int messagesEndRow;
 
+        // SilentGram v2.0.28: AdMob Native Advanced ads in broadcast channels.
+        // One small card below the last post (end ad) + one card after every
+        // 12th message (middle ads). The ad rows live INSIDE the message
+        // range, so every position<->message-index conversion in this file
+        // must go through messageIndexForPosition / positionForMessageIndex
+        // (or getSilentMessageAtPosition) — never raw `position -
+        // messagesStartRow` arithmetic.
+        private static final int SILENT_AD_INTERVAL = 12;
+        private static final int SILENT_AD_VIEW_TYPE = 9;
+        private static final int SILENT_AD_END_SLOT = -1;
+        private int silentAdEndRow = -5;
+        /** Message indices after which a middle ad appears. Frozen while the chat is open; only grown when older history loads (see silentAdSlotGrowthAllowed). */
+        private TreeSet<Integer> silentAdSlots;
+        /** Set by the older-history load path before updateRowsInternal so new slots may appear in the newly loaded range. Consumed by updateRowsInternal. */
+        private boolean silentAdSlotGrowthAllowed;
+        /** Slot key -> loaded NativeAd. Key -1 is the end ad; other keys are message indices. Owned by this adapter; destroyed in silentDestroyAds(). */
+        private android.util.SparseArray<NativeAd> silentSlotAds = new android.util.SparseArray<>();
+        /** Slots the user closed with the X (no ad is loaded for them again this session). */
+        private HashSet<Integer> silentDismissedSlots = new HashSet<>();
+        /** Middle-ad count at the last row computation (bulk-delete guard). */
+        private int silentAdCountAtLastRows;
+        /** Pool-refill listener (registered lazily on first ad bind, removed in silentDestroyAds). */
+        private Runnable silentPoolListener;
+
+        /** True when this chat may show channel ads in the list (normal mode, broadcast channel, not admin, not Premium). */
+        public boolean isSilentChannelAdsActive() {
+            return !isFiltered && !isFrozen && chatMode == MODE_DEFAULT && ChatActivity.this.isSilentChannelAdsEnabled();
+        }
+
+        /** Number of middle ad rows currently in the range (slots capped to the loaded messages). */
+        public int silentMiddleAdCount() {
+            if (silentAdSlots == null || silentAdSlots.isEmpty()) {
+                return 0;
+            }
+            int n = getMessages().size();
+            int count = 0;
+            for (int s : silentAdSlots) {
+                if (s < n) {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        /**
+         * Recompute the middle-ad slots from the loaded message count.
+         * The slot set is built once (when null) and then FROZEN: live
+         * inserts/deletes must never change the ad-row count, or the
+         * exact notifyItemInserted/Removed calls in ChatActivity would
+         * go out of sync with getItemCount() and RecyclerView would
+         * throw "Inconsistency detected". Only the older-history load
+         * path may grow the set (silentAdSlotGrowthAllowed) — it extends
+         * its notified range by the new slot count. An empty list clears
+         * the set so the next full load rebuilds it.
+         */
+        private void silentRecomputeAdSlots() {
+            if (!isSilentChannelAdsActive()) {
+                silentAdSlots = null;
+                silentAdSlotGrowthAllowed = false;
+                return;
+            }
+            int n = getMessages().size();
+            if (n == 0) {
+                silentAdSlots = null;
+                silentAdSlotGrowthAllowed = false;
+                return;
+            }
+            if (silentAdSlots == null || silentAdSlotGrowthAllowed) {
+                if (silentAdSlots == null) {
+                    silentAdSlots = new TreeSet<>();
+                }
+                for (int i = SILENT_AD_INTERVAL - 1; i < n; i += SILENT_AD_INTERVAL) {
+                    silentAdSlots.add(i);
+                }
+            }
+            silentAdSlotGrowthAllowed = false;
+        }
+
+        /** Adapter position of the message at index `index`, or -1 if out of range. */
+        public int positionForMessageIndex(int index) {
+            ArrayList<MessageObject> list = getMessages();
+            if (index < 0 || index >= list.size()) {
+                return -1;
+            }
+            int pos = messagesStartRow + index;
+            if (silentAdSlots != null) {
+                for (int s : silentAdSlots) {
+                    if (s < index && s < list.size()) {
+                        pos++;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            return pos;
+        }
+
+        /** Message index for an adapter position, or -1 when the position is an ad row or outside the message range. */
+        public int messageIndexForPosition(int position) {
+            if (position == silentAdEndRow) {
+                return -1;
+            }
+            if (position < messagesStartRow || position >= messagesEndRow) {
+                return -1;
+            }
+            int j = position - messagesStartRow;
+            if (silentAdSlots != null) {
+                int n = getMessages().size();
+                int adsSeen = 0;
+                for (int s : silentAdSlots) {
+                    if (s >= n) {
+                        break;
+                    }
+                    int adPos = messagesStartRow + s + 1 + adsSeen;
+                    if (adPos == position) {
+                        return -1;
+                    }
+                    if (adPos < position) {
+                        adsSeen++;
+                    } else {
+                        break;
+                    }
+                }
+                j -= adsSeen;
+            }
+            return j;
+        }
+
+        /** The slot (message index) of the middle ad at this adapter position, or -2. */
+        public int silentSlotForAdPosition(int position) {
+            if (silentAdSlots == null || position < messagesStartRow || position >= messagesEndRow) {
+                return -2;
+            }
+            int n = getMessages().size();
+            int adsSeen = 0;
+            for (int s : silentAdSlots) {
+                if (s >= n) {
+                    break;
+                }
+                int adPos = messagesStartRow + s + 1 + adsSeen;
+                if (adPos == position) {
+                    return s;
+                }
+                if (adPos < position) {
+                    adsSeen++;
+                } else {
+                    break;
+                }
+            }
+            return -2;
+        }
+
+        /** True when this adapter position is an ad row (end ad or middle ad). */
+        public boolean isSilentAdRow(int position) {
+            if (position == silentAdEndRow) {
+                return true;
+            }
+            return position >= messagesStartRow && position < messagesEndRow && messageIndexForPosition(position) == -1;
+        }
+
+        /** The message at an adapter position, or null for ad rows / non-message rows. */
+        public MessageObject getSilentMessageAtPosition(int position) {
+            int index = messageIndexForPosition(position);
+            if (index < 0) {
+                return null;
+            }
+            ArrayList<MessageObject> list = getMessages();
+            if (index >= list.size()) {
+                return null;
+            }
+            return list.get(index);
+        }
+
+        /** True when the middle-ad count changed since the last row computation (bulk-delete guard). */
+        public boolean silentAdCountChanged() {
+            return silentMiddleAdCount() != silentAdCountAtLastRows;
+        }
+
+        /**
+         * True when removing one message would drop a middle ad row too
+         * (the highest slot falls out of range). Call AFTER the message
+         * has been removed from the list: the slot drops exactly when
+         * the pre-removal size was a multiple of the interval, i.e. when
+         * (current size + 1) % 12 == 0. Callers that notify an exact
+         * removal must take the full-refresh path instead.
+         */
+        public boolean silentAdCountChangesOnRemove() {
+            if (!isSilentChannelAdsActive() || silentAdSlots == null || silentAdSlots.isEmpty()) {
+                return false;
+            }
+            int n = getMessages().size();
+            return (n + 1) % SILENT_AD_INTERVAL == 0;
+        }
+
+        /** Destroy every NativeAd owned by this adapter (call when the chat is destroyed). */
+        public void silentDestroyAds() {
+            if (silentPoolListener != null) {
+                SilentAdsManager.getInstance().removePoolListener(silentPoolListener);
+                silentPoolListener = null;
+            }
+            for (int i = 0; i < silentSlotAds.size(); i++) {
+                NativeAd ad = silentSlotAds.valueAt(i);
+                if (ad != null) {
+                    try {
+                        ad.destroy();
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+            silentSlotAds.clear();
+            silentDismissedSlots.clear();
+        }
+
+        /**
+         * Notify a change of message indices [startIndex, startIndex+count).
+         * The adapter range is widened to cover any ad rows inside it.
+         */
+        public void silentNotifyMessageRangeChanged(int startIndex, int count) {
+            if (count <= 0) {
+                return;
+            }
+            int start = positionForMessageIndex(startIndex);
+            if (start < 0) {
+                updateRowsSafe();
+                return;
+            }
+            int end = positionForMessageIndex(startIndex + count - 1);
+            if (end < start) {
+                end = start;
+            }
+            notifyItemRangeChanged(start, end - start + 1);
+        }
+
+        /**
+         * Notify that the message at index `index` was just removed from
+         * the list — call AFTER messages.remove(index). When that removal
+         * also drops a middle ad row (or empties the list), the exact
+         * removal notify would desync getItemCount(), so take the full
+         * refresh path instead.
+         */
+        public void silentNotifyMessageRemoved(int index) {
+            if (isSilentChannelAdsActive() && silentAdCountChangesOnRemove()) {
+                updateRowsSafe();
+                return;
+            }
+            int pos = positionForMessageIndex(index);
+            if (pos < 0) {
+                updateRowsSafe();
+                return;
+            }
+            notifyItemRemoved(pos);
+        }
+
+        /** Rebind ad rows that are still waiting for a loaded ad (pool refilled). */
+        public void silentRefreshAdRows() {
+            if (!isSilentChannelAdsActive()) {
+                return;
+            }
+            boolean changed = false;
+            int n = getMessages().size();
+            if (n > 0 && silentAdEndRow >= 0 && silentSlotAds.get(SILENT_AD_END_SLOT) == null && !silentDismissedSlots.contains(SILENT_AD_END_SLOT)) {
+                NativeAd ad = SilentAdsManager.getInstance().takeAd();
+                if (ad != null) {
+                    silentSlotAds.put(SILENT_AD_END_SLOT, ad);
+                    notifyItemChanged(silentAdEndRow);
+                    changed = true;
+                }
+            }
+            if (silentAdSlots != null) {
+                for (int s : silentAdSlots) {
+                    if (s >= n || silentSlotAds.get(s) != null || silentDismissedSlots.contains(s)) {
+                        continue;
+                    }
+                    NativeAd ad = SilentAdsManager.getInstance().takeAd();
+                    if (ad == null) {
+                        break;
+                    }
+                    silentSlotAds.put(s, ad);
+                    int pos = positionForMessageIndex(s) + 1;
+                    if (pos > 0) {
+                        notifyItemChanged(pos);
+                        changed = true;
+                    }
+                }
+            }
+            if (!changed) {
+                // Pool still empty: takeAd() already triggers a background
+                // refill when the pool is low; do NOT retry here, or a
+                // persistently failing load would loop forever.
+            }
+        }
+
         public ArrayList<MessageObject> getMessages() {
             if (isFrozen) {
                 return frozenMessages;
@@ -39219,6 +39637,13 @@ public class ChatActivity extends BaseFragment implements
             } else {
                 messages = ChatActivity.this.messages;
             }
+            // SilentGram v2.0.28: AdMob ads — recompute (or freeze) the middle-ad slots for this list.
+            silentRecomputeAdSlots();
+            // SilentAds: slot growth is a one-shot permission granted by the
+            // backward-load path before this call; reset it so live inserts/
+            // deletes can never grow the frozen slots mid-chat.
+            silentAdSlotGrowthAllowed = false;
+            silentAdEndRow = -5;
             if (chatMode == MODE_SAVED && isInsideContainer) {
                 hintRow = rowCount++;
             } else {
@@ -39241,8 +39666,15 @@ public class ChatActivity extends BaseFragment implements
                 } else {
                     loadingDownRow = -5;
                 }
+                // SilentGram v2.0.28: end ad — one small card directly below
+                // the last (newest) post, i.e. just before messagesStartRow.
+                // It does not depend on loadingDownRow, so it never appears
+                // or disappears together with it.
+                if (isSilentChannelAdsActive()) {
+                    silentAdEndRow = rowCount++;
+                }
                 messagesStartRow = rowCount;
-                rowCount += messages.size();
+                rowCount += messages.size() + silentMiddleAdCount();
                 messagesEndRow = rowCount;
 
                 if (currentUser != null && !UserObject.isBot(currentUser) && !UserObject.isReplyUser(currentUser) && !UserInfoCell.isEmpty(getMessagesController().getPeerSettings(currentUser.id)) && !MessagesController.isSupportUser(currentUser) && chatMode == MODE_DEFAULT && endReached[0]) {
@@ -39293,6 +39725,8 @@ public class ChatActivity extends BaseFragment implements
                     botInfoRow = rowCount++;
                 }
             }
+            // SilentGram v2.0.28: record the ad-row count for the bulk-delete guard.
+            silentAdCountAtLastRows = silentMiddleAdCount();
         }
 
         @Override
@@ -39324,8 +39758,15 @@ public class ChatActivity extends BaseFragment implements
                 messages = ChatActivity.this.messages;
             }
 
-            if (position >= messagesStartRow && position < messagesEndRow) {
-                return messages.get(position - messagesStartRow).stableId;
+            if (position == silentAdEndRow) {
+                return -1001;
+            } else if (position >= messagesStartRow && position < messagesEndRow) {
+                int index = messageIndexForPosition(position);
+                if (index < 0) {
+                    // Middle ad after message index `slot`: stable negative id per slot.
+                    return -10000 - Math.max(0, silentSlotForAdPosition(position));
+                }
+                return messages.get(index).stableId;
             } else if (position == botInfoRow || position == botInfoEmptyRow) {
                 return 1;
             } else if (position == loadingUpRow) {
@@ -39738,6 +40179,9 @@ public class ChatActivity extends BaseFragment implements
                         return ChatActivity.this.getSideMenuWidth();
                     }
                 };
+            } else if (viewType == SILENT_AD_VIEW_TYPE) {
+                // SilentGram v2.0.28: AdMob Native Advanced card (channel list rows).
+                view = new SilentNativeAdView(mContext, SilentNativeAdView.MODE_CARD, themeDelegate);
             } else if (viewType == 10) {
                 ChatMessageUnsupportedCell cell = new ChatMessageUnsupportedCell(mContext, themeDelegate);
                 cell.setDelegate(getChatMessageCellDelegate());
@@ -39747,9 +40191,69 @@ public class ChatActivity extends BaseFragment implements
             return new RecyclerListView.Holder(view);
         }
 
+        /** Bind an AdMob native ad row (end ad or middle ad). Empty rows collapse to zero height until an ad loads. */
+        private void bindSilentAdRow(RecyclerView.ViewHolder holder, int position) {
+            SilentNativeAdView adView = (SilentNativeAdView) holder.itemView;
+            if (silentPoolListener == null) {
+                silentPoolListener = this::silentRefreshAdRows;
+                SilentAdsManager.getInstance().addPoolListener(silentPoolListener);
+            }
+            int slot = position == silentAdEndRow ? SILENT_AD_END_SLOT : silentSlotForAdPosition(position);
+            RecyclerView.LayoutParams lp = (RecyclerView.LayoutParams) adView.getLayoutParams();
+            if (slot == -2 || silentDismissedSlots.contains(slot)) {
+                adView.unbindAd();
+                adView.setVisibility(View.GONE);
+                if (lp != null) {
+                    lp.height = 0;
+                }
+                return;
+            }
+            NativeAd ad = silentSlotAds.get(slot);
+            if (ad == null) {
+                ad = SilentAdsManager.getInstance().takeAd();
+                if (ad != null) {
+                    silentSlotAds.put(slot, ad);
+                } else {
+                    SilentAdsManager.getInstance().ensureLoaded();
+                }
+            }
+            if (ad == null) {
+                adView.unbindAd();
+                adView.setVisibility(View.GONE);
+                if (lp != null) {
+                    lp.height = 0;
+                }
+                return;
+            }
+            final int dismissSlot = slot;
+            adView.setPlacement(slot == SILENT_AD_END_SLOT ? "channel-end" : "channel-mid", ChatActivity.this.getSilentAdsDialogLabel());
+            adView.setOnCloseListener(() -> {
+                silentDismissedSlots.add(dismissSlot);
+                NativeAd old = silentSlotAds.get(dismissSlot);
+                if (old != null) {
+                    try {
+                        old.destroy();
+                    } catch (Throwable ignored) {
+                    }
+                    silentSlotAds.remove(dismissSlot);
+                }
+                int pos = dismissSlot == SILENT_AD_END_SLOT ? silentAdEndRow : positionForMessageIndex(dismissSlot) + 1;
+                if (pos >= 0) {
+                    notifyItemChanged(pos);
+                }
+            });
+            if (lp != null) {
+                lp.height = RecyclerView.LayoutParams.WRAP_CONTENT;
+            }
+            adView.setVisibility(View.VISIBLE);
+            adView.bindAd(ad);
+        }
+
         @Override
         public void onBindViewHolder(RecyclerView.ViewHolder holder, int position) {
-            if (position == botInfoRow || position == botInfoEmptyRow) {
+            if (isSilentAdRow(position)) {
+                bindSilentAdRow(holder, position);
+            } else if (position == botInfoRow || position == botInfoEmptyRow) {
                 BotHelpCell helpView = (BotHelpCell) holder.itemView;
                 if (UserObject.isReplyUser(currentUser)) {
                     helpView.setText(false, LocaleController.getString(R.string.RepliesChatInfo));
@@ -39818,7 +40322,10 @@ public class ChatActivity extends BaseFragment implements
                     messages = ChatActivity.this.messages;
                 }
 
-                MessageObject message = messages.get(position - messagesStartRow);
+                MessageObject message = getSilentMessageAtPosition(position);
+                if (message == null) {
+                    return;
+                }
                 View view = holder.itemView;
 
                 if (view instanceof ChatMessageCell) {
@@ -39907,7 +40414,7 @@ public class ChatActivity extends BaseFragment implements
                     int prevPrevType = getItemViewType(prevPrevPosition);
 
                     if (!(message.messageOwner.reply_markup instanceof TLRPC.TL_replyInlineMarkup) && nextType == holder.getItemViewType()) {
-                        MessageObject nextMessage = messages.get(nextPosition - messagesStartRow);
+                        MessageObject nextMessage = messages.get(messageIndexForPosition(nextPosition));
                         pinnedBottom = nextMessage.isOutOwner() == message.isOutOwner()
                             && (Math.abs(nextMessage.messageOwner.date - message.messageOwner.date) <= 5 * 60 || chatMode == MODE_WELCOME_MESSAGES);
                         if (pinnedBottom) {
@@ -39950,12 +40457,17 @@ public class ChatActivity extends BaseFragment implements
                         }
                     }
                     final boolean firstInChat;
-                    if (prevPosition - messagesStartRow >= 0 && prevPosition - messagesStartRow < messages.size()) {
-                        MessageObject prevMessage = messages.get(prevPosition - messagesStartRow);
+                    // SilentAds: prevPosition/prevPosition+1 are adapter positions; the
+                    // message after this one in chat order is one message index higher
+                    // (ad rows carry no message, so +1 in index space is exact).
+                    int silentPrevMessageIndex = messageIndexForPosition(prevPosition);
+                    if (silentPrevMessageIndex >= 0 && silentPrevMessageIndex < messages.size()) {
+                        MessageObject prevMessage = messages.get(silentPrevMessageIndex);
                         if (prevMessage != null && prevMessage.isDateObject) {
                             prevMessage = null;
-                            if (prevPosition + 1 - messagesStartRow >= 0 && prevPosition + 1 - messagesStartRow < messages.size()) {
-                                prevMessage = messages.get(prevPosition + 1 - messagesStartRow);
+                            int silentPrevPrevIndex = silentPrevMessageIndex + 1;
+                            if (silentPrevPrevIndex >= 0 && silentPrevPrevIndex < messages.size()) {
+                                prevMessage = messages.get(silentPrevPrevIndex);
                             }
                         }
                         firstInChat = prevMessage == null || prevMessage.getTopicId() != message.getTopicId();
@@ -39966,7 +40478,7 @@ public class ChatActivity extends BaseFragment implements
                     final boolean lastInChatList = position == messagesStartRow;
 
                     if (prevType == holder.getItemViewType()) {
-                        MessageObject prevMessage = messages.get(prevPosition - messagesStartRow);
+                        MessageObject prevMessage = messages.get(messageIndexForPosition(prevPosition));
                         pinnedTop = !(prevMessage.messageOwner.reply_markup instanceof TLRPC.TL_replyInlineMarkup) && prevMessage.isOutOwner() == message.isOutOwner()
                             && (Math.abs(prevMessage.messageOwner.date - message.messageOwner.date) <= 5 * 60 || chatMode == MODE_WELCOME_MESSAGES);
                         if (pinnedTop) {
@@ -40314,14 +40826,17 @@ public class ChatActivity extends BaseFragment implements
                     showBotMessageHint(messageCell, false);
                 } else if (view instanceof ChatActionCell) {
                     final boolean firstInChat;
+                    // SilentAds: position is an adapter position; +1/+2 in message-index
+                    // space is the next/older message (ad rows carry no message).
+                    int silentMsgIndex = messageIndexForPosition(position);
                     if (message != null && message.isDateObject) {
                         firstInChat = false;
-                    } else if (position + 1 - messagesStartRow >= 0 && position + 1 - messagesStartRow < messages.size()) {
-                        MessageObject prevMessage = messages.get(position + 1 - messagesStartRow);
+                    } else if (silentMsgIndex + 1 >= 0 && silentMsgIndex + 1 < messages.size()) {
+                        MessageObject prevMessage = messages.get(silentMsgIndex + 1);
                         if (prevMessage != null && prevMessage.isDateObject) {
                             prevMessage = null;
-                            if (position + 2 - messagesStartRow >= 0 && position + 2 - messagesStartRow < messages.size()) {
-                                prevMessage = messages.get(position + 2 - messagesStartRow);
+                            if (silentMsgIndex + 2 >= 0 && silentMsgIndex + 2 < messages.size()) {
+                                prevMessage = messages.get(silentMsgIndex + 2);
                             }
                         }
                         firstInChat = prevMessage == null || message != null && prevMessage.getTopicId() != message.getTopicId();
@@ -40364,6 +40879,9 @@ public class ChatActivity extends BaseFragment implements
             if (position == hintRow || position == hintRow2) {
                 return 1;
             }
+            if (isSilentAdRow(position)) {
+                return SILENT_AD_VIEW_TYPE;
+            }
             if (position >= messagesStartRow && position < messagesEndRow) {
                 final ArrayList<MessageObject> messages;
                 if (isFrozen) {
@@ -40373,7 +40891,11 @@ public class ChatActivity extends BaseFragment implements
                 } else {
                     messages = ChatActivity.this.messages;
                 }
-                return messages.get(position - messagesStartRow).contentType;
+                int index = messageIndexForPosition(position);
+                if (index < 0) {
+                    return SILENT_AD_VIEW_TYPE;
+                }
+                return messages.get(index).contentType;
             } else if (position == botInfoRow) {
                 return 3;
             } else if (position == userInfoRow) {
@@ -40497,7 +41019,7 @@ public class ChatActivity extends BaseFragment implements
                     messages = ChatActivity.this.messages;
                 }
 
-                MessageObject message = messages.get(position - messagesStartRow);
+                MessageObject message = getSilentMessageAtPosition(position);
                 View view = holder.itemView;
                 if (message != null && message.messageOwner != null && message.messageOwner.media_unread && message.messageOwner.mentioned) {
                     if (!inPreviewMode && chatMode == 0) {
@@ -40540,7 +41062,7 @@ public class ChatActivity extends BaseFragment implements
                     if (child instanceof ChatMessageCell && ((ChatMessageCell) child).getMessageObject() == unreadMessageObject) {
                         int unreadMessageIndex = messages.indexOf(unreadMessageObject);
                         if (unreadMessageIndex >= 0) {
-                            lastVisibleItem = messagesStartRow + messages.indexOf(unreadMessageObject);
+                            lastVisibleItem = positionForMessageIndex(messages.indexOf(unreadMessageObject));
                             top = getScrollingOffsetForView(child);
                         }
                         break;
@@ -40598,7 +41120,7 @@ public class ChatActivity extends BaseFragment implements
                 messageObject.stableId = lastStableId++;
                 notifyDataSetChanged(true);
             } else {
-                updateRowAtPosition(messagesStartRow + index);
+                updateRowAtPosition(positionForMessageIndex(index));
             }
             return null;
         }
@@ -40728,9 +41250,11 @@ public class ChatActivity extends BaseFragment implements
             if (positionStart == 1 && itemCount > 0) {
                 int lastPosition = positionStart + itemCount;
                 if (lastPosition >= messagesStartRow && lastPosition < messagesEndRow) {
-                    MessageObject m1 = messages.get(lastPosition - messagesStartRow);
-                    MessageObject m2 = messages.get(lastPosition - messagesStartRow - 1);
-                    if (currentChat != null && m1.getFromChatId() == m2.getFromChatId() || currentUser != null && m1.isOutOwner() == m2.isOutOwner()) {
+                    // SilentAds: lastPosition may be an ad row (no message) — skip then.
+                    MessageObject m1 = getSilentMessageAtPosition(lastPosition);
+                    int m2Index = messageIndexForPosition(lastPosition) - 1;
+                    MessageObject m2 = m2Index >= 0 && m2Index < messages.size() ? messages.get(m2Index) : null;
+                    if (m1 != null && m2 != null && (currentChat != null && m1.getFromChatId() == m2.getFromChatId() || currentUser != null && m1.isOutOwner() == m2.isOutOwner())) {
                         notifyItemChanged(positionStart);
                     }
                 }
@@ -44780,7 +45304,7 @@ public class ChatActivity extends BaseFragment implements
         public void onEndAnimation() {
             if (scrollTo != null) {
                 chatAdapter.updateRowsSafe();
-                int lastItemPosition = chatAdapter.messagesStartRow + messages.indexOf(scrollTo);
+                int lastItemPosition = chatAdapter.positionForMessageIndex(messages.indexOf(scrollTo));
                 if (lastItemPosition >= 0) {
                     chatLayoutManager.scrollToPositionWithOffset(lastItemPosition, (int) (lastItemOffset + lastPadding - chatListViewPaddingTop), lastBottom);
                 }
@@ -46297,7 +46821,7 @@ public class ChatActivity extends BaseFragment implements
         if (chatListView != null && chatAdapter != null) {
             for (int i = 0; i < chatListView.getChildCount(); ++i) {
                 View child = chatListView.getChildAt(i);
-                int position = chatListView.getChildAdapterPosition(child) - chatAdapter.messagesStartRow;
+                int position = chatAdapter.messageIndexForPosition(chatListView.getChildAdapterPosition(child));
                 if (child instanceof ChatActionCell && position >= 0 && position < messages.size()) {
                     MessageObject msg = messages.get(position);
                     if (msg != null && msg.isWallpaperForBoth()) {

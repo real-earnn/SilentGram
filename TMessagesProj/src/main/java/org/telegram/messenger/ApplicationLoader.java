@@ -308,6 +308,10 @@ public class ApplicationLoader extends Application {
             return;
         }
 
+        // SilentGram v2.0.28: AdMob Native Advanced ads (channels + bots, non-Premium only).
+        // The SDK reads its App ID from the manifest meta-data; without it the app would crash here.
+        SilentAdsManager.getInstance().initialize(this);
+
         // AndroidUtilities must be initialized before FileLog
         final String helloWorld = AndroidUtilities.getHelloWorld();
 
