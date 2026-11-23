@@ -113,8 +113,8 @@ public class SilentFloatingActivity extends LaunchActivity {
         // SilentFloatingWindow.onFloatingActivityBackgrounded) — after
         // Home the system never delivers onResume(), so waiting for it
         // leaves a black window until the first tap or resize. The
-        // watchdog samples the picture and nudges the display while it
-        // is black, so the picture is back before the user taps.
+        // watchdog samples the picture and re-polls while it is black,
+        // so the picture is back before the user taps.
         SilentFloatingWindow.getInstance().onFloatingActivityBackgrounded();
         // v2.0.22: Home pauses this activity — suppress fragment
         // pause-dismissals only for the duration of super.onPause()

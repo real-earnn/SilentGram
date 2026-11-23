@@ -11446,13 +11446,13 @@ public class ChatActivity extends BaseFragment implements
 
         silentBotAdView = new SilentNativeAdView(getContext(), SilentNativeAdView.MODE_STRIP, themeDelegate);
         silentBotAdView.setPlacement("bot-top", getSilentAdsDialogLabel());
-        silentBotAdView.setOnCloseListener(() -> {
+        silentBotAdView.setOnCloseListener(() -> onSilentAdClose(() -> {
             silentBotAdDismissed = true;
             if (silentBotAdView != null) {
                 silentBotAdView.destroyAd();
             }
             updateTopPanel(false);
-        });
+        }));
         topPanelLayout.addView(silentBotAdView, LayoutHelper.createLinear(LayoutHelper.MATCH_PARENT, LayoutHelper.WRAP_CONTENT));
         topPanelLayout.setPriority(silentBotAdView, 9);
         topPanelLayout.setDebugName(silentBotAdView, "silent bot ad strip");
@@ -11479,6 +11479,35 @@ public class ChatActivity extends BaseFragment implements
             return;
         }
         silentBotAdView.bindAd(ad);
+    }
+
+    /**
+     * SilentAds v2.0.29: the X on our ad behaves like official
+     * Telegram's sponsored-ad X — this mirrors the upstream
+     * botAdView close callback in updateTopPanel (the "HideAd" menu
+     * item and the close callback there). Our ads only ever show to
+     * non-Premium users, so the Premium branch below is unreachable
+     * for our ads and is kept for upstream fidelity: hide the ad,
+     * show the "Ad hidden" bulletin and disable Telegram's own ads.
+     * Non-Premium: show Telegram's OWN Premium page (the "no ads"
+     * feature sheet — the same page Settings -> Telegram Premium
+     * opens; no custom page is built) and dismiss our ad.
+     */
+    private void onSilentAdClose(Runnable dismiss) {
+        if (getUserConfig().isPremium()) {
+            if (dismiss != null) {
+                dismiss.run();
+            }
+            BulletinFactory.of(this)
+                    .createAdReportedBulletin(LocaleController.getString(R.string.AdHidden))
+                    .show();
+            getMessagesController().disableAds(true);
+        } else {
+            showDialog(new PremiumFeatureBottomSheet(this, PremiumPreviewFragment.PREMIUM_FEATURE_ADS, true));
+            if (dismiss != null) {
+                dismiss.run();
+            }
+        }
     }
 
     private void createBizBotButton() {
@@ -40227,7 +40256,7 @@ public class ChatActivity extends BaseFragment implements
             }
             final int dismissSlot = slot;
             adView.setPlacement(slot == SILENT_AD_END_SLOT ? "channel-end" : "channel-mid", ChatActivity.this.getSilentAdsDialogLabel());
-            adView.setOnCloseListener(() -> {
+            adView.setOnCloseListener(() -> ChatActivity.this.onSilentAdClose(() -> {
                 silentDismissedSlots.add(dismissSlot);
                 NativeAd old = silentSlotAds.get(dismissSlot);
                 if (old != null) {
@@ -40241,7 +40270,7 @@ public class ChatActivity extends BaseFragment implements
                 if (pos >= 0) {
                     notifyItemChanged(pos);
                 }
-            });
+            }));
             if (lp != null) {
                 lp.height = RecyclerView.LayoutParams.WRAP_CONTENT;
             }

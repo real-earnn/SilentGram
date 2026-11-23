@@ -389,6 +389,13 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
 
     private FlagSecureReason flagSecureReason;
     private BroadcastReceiver debugThemeReceiver;
+
+    /** SilentGram v2.0.29: Home-press detector for the floating window
+     * (see onUserLeaveHint). The system sends ACTION_CLOSE_SYSTEM_DIALOGS
+     * with reason "homekey" when Home is pressed and "recentapps" for
+     * Recents; silentHomePressMs records the last Home press. */
+    private long silentHomePressMs;
+    private BroadcastReceiver silentHomePressReceiver;
     private boolean debugInstantThemeSwitch;
     private WindowAnimatedInsetsProvider rootAnimatedInsetsListener;
 
@@ -424,6 +431,7 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         if (BuildVars.DEBUG_VERSION || BuildVars.DEBUG_PRIVATE_VERSION) {
             registerDebugThemeReceiver();
         }
+        registerSilentHomePressReceiver();
         if (!UserConfig.getInstance(currentAccount).isClientActivated()) {
             Intent intent = getIntent();
             boolean isProxy = false;
@@ -7038,6 +7046,31 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         }
     }
 
+    /** SilentGram v2.0.29: listen for the Home button so the floating
+     * window opens ONLY on Home (see onUserLeaveHint). Registered once
+     * in onCreate, unregistered in onDestroy — same pattern as
+     * registerDebugThemeReceiver above. RECEIVER_NOT_EXPORTED: the
+     * broadcast comes from the system, nothing else may send to it. */
+    private void registerSilentHomePressReceiver() {
+        if (silentHomePressReceiver != null) {
+            return;
+        }
+        silentHomePressReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                if (intent != null && "homekey".equals(intent.getStringExtra("reason"))) {
+                    silentHomePressMs = SystemClock.uptimeMillis();
+                }
+            }
+        };
+        final IntentFilter filter = new IntentFilter(Intent.ACTION_CLOSE_SYSTEM_DIALOGS);
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(silentHomePressReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(silentHomePressReceiver, filter);
+        }
+    }
+
     /** onThemeColorsChanged() of every fragment in every navigation layout (ThemeBind / Colorable are updated separately) */
     public void notifyThemeColorsChanged() {
         for (INavigationLayout layout : new INavigationLayout[] { actionBarLayout, layersActionBarLayout, rightActionBarLayout }) {
@@ -7105,6 +7138,10 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         if (debugThemeReceiver != null) {
             unregisterReceiver(debugThemeReceiver);
             debugThemeReceiver = null;
+        }
+        if (silentHomePressReceiver != null) {
+            unregisterReceiver(silentHomePressReceiver);
+            silentHomePressReceiver = null;
         }
 
         if (activeInstanceCount == 0) {
@@ -7210,9 +7247,20 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
         // SilentGram v2.0.18: system PiP is REMOVED entirely. Home only ever
         // opens the floating window; if the overlay cannot start, the app
         // just backgrounds normally — no system PiP window can appear.
+        // v2.0.29: floating opens ONLY on the Home button. onUserLeaveHint
+        // also fires for Recents, app-switch and leaving to another
+        // activity (e.g. tapping a link that opens the Play Store) —
+        // those must NOT open floating. Home is distinguished by the
+        // ACTION_CLOSE_SYSTEM_DIALOGS broadcast with reason "homekey"
+        // (see registerSilentHomePressReceiver), which the system sends
+        // just before onUserLeaveHint; Recents sends "recentapps"
+        // instead. The 2s window covers main-thread scheduling jitter;
+        // if the broadcast somehow arrives late, this press simply
+        // backgrounds normally (fail-safe: no floating).
         // If the toggle is ON but floating failed to start, say why on
         // screen, so the next test tells us exactly which step failed.
-        if (!tryEnterSilentFloating() && SharedSettings.silentPipEnabled.get()) {
+        if (SystemClock.uptimeMillis() - silentHomePressMs < 2000
+                && !tryEnterSilentFloating() && SharedSettings.silentPipEnabled.get()) {
             String reason = SilentFloatingWindow.getInstance().getLastStartError();
             if (reason != null) {
                 SilentToast.show(this, "Floating window could not start: " + reason, Toast.LENGTH_LONG);

@@ -18,6 +18,7 @@ import com.google.android.gms.ads.nativead.NativeAd;
 import com.google.android.gms.ads.nativead.NativeAdView;
 
 import org.telegram.messenger.AndroidUtilities;
+import org.telegram.messenger.FileLog;
 import org.telegram.messenger.R;
 import org.telegram.messenger.SilentAdsManager;
 import org.telegram.ui.ActionBar.Theme;
@@ -40,9 +41,11 @@ import java.util.Locale;
  * - MODE_STRIP: compact full-width strip for bot chats, just below
  *   the top bar (small patti, poori patti).
  *
- * The close X hides the ad for the current chat open (owner decides
- * what "hide" means: the adapter collapses the row, the bot strip
- * hides itself). It never reports a click to AdMob.
+ * The close X behaves like official Telegram's sponsored-ad X: it
+ * opens Telegram's OWN Premium page (the "no ads" feature sheet —
+ * the same page Settings -> Telegram Premium opens) and dismisses
+ * the ad for the current chat open (the adapter collapses the row,
+ * the bot strip hides itself). It never reports a click to AdMob.
  *
  * Composition, not inheritance: NativeAdView is a FINAL class in
  * play-services-ads 24.9.0 and cannot be subclassed (that was the
@@ -299,6 +302,16 @@ public class SilentNativeAdView extends FrameLayout {
      * from the ad; the star line is filled here because it is a
      * TextView, not a RatingBar. All registrations go to the inner
      * NativeAdView, which owns the asset views as descendants.
+     *
+     * v2.0.29: the asset views are ALSO filled explicitly from the
+     * ad's getters below. On the v2.0.28 device test the SDK-populated
+     * views stayed empty (headline/icon/body/CTA blank in both
+     * screenshots) while the star rating — filled here — rendered,
+     * so the render must not depend on the SDK's population alone.
+     * Filling them here sets the same values the SDK would set, so
+     * it is a no-op when the SDK already populated them, and it
+     * keeps impression/click tracking intact (the views stay
+     * registered on the inner NativeAdView).
      */
     public void bindAd(NativeAd ad) {
         if (ad == null) {
@@ -314,6 +327,27 @@ public class SilentNativeAdView extends FrameLayout {
         nativeAdView.setIconView(iconView);
         nativeAdView.setCallToActionView(ctaView);
         nativeAdView.setNativeAd(ad);
+        // Explicit population (see the javadoc above): fill the asset
+        // views from the ad so the card/strip renders even if the SDK
+        // leaves them empty.
+        if (ad.getHeadline() != null) {
+            headlineView.setText(ad.getHeadline());
+        }
+        if (ad.getCallToAction() != null) {
+            ctaView.setText(ad.getCallToAction());
+        }
+        if (bodyView != null && ad.getBody() != null) {
+            bodyView.setText(ad.getBody());
+        }
+        if (ad.getIcon() != null && ad.getIcon().getDrawable() != null) {
+            iconView.setImageDrawable(ad.getIcon().getDrawable());
+        }
+        FileLog.d("SilentAds: bindAd mode=" + mode + " placement=" + placement
+                + " headline=" + (ad.getHeadline() == null ? "null" : "ok")
+                + " body=" + (ad.getBody() == null ? "null" : "ok")
+                + " icon=" + (ad.getIcon() == null ? "null" : "ok")
+                + " cta=" + (ad.getCallToAction() == null ? "null" : "ok")
+                + " stars=" + ad.getStarRating());
         // Asset visibility: the SDK leaves an empty view when the
         // asset is missing, so hide those views ourselves.
         if (ad.getIcon() == null) {
