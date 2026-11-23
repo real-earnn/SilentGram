@@ -87,22 +87,31 @@ import org.telegram.utils.settings.SharedSettings;
  *   (activity display id must equal the virtual display id); a misplaced
  *   activity is finished and the user is put back fullscreen instead of
  *   being stranded with a transparent overlay over a fullscreen app.
- * - The virtual display is the WINDOW (v2.0.23): created at the floating
- *   window's CONTENT size (the TextureView's size) with a density matched
- *   to it, so the activity lays out for a mini device of the phone's dp
- *   size — edge-to-edge, everything shrinks proportionally, left AND
- *   right AND bottom visible. The v2.0.22 whole-phone display (720x1480)
- *   depended on the device downscaling the display into the window's
- *   buffers; the user's device does not do that — it showed only the
- *   top-left of the phone UI (right and bottom cut off). Window size +
- *   matched density makes the display, the SurfaceTexture buffer and the
- *   TextureView all the same size, so there is nothing to scale, crop or
- *   mis-transform. A resize re-syncs the display IN PLACE with
- *   virtualDisplay.resize(w, h, dpi) at gesture end: same display id,
- *   same Surface, same activity — no re-create, no re-launch, no second
- *   display. (The v2.0.21 resize() frame stalls were observed while the
- *   activity was on display 0, i.e. while the virtual display was blank
- *   anyway; resize() itself was never the cause.)
+ * - The virtual display is created ONCE, at the floating window's
+ *   CONTENT size at open (the TextureView's size) with a density
+ *   matched to it, so the activity lays out for a mini device of the
+ *   phone's dp size — edge-to-edge, everything shrinks proportionally,
+ *   left AND right AND bottom visible. The v2.0.22 whole-phone display
+ *   (720x1480) depended on the device downscaling the display into the
+ *   window's buffers; the user's device does not do that — it showed
+ *   only the top-left of the phone UI (right and bottom cut off).
+ *   v2.0.32: the display is NEVER resized afterwards. The TextureView
+ *   scales the live picture to whatever size the window is dragged to
+ *   (exactly what already happens DURING a drag, which the device test
+ *   confirms looks perfect at any size). Resizing the display in place
+ *   with virtualDisplay.resize() was the resize bug: it drops the
+ *   TextureView's current frame, and the activity cannot repaint at
+ *   the new size while the app is backgrounded — a stopped activity's
+ *   ViewRootImpl never lays out or draws (AOSP Android 10
+ *   ViewRootImpl.setWindowStopped destroys the window surface and
+ *   performTraversals skips layout/draw while stopped), and
+ *   Activity.recreate() on a stopped activity relaunches it stopped,
+ *   so its window is never added or made visible. Twenty-plus
+ *   versions chased that repaint with recreate/rebind rungs that could
+ *   never fire a frame; v2.0.32 removes the breaking operation
+ *   instead. Touch coordinates are scaled by
+ *   displayWidthPx / textureView width on every touch, so taps stay
+ *   exact at any window size.
  * - Frame production is retried, not just reported: if a frame check
  *   still sees no frames, the display is re-created from the live
  *   texture (and the activity re-launched if it is not on the
@@ -191,10 +200,13 @@ public class SilentFloatingWindow {
     private int windowWidthPx;
     private int windowHeightPx;
     private int barHeightPx;
-    /** Current virtual-display size = the WINDOW'S content size (v2.0.23).
-     * Display, SurfaceTexture buffer and TextureView are all the same size,
-     * so forwardTouch maps window coordinates 1:1 (the scale is recomputed
-     * from these values and stays right after a resize). */
+    /** v2.0.32: virtual-display size, FIXED at creation (the window's
+     * content size at open). The display is never resized afterwards —
+     * the TextureView scales the live picture to the window, so the
+     * display, buffer and view sizes agree only at open. forwardTouch
+     * maps window coordinates to display coordinates with the scale
+     * displayWidthPx / textureView.getWidth(), recomputed on every
+     * touch, so it stays right at any window size. */
     private int displayWidthPx;
     private int displayHeightPx;
     /** Density of the virtual display, matched to its width so the dp size
@@ -310,10 +322,13 @@ public class SilentFloatingWindow {
      * so a normal 3-5s first paint cannot trigger a teardown of a
      * display that is still starting up. 0 = no launch yet. */
     private long floatingLaunchAtMs;
-    /** v2.0.27: whether the activity-recreate rung has already run for the current virtual display (reset in rebindDisplayToTexture / start() / teardown()). */
-    private boolean activityRecreateDoneForDisplay;
-    /** v2.0.27: last time tryRecreateFloatingActivity() ran — 10s cooldown so a recreate that did not take cannot loop. */
-    private long lastActivityRecreateAtMs;
+    /** v2.0.32: the activity-recreate rung (v2.0.27) and its
+     * once-per-display flag / 10s cooldown are REMOVED. The recreate
+     * never restored a frame on the device — it destroyed the working
+     * window and the replacement could not draw while the app is
+     * backgrounded (see the class header). Do not re-add it; the
+     * resize fix is to never resize the display, not to recreate the
+     * activity after resizing it. */
     /** v2.0.26: proxy IME (see activateProxyIme). The soft keyboard is
      * another app's window, so it can never be placed on the
      * OWN_CONTENT_ONLY virtual display — and the floating field's own
@@ -576,8 +591,6 @@ public class SilentFloatingWindow {
         lastStartError = null;
         lastFrameRecoveryAtMs = 0;
         consecutiveFrameFailures = 0;
-        activityRecreateDoneForDisplay = false;
-        lastActivityRecreateAtMs = 0;
         if (active) {
             // Safety net: if the window was minimized to the pill and
             // the toggle is hit again, bring it back instead of
@@ -928,11 +941,10 @@ public class SilentFloatingWindow {
             if (virtualDisplay != null && virtualDisplay.getDisplay() != null) {
                 int displayId = virtualDisplay.getDisplay().getDisplayId();
                 consecutiveFrameFailures = 0;
-                // v2.0.27: fresh cold-start grace + fresh recreate chance for
-                // the new display — without this, a slow post-rebind paint
-                // gets zero grace and triggers another rebind ~7s later.
+                // v2.0.27: fresh cold-start grace for the new display —
+                // without this, a slow post-rebind paint gets zero grace
+                // and triggers another rebind ~7s later.
                 floatingLaunchAtMs = SystemClock.uptimeMillis();
-                activityRecreateDoneForDisplay = false;
                 FileLog.d("SilentFloatingWindow: virtual display id=" + displayId + " size=" + displayWidthPx + "x" + displayHeightPx + " dpi=" + displayDensityDpi);
                 return displayId;
             }
@@ -1366,34 +1378,9 @@ public class SilentFloatingWindow {
         }
     }
 
-    /** v2.0.27: recreate the floating activity in place on the SAME virtual display, to kick a stuck first frame. Activity.recreate() destroys + recreates it like a configuration change, so SilentFloatingActivity.onDestroy skips teardown (isChangingConfigurations()) and the overlay + display survive; the new instance reports in through setFloatingActivity(), which forces its first traversal. One recreate per display; returns false when there is nothing safe to recreate. */
-    private boolean tryRecreateFloatingActivity() {
-        if (activityRecreateDoneForDisplay) {
-            return false;
-        }
-        SilentFloatingActivity fa = floatingActivity;
-        if (fa == null || fa.isFinishing()) {
-            return false;
-        }
-        long now = SystemClock.uptimeMillis();
-        if (now - lastActivityRecreateAtMs < 10000) {
-            return false;
-        }
-        try {
-            FileLog.e("SilentFloatingWindow: recreating floating activity to kick first frame");
-            fa.recreate();
-        } catch (Exception e) {
-            FileLog.e(e);
-            return false;
-        }
-        activityRecreateDoneForDisplay = true;
-        lastActivityRecreateAtMs = now;
-        // Fresh cold-start grace for the new instance, so the next checks
-        // wait for its first paint instead of judging it instantly.
-        floatingLaunchAtMs = now;
-        consecutiveFrameFailures = 0;
-        return true;
-    }
+    /** v2.0.32: tryRecreateFloatingActivity() REMOVED (was v2.0.27).
+     * Activity.recreate() never restored a frame on the device — see
+     * the class header. Do not re-add it. */
 
     /**
      * Called from the TextureView's SurfaceTextureListener once the
@@ -1631,25 +1618,22 @@ public class SilentFloatingWindow {
                     scheduleFrameCheck(2000);
                     return;
                 }
-                // v2.0.27: second consecutive failure with the activity on the
-                // virtual display and a valid surface — the display is healthy,
-                // so do not tear it down yet. Recreate the activity instead
-                // (the v2.0.25 manual-resize cure, done programmatically);
-                // if the fresh window is still black, fall through to the
-                // display rebind below.
-                // v2.0.30: NO resumed gate any more. After Home the system
-                // never delivers onResume(), so floatingResumed stays false
-                // and this rung never fired — the window stayed transparent
-                // after every resize (v2.0.29 device test). A stopped
-                // activity draws nothing, which is exactly why it must be
-                // recreated: recreation forces a fresh instance + first
-                // frame, the same cure a config-change resize gave in
-                // v2.0.25 (the activity declares screenSize + density in
-                // configChanges, so a resize alone never recreates it).
-                if (tryRecreateFloatingActivity()) {
-                    scheduleFrameCheck(3000);
-                    return;
-                }
+                // v2.0.32: NO recreate rung any more (v2.0.27–v2.0.31).
+                // The recreate never restored a frame on the device: it
+                // destroys the activity's window, and the replacement
+                // instance is relaunched while the app is backgrounded,
+                // so its window is never added or made visible and it
+                // draws nothing — the window stayed transparent forever
+                // after every resize (v2.0.30/v2.0.31 device tests), and
+                // the frame-check loop cycled recreate<->rebind without
+                // ever producing a frame. Fall straight through to the
+                // display rebind below: a fresh virtual display from the
+                // live texture is the only recovery that re-creates the
+                // display itself. (The activity declares screenSize +
+                // density in configChanges, so a resize alone never
+                // recreates it — and since v2.0.32 the display is never
+                // resized at all, so this rung is a backstop for other
+                // black-window causes, not the resize path.)
             }
             consecutiveFrameFailures = 0;
             lastStartError = "floating content black (no frames)";
@@ -1704,56 +1688,15 @@ public class SilentFloatingWindow {
     }
 
 
-    /** v2.0.23: re-sync the virtual display to the window's CURRENT
-     * content size (with matched density) IN PLACE, at gesture end.
-     * virtualDisplay.resize() keeps the same display id, the same
-     * Surface and the same activity — no re-create, no re-launch, no
-     * second display — so frames keep flowing across every resize. The
-     * activity re-lays out for the new size (it declares screenSize in
-     * configChanges); the frame check the caller schedules proves the
-     * frames survived. A no-op when nothing changed. */
-    private void resizeDisplayToWindow() {
-        if (virtualDisplay == null || textureView == null) {
-            return;
-        }
-        // v2.0.30: size from the WINDOW geometry, not the TextureView.
-        // At gesture end updateLayout() is still in flight (async), so
-        // the TextureView can still report the OLD size and this resize
-        // would no-op — the virtual display would stay at the old size
-        // while the view's buffer is already the new one. windowWidthPx
-        // / windowHeightPx are the size the view is about to be laid out
-        // at, so they are the right source of truth here.
-        int w = windowWidthPx;
-        int h = Math.max(1, windowHeightPx - barHeightPx);
-        int dpi = displayDensityForWidth(w);
-        if (w == displayWidthPx && h == displayHeightPx && dpi == displayDensityDpi) {
-            return;
-        }
-        try {
-            virtualDisplay.resize(w, h, dpi);
-            displayWidthPx = w;
-            displayHeightPx = h;
-            displayDensityDpi = dpi;
-            FileLog.d("SilentFloatingWindow: virtual display resized to " + w + "x" + h + " dpi=" + dpi);
-            // v2.0.31: the activity declares screenSize|density in
-            // configChanges, so a VD resize never recreates it — and a
-            // stopped activity (after Home) never repaints at the new
-            // size, so the frame drops to transparent the instant the
-            // finger lifts (during the drag the old frame is just scaled
-            // and stays visible). Force a repaint NOW, at gesture end,
-            // instead of waiting for the frame check's rung: give this
-            // resize a fresh recreate chance and take it. The 10s
-            // cooldown inside tryRecreateFloatingActivity() guards
-            // against storms; if it is cooling down, the frame check's
-            // rebind recovery remains the fallback. All three
-            // gesture-end paths (corner grip, bar pinch, content pinch)
-            // and rotation funnel through here.
-            activityRecreateDoneForDisplay = false;
-            tryRecreateFloatingActivity();
-        } catch (Exception e) {
-            FileLog.e(e);
-        }
-    }
+    /** v2.0.32: resizeDisplayToWindow() REMOVED — the virtual display
+     * is never resized. The old method called virtualDisplay.resize()
+     * at gesture end and then recreated the activity to force a
+     * repaint; on the device that dropped the frame the instant the
+     * finger lifted and the repaint never came (v2.0.30/v2.0.31 device
+     * tests). The TextureView scales the live picture to any window
+     * size, so a window resize needs no display resize at all —
+     * gesture-end paths now only persist the geometry and schedule a
+     * frame check. Do not re-add a display resize here. */
 
     /** Back to the fullscreen app, reopening the same chat when known. */
     public void expand() {
@@ -2011,8 +1954,6 @@ public class SilentFloatingWindow {
         consecutiveFrameFailures = 0;
         lastFrameRecoveryAtMs = 0;
         floatingLaunchAtMs = 0;
-        activityRecreateDoneForDisplay = false;
-        lastActivityRecreateAtMs = 0;
         deactivateProxyIme();
         imeProxyEdit = null;
         detachImeFocusListener();
@@ -2150,10 +2091,12 @@ public class SilentFloatingWindow {
 
             @Override
             public void onSurfaceTextureSizeChanged(SurfaceTexture texture, int width, int height) {
-                // v2.0.23: the TextureView re-sizes its own buffer here;
-                // the virtual display is re-synced to the new size IN
-                // PLACE at gesture end (resizeDisplayToWindow), so the
-                // display, buffer and view agree again. Prove frames
+                // v2.0.23: the TextureView re-sizes its own buffer here.
+                // v2.0.32: the virtual display is NOT re-synced to the
+                // new size — it stays at its creation size and the
+                // TextureView scales the live picture to the window
+                // (resizing the display dropped the frame on the device
+                // and the activity could not repaint). Prove frames
                 // survived the resize: check again ~2s after the last
                 // size change.
                 // Safety net for first open: if the texture arrived
@@ -2590,7 +2533,6 @@ public class SilentFloatingWindow {
                     public void onScaleEnd(ScaleGestureDetector detector) {
                         contentPinching = false;
                         persistGeometry();
-                        resizeDisplayToWindow();
                         schedulePostResizeFrameCheck();
                     }
                 });
@@ -2743,7 +2685,6 @@ public class SilentFloatingWindow {
             windowParams.x = clampX(windowParams.x);
             windowParams.y = clampY(windowParams.y);
             updateLayout();
-            resizeDisplayToWindow();
             schedulePostResizeFrameCheck();
         } catch (Exception e) {
             FileLog.e(e);
@@ -2776,7 +2717,6 @@ public class SilentFloatingWindow {
                     public void onScaleEnd(ScaleGestureDetector detector) {
                         pinching = false;
                         persistGeometry();
-                        resizeDisplayToWindow();
                         schedulePostResizeFrameCheck();
                     }
                 });
@@ -2854,7 +2794,6 @@ public class SilentFloatingWindow {
             }
             if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
                 persistGeometry();
-                resizeDisplayToWindow();
                 schedulePostResizeFrameCheck();
                 return true;
             }
