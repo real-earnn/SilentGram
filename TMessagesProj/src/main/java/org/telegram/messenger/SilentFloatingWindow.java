@@ -168,8 +168,9 @@ public class SilentFloatingWindow {
      * content with an opaque view and never takes touches, so the
      * screen keeps rendering behind it and taps reach the app. The
      * frame check samples the TextureView directly, so the overlay
-     * cannot affect it. Null until buildOverlay runs. */
-    private View loadingOverlay;
+     * cannot affect it. Null until buildOverlay runs. FrameLayout (not
+     * View): buildOverlay adds the spinner box to it with addView(). */
+    private FrameLayout loadingOverlay;
     private Runnable loadingHideRunnable;
     private WindowManager.LayoutParams windowParams;
     private SurfaceTexture surfaceTexture;
