@@ -23116,7 +23116,9 @@ public class MessagesController extends BaseController implements NotificationCe
                 new AlertDialog(fragment.getParentActivity(), AlertDialog.ALERT_TYPE_SPINNER)
             };
             boolean[] canceled = new boolean[]{false};
-            getMessagesController().getUserNameResolver().resolve(username, (peerId) -> {
+            // SilentGram: keep the resolve-cancel Runnable so a stuck resolve can be
+            // cancelled from the UI instead of hanging the spinner forever.
+            Runnable cancelResolve = getMessagesController().getUserNameResolver().resolve(username, (peerId) -> {
                 try {
                     if (progress != null) {
                         progress.end();
@@ -23149,14 +23151,24 @@ public class MessagesController extends BaseController implements NotificationCe
                 }
             });
             if (progress != null) {
-                progress.onCancel(() -> canceled[0] = true);
+                progress.onCancel(() -> {
+                    canceled[0] = true;
+                    if (cancelResolve != null) {
+                        cancelResolve.run();
+                    }
+                });
                 progress.init();
             } else {
                 AndroidUtilities.runOnUIThread(() -> {
                     if (progressDialog[0] == null) {
                         return;
                     }
-                    progressDialog[0].setOnCancelListener(dialog -> canceled[0] = true);
+                    progressDialog[0].setOnCancelListener(dialog -> {
+                        canceled[0] = true;
+                        if (cancelResolve != null) {
+                            cancelResolve.run();
+                        }
+                    });
                     fragment.showDialog(progressDialog[0]);
                 }, 500);
             }

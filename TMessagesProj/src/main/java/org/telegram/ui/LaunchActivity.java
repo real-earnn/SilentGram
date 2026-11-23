@@ -4391,7 +4391,18 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             if (progress != null) {
                 progress.init();
             }
-            MessagesController.getInstance(intentAccount).getUserNameResolver().resolve(username, referrer, (peerId) -> {
+            // SilentGram: keep the resolve-cancel Runnable and wire it to the
+            // progress cancel, so a stuck resolve can be cancelled from the UI
+            // instead of leaving the button spinner spinning forever.
+            Runnable[] cancelResolve = new Runnable[1];
+            if (progress != null) {
+                progress.onCancel(() -> {
+                    if (cancelResolve[0] != null) {
+                        cancelResolve[0].run();
+                    }
+                });
+            }
+            cancelResolve[0] = MessagesController.getInstance(intentAccount).getUserNameResolver().resolve(username, referrer, (peerId) -> {
                 if (peerId != null && peerId == Long.MAX_VALUE) {
                     try {
                         dismissLoading.run();

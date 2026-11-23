@@ -18,12 +18,31 @@ public class UserNameResolver {
     private final int currentAccount;
     private final static long CACHE_TIME = 1000 * 60 * 60; //1 hour
 
+    // SilentGram: a resolveUsername RPC has no client-side timeout upstream, and the
+    // native layer retries generic requests forever (no retry cap — only downloads
+    // have one). A lost response leaves the button spinner spinning forever, and the
+    // dedup entry then blocks every later tap for the same username. Bound every
+    // resolve: 5s per attempt, one retry on a fresh request, then fail all consumers
+    // with null so the UI always gets a definitive answer (spinner dismissed, error
+    // bulletin shown) instead of hanging forever.
+    private final static long RESOLVE_TIMEOUT_MS = 5000;
+    private final static int RESOLVE_MAX_ATTEMPTS = 2;
+
     UserNameResolver(int currentAccount) {
         this.currentAccount = currentAccount;
     }
 
     LruCache<String, CachedPeer> resolvedCache = new LruCache<>(100);
     HashMap<String, ArrayList<Utilities.Callback<Long>>> resolvingConsumers = new HashMap<>();
+    HashMap<String, ResolveState> resolvingStates = new HashMap<>();
+
+    private static class ResolveState {
+        String referrer;
+        int reqId;
+        int attempts;
+        int attemptId;
+        Runnable timeoutRunnable;
+    }
 
     public Runnable resolve(String username, Utilities.Callback<Long> resolveConsumer) {
         return resolve(username, null, resolveConsumer);
@@ -50,18 +69,24 @@ public class UserNameResolver {
         ArrayList<Utilities.Callback<Long>> consumers = resolvingConsumers.get(username);
         if (consumers != null) {
             consumers.add(resolveConsumer);
-            return null;
+            return cancelRunnable(username, resolveConsumer);
         }
         consumers = new ArrayList<>();
         consumers.add(resolveConsumer);
         resolvingConsumers.put(username, consumers);
 
+        ResolveState state = new ResolveState();
+        state.referrer = referrer;
+        resolvingStates.put(username, state);
+        sendResolveRequest(username, state);
+        return cancelRunnable(username, resolveConsumer);
+    }
 
-        TLObject req;
+    private TLObject buildResolveRequest(String username, String referrer) {
         if (AndroidUtilities.isNumeric(username)) {
             TLRPC.TL_contacts_resolvePhone resolvePhone = new TLRPC.TL_contacts_resolvePhone();
             resolvePhone.phone = username;
-            req = resolvePhone;
+            return resolvePhone;
         } else {
             TLRPC.TL_contacts_resolveUsername resolveUsername = new TLRPC.TL_contacts_resolveUsername();
             resolveUsername.username = username;
@@ -69,15 +94,28 @@ public class UserNameResolver {
                 resolveUsername.flags |= 1;
                 resolveUsername.referer = referrer;
             }
-            req = resolveUsername;
+            return resolveUsername;
         }
-        final int reqId = ConnectionsManager.getInstance(currentAccount).sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
+    }
+
+    private void sendResolveRequest(final String username, final ResolveState state) {
+        state.attempts++;
+        state.attemptId++;
+        final int attemptId = state.attemptId;
+        TLObject req = buildResolveRequest(username, state.referrer);
+        state.reqId = ConnectionsManager.getInstance(currentAccount).sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
+            ResolveState current = resolvingStates.get(username);
+            if (current != state || state.attemptId != attemptId) {
+                return;
+            }
+            cancelResolveTimeout(state);
             ArrayList<Utilities.Callback<Long>> finalConsumers = resolvingConsumers.remove(username);
+            resolvingStates.remove(username);
             if (finalConsumers == null) {
                 return;
             }
             if (error != null) {
-                if (error != null && error.text != null && "STARREF_EXPIRED".equals(error.text)) {
+                if (error.text != null && "STARREF_EXPIRED".equals(error.text)) {
                     for (int i = 0; i < finalConsumers.size(); i++) {
                         finalConsumers.get(i).run(Long.MAX_VALUE);
                     }
@@ -87,7 +125,7 @@ public class UserNameResolver {
                     finalConsumers.get(i).run(null);
                 }
 
-                if (error != null && error.text != null && error.text.contains("FLOOD_WAIT")) {
+                if (error.text != null && error.text.contains("FLOOD_WAIT")) {
                     BaseFragment fragment = LaunchActivity.getLastFragment();
                     if (fragment != null) {
                         BulletinFactory.of(fragment).createErrorBulletin(LocaleController.getString(R.string.FloodWait)).show();
@@ -107,11 +145,64 @@ public class UserNameResolver {
                 finalConsumers.get(i).run(peerId);
             }
         }, ConnectionsManager.RequestFlagFailOnServerErrors));
-        return () -> {
+        scheduleResolveTimeout(username, state);
+    }
+
+    private void scheduleResolveTimeout(final String username, final ResolveState state) {
+        cancelResolveTimeout(state);
+        state.timeoutRunnable = () -> onResolveTimeout(username, state);
+        AndroidUtilities.runOnUIThread(state.timeoutRunnable, RESOLVE_TIMEOUT_MS);
+    }
+
+    private void cancelResolveTimeout(ResolveState state) {
+        if (state.timeoutRunnable != null) {
+            AndroidUtilities.cancelRunOnUIThread(state.timeoutRunnable);
+            state.timeoutRunnable = null;
+        }
+    }
+
+    private void onResolveTimeout(final String username, final ResolveState state) {
+        if (resolvingStates.get(username) != state) {
+            return;
+        }
+        ArrayList<Utilities.Callback<Long>> consumers = resolvingConsumers.get(username);
+        if (consumers == null) {
+            resolvingStates.remove(username);
+            return;
+        }
+        if (state.attempts < RESOLVE_MAX_ATTEMPTS) {
+            FileLog.d("resolve username timeout, retrying " + username + " attempt " + (state.attempts + 1));
+            ConnectionsManager.getInstance(currentAccount).cancelRequest(state.reqId, true);
+            sendResolveRequest(username, state);
+        } else {
+            FileLog.d("resolve username timeout, giving up " + username);
             resolvingConsumers.remove(username);
-            ConnectionsManager.getInstance(currentAccount).cancelRequest(reqId, true);
+            resolvingStates.remove(username);
+            ArrayList<Utilities.Callback<Long>> finalConsumers = new ArrayList<>(consumers);
+            for (int i = 0; i < finalConsumers.size(); i++) {
+                finalConsumers.get(i).run(null);
+            }
+        }
+    }
+
+    private Runnable cancelRunnable(final String username, final Utilities.Callback<Long> resolveConsumer) {
+        return () -> {
+            ArrayList<Utilities.Callback<Long>> consumers = resolvingConsumers.get(username);
+            if (consumers == null) {
+                return;
+            }
+            consumers.remove(resolveConsumer);
+            if (!consumers.isEmpty()) {
+                return;
+            }
+            ResolveState state = resolvingStates.remove(username);
+            resolvingConsumers.remove(username);
+            if (state != null) {
+                cancelResolveTimeout(state);
+                ConnectionsManager.getInstance(currentAccount).cancelRequest(state.reqId, true);
+            }
         };
-    };
+    }
 
     public void update(TLRPC.User oldUser, TLRPC.User user) {
         if (oldUser == null || user == null || oldUser.username == null || TextUtils.equals(oldUser.username, user.username)) {
