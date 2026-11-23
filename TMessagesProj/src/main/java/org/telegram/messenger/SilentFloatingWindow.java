@@ -1589,9 +1589,17 @@ public class SilentFloatingWindow {
                 // so do not tear it down yet. Recreate the activity instead
                 // (the v2.0.25 manual-resize cure, done programmatically);
                 // if the fresh window is still black, fall through to the
-                // display rebind below. Gated on resumed: a stopped activity
-                // draws nothing by design, and recreating it cannot help.
-                if (floatingResumed && tryRecreateFloatingActivity()) {
+                // display rebind below.
+                // v2.0.30: NO resumed gate any more. After Home the system
+                // never delivers onResume(), so floatingResumed stays false
+                // and this rung never fired — the window stayed transparent
+                // after every resize (v2.0.29 device test). A stopped
+                // activity draws nothing, which is exactly why it must be
+                // recreated: recreation forces a fresh instance + first
+                // frame, the same cure a config-change resize gave in
+                // v2.0.25 (the activity declares screenSize + density in
+                // configChanges, so a resize alone never recreates it).
+                if (tryRecreateFloatingActivity()) {
                     scheduleFrameCheck(3000);
                     return;
                 }
@@ -1661,10 +1669,16 @@ public class SilentFloatingWindow {
         if (virtualDisplay == null || textureView == null) {
             return;
         }
-        int[] size = currentDisplaySize();
-        int w = size[0];
-        int h = size[1];
-        int dpi = size[2];
+        // v2.0.30: size from the WINDOW geometry, not the TextureView.
+        // At gesture end updateLayout() is still in flight (async), so
+        // the TextureView can still report the OLD size and this resize
+        // would no-op — the virtual display would stay at the old size
+        // while the view's buffer is already the new one. windowWidthPx
+        // / windowHeightPx are the size the view is about to be laid out
+        // at, so they are the right source of truth here.
+        int w = windowWidthPx;
+        int h = Math.max(1, windowHeightPx - barHeightPx);
+        int dpi = displayDensityForWidth(w);
         if (w == displayWidthPx && h == displayHeightPx && dpi == displayDensityDpi) {
             return;
         }
