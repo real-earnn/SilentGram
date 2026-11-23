@@ -6,6 +6,7 @@ import android.app.ActivityOptions;
 import android.app.Dialog;
 import android.content.Context;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Matrix;
 import android.graphics.Outline;
@@ -37,6 +38,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupWindow;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
@@ -160,6 +162,15 @@ public class SilentFloatingWindow {
     private DisplayManager displayManager;
     private FrameLayout rootView;
     private TextureView textureView;
+    /** v2.0.31: 3s non-blocking loading overlay on floating open (see
+     * buildOverlay / showLoadingOverlay). A SEPARATE layer above the
+     * TextureView with a transparent background — it never covers the
+     * content with an opaque view and never takes touches, so the
+     * screen keeps rendering behind it and taps reach the app. The
+     * frame check samples the TextureView directly, so the overlay
+     * cannot affect it. Null until buildOverlay runs. */
+    private View loadingOverlay;
+    private Runnable loadingHideRunnable;
     private WindowManager.LayoutParams windowParams;
     private SurfaceTexture surfaceTexture;
     private Surface surface;
@@ -689,6 +700,10 @@ public class SilentFloatingWindow {
             windowManager.addView(rootView, windowParams);
             rootView.requestFocus();
             active = true;
+
+            // v2.0.31: 3s non-blocking loading over the content while the
+            // activity cold-starts (see showLoadingOverlay).
+            showLoadingOverlay();
 
             // The floating activity is launched from the TextureView's
             // SurfaceTextureListener once its texture is ready (see
@@ -1476,6 +1491,37 @@ public class SilentFloatingWindow {
         scheduleFrameCheck(2000);
     }
 
+    /** v2.0.31: show the 3s loading overlay (see buildOverlay). Called
+     * from start() once the overlay window is visible. Auto-hides after
+     * exactly 3s via a delayed post; the screen keeps rendering behind
+     * it the whole time, and touches pass through to the content. */
+    private void showLoadingOverlay() {
+        if (loadingOverlay == null) {
+            return;
+        }
+        if (loadingHideRunnable != null) {
+            AndroidUtilities.cancelRunOnUIThread(loadingHideRunnable);
+            loadingHideRunnable = null;
+        }
+        loadingOverlay.setVisibility(View.VISIBLE);
+        loadingHideRunnable = () -> {
+            loadingHideRunnable = null;
+            hideLoadingOverlay();
+        };
+        AndroidUtilities.runOnUIThread(loadingHideRunnable, 3000);
+    }
+
+    /** Hide the loading overlay immediately (auto-hide target + teardown). */
+    private void hideLoadingOverlay() {
+        if (loadingHideRunnable != null) {
+            AndroidUtilities.cancelRunOnUIThread(loadingHideRunnable);
+            loadingHideRunnable = null;
+        }
+        if (loadingOverlay != null) {
+            loadingOverlay.setVisibility(View.GONE);
+        }
+    }
+
     /**
      * One frame check: sample the TextureView for non-black pixels. On
      * failure, retry with a 10s cooldown (lastFrameRecoveryAtMs):
@@ -1688,6 +1734,21 @@ public class SilentFloatingWindow {
             displayHeightPx = h;
             displayDensityDpi = dpi;
             FileLog.d("SilentFloatingWindow: virtual display resized to " + w + "x" + h + " dpi=" + dpi);
+            // v2.0.31: the activity declares screenSize|density in
+            // configChanges, so a VD resize never recreates it — and a
+            // stopped activity (after Home) never repaints at the new
+            // size, so the frame drops to transparent the instant the
+            // finger lifts (during the drag the old frame is just scaled
+            // and stays visible). Force a repaint NOW, at gesture end,
+            // instead of waiting for the frame check's rung: give this
+            // resize a fresh recreate chance and take it. The 10s
+            // cooldown inside tryRecreateFloatingActivity() guards
+            // against storms; if it is cooling down, the frame check's
+            // rebind recovery remains the fallback. All three
+            // gesture-end paths (corner grip, bar pinch, content pinch)
+            // and rotation funnel through here.
+            activityRecreateDoneForDisplay = false;
+            tryRecreateFloatingActivity();
         } catch (Exception e) {
             FileLog.e(e);
         }
@@ -1939,6 +2000,10 @@ public class SilentFloatingWindow {
             AndroidUtilities.cancelRunOnUIThread(frameCheck);
             frameCheck = null;
         }
+        if (loadingHideRunnable != null) {
+            AndroidUtilities.cancelRunOnUIThread(loadingHideRunnable);
+            loadingHideRunnable = null;
+        }
         active = false;
         minimized = false;
         launchActivity = null;
@@ -1968,6 +2033,7 @@ public class SilentFloatingWindow {
         }
         rootView = null;
         textureView = null;
+        loadingOverlay = null;
         try {
             if (virtualDisplay != null) {
                 virtualDisplay.release();
@@ -2124,6 +2190,57 @@ public class SilentFloatingWindow {
         });
         textureView.setOnTouchListener(new ContentTouchListener());
         contentContainer.addView(textureView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // v2.0.31: 3s loading overlay (user order). A spinner + label on a
+        // TRANSPARENT layer above the TextureView — the screen renders
+        // behind it while the activity cold-starts (~3s on the user's
+        // phone), then it hides itself. Deliberately NOT the v2.0.28
+        // overlay (removed at the user's order): that one blocked the
+        // screen; this one is not clickable, not focusable and has no
+        // full-screen background, so touches fall straight through to
+        // the TextureView below and the frame check (which samples the
+        // TextureView) is unaffected. The spinner + label sit on a small
+        // dark chip so they stay readable on any chat background.
+        // Created GONE; shown by showLoadingOverlay() on open.
+        loadingOverlay = new FrameLayout(ctx);
+        loadingOverlay.setClickable(false);
+        loadingOverlay.setFocusable(false);
+        loadingOverlay.setVisibility(View.GONE);
+        LinearLayout loadingBox = new LinearLayout(ctx);
+        loadingBox.setOrientation(LinearLayout.VERTICAL);
+        loadingBox.setGravity(Gravity.CENTER);
+        loadingBox.setClickable(false);
+        loadingBox.setFocusable(false);
+        GradientDrawable loadingBoxBg = new GradientDrawable();
+        loadingBoxBg.setShape(GradientDrawable.RECTANGLE);
+        loadingBoxBg.setColor(0xCC000000);
+        loadingBoxBg.setCornerRadius(AndroidUtilities.dp(12));
+        loadingBox.setBackground(loadingBoxBg);
+        loadingBox.setPadding(AndroidUtilities.dp(16), AndroidUtilities.dp(16), AndroidUtilities.dp(16), AndroidUtilities.dp(16));
+        ProgressBar loadingSpinner = new ProgressBar(ctx);
+        loadingSpinner.setIndeterminate(true);
+        loadingSpinner.setIndeterminateTintList(ColorStateList.valueOf(0xFFFFFFFF));
+        loadingSpinner.setClickable(false);
+        loadingSpinner.setFocusable(false);
+        loadingBox.addView(loadingSpinner, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        TextView loadingLabel = new TextView(ctx);
+        loadingLabel.setText("Loading…");
+        loadingLabel.setTextColor(0xFFFFFFFF);
+        loadingLabel.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 14);
+        loadingLabel.setGravity(Gravity.CENTER);
+        loadingLabel.setClickable(false);
+        loadingLabel.setFocusable(false);
+        LinearLayout.LayoutParams loadingLabelLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        loadingLabelLp.topMargin = AndroidUtilities.dp(8);
+        loadingBox.addView(loadingLabel, loadingLabelLp);
+        FrameLayout.LayoutParams loadingBoxLp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        loadingBoxLp.gravity = Gravity.CENTER;
+        loadingOverlay.addView(loadingBox, loadingBoxLp);
+        contentContainer.addView(loadingOverlay, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // Top bar: drag handle + expand + close. It sits ABOVE the app area
