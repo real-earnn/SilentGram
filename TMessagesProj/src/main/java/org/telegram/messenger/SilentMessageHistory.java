@@ -361,7 +361,7 @@ public class SilentMessageHistory {
             // Fall through to sender names.
         }
         // Fall back: the most frequent sender name in the history.
-        List<Entry> entries = getHistory(dialogId);
+        List<Entry> entries = getHistory(account, dialogId);
         String best = "";
         int bestCount = 0;
         java.util.HashMap<String, Integer> counts = new java.util.HashMap<>();
