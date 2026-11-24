@@ -79,9 +79,9 @@ public class SilentDeletedChatsActivity extends BaseFragment {
 
     private void reload() {
         rows.clear();
-        List<Long> dialogs = SilentMessageHistory.getDialogsWithHistory();
+        List<Long> dialogs = SilentMessageHistory.getDialogsWithHistory(currentAccount);
         for (long did : dialogs) {
-            List<SilentMessageHistory.Entry> entries = SilentMessageHistory.getHistory(did);
+            List<SilentMessageHistory.Entry> entries = SilentMessageHistory.getHistory(currentAccount, did);
             int del = 0, ed = 0;
             for (SilentMessageHistory.Entry e : entries) {
                 if (e.kind.equals("deleted")) {

@@ -22132,7 +22132,7 @@ public class ChatActivity extends BaseFragment implements
                 if (isMyChat) {
                     @SuppressWarnings("unchecked")
                     java.util.ArrayList<Integer> ids = (java.util.ArrayList<Integer>) args[0];
-                    org.telegram.messenger.SilentMessageHistory.onMessagesDeleted(dialog_id, ids);
+                    org.telegram.messenger.SilentMessageHistory.onMessagesDeleted(currentAccount, dialog_id, ids);
                 }
             } catch (Exception e) {
                 // Never break notification handling for history.
@@ -27980,6 +27980,12 @@ public class ChatActivity extends BaseFragment implements
         if (obj == null || obj.silentTombstone || obj.scheduled) {
             return false;
         }
+        // SilentGram v2.0.34: tombstones are personal-only — never in a
+        // group, channel or bot chat, where a bot's auto-delete of spam
+        // must stay deleted.
+        if (!org.telegram.messenger.SilentMessageHistory.isPersonalChat(currentAccount, dialog_id)) {
+            return false;
+        }
         if (chatMode != MODE_DEFAULT || chatAdapter == null || chatAdapter.isFiltered) {
             return false;
         }
@@ -28071,7 +28077,7 @@ public class ChatActivity extends BaseFragment implements
         }
         java.util.List<org.telegram.messenger.SilentMessageHistory.Entry> history;
         try {
-            history = org.telegram.messenger.SilentMessageHistory.getHistory(dialog_id);
+            history = org.telegram.messenger.SilentMessageHistory.getHistory(currentAccount, dialog_id);
         } catch (Exception e) {
             return;
         }

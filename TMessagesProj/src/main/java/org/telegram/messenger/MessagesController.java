@@ -17665,11 +17665,22 @@ public class MessagesController extends BaseController implements NotificationCe
 
     protected void deleteMessagesByPush(long dialogId, ArrayList<Integer> ids, long channelId) {
         getMessagesStorage().getStorageQueue().postRunnable(() -> {
+            // SilentGram v2.0.34 anti-delete-chat (personal 1:1 only): same
+            // whole-dialog wipe filter as processUpdateArray, for the push
+            // ingress path. Already on the storage queue, so the filter
+            // runs directly. If nothing is left to delete, stop here — no
+            // notification, no DB delete.
+            final ArrayList<Integer> silentIds = channelId == 0
+                    ? getMessagesStorage().silentFilterRemoteDeletes(ids)
+                    : ids;
+            if (silentIds == null || silentIds.isEmpty()) {
+                return;
+            }
             AndroidUtilities.runOnUIThread(() -> {
-                getNotificationCenter().postNotificationName(NotificationCenter.messagesDeleted, ids, channelId, false);
+                getNotificationCenter().postNotificationName(NotificationCenter.messagesDeleted, silentIds, channelId, false);
                 if (channelId == 0) {
-                    for (int b = 0, size2 = ids.size(); b < size2; b++) {
-                        Integer id = ids.get(b);
+                    for (int b = 0, size2 = silentIds.size(); b < size2; b++) {
+                        Integer id = silentIds.get(b);
                         MessageObject obj = dialogMessagesByIds.get(id);
                         if (obj != null) {
                             obj.deleted = true;
@@ -17680,8 +17691,8 @@ public class MessagesController extends BaseController implements NotificationCe
                     if (objs != null) {
                         for (int i = 0; i < objs.size(); ++i) {
                             MessageObject obj = objs.get(i);
-                            for (int b = 0, size2 = ids.size(); b < size2; b++) {
-                                if (obj.getId() == ids.get(b)) {
+                            for (int b = 0, size2 = silentIds.size(); b < size2; b++) {
+                                if (obj.getId() == silentIds.get(b)) {
                                     obj.deleted = true;
                                     break;
                                 }
@@ -17690,9 +17701,9 @@ public class MessagesController extends BaseController implements NotificationCe
                     }
                 }
             });
-            getMessagesStorage().deletePushMessages(dialogId, ids);
-            ArrayList<Long> dialogIds = getMessagesStorage().markMessagesAsDeleted(dialogId, ids, false, true, 0, 0);
-            getMessagesStorage().updateDialogsWithDeletedMessages(dialogId, channelId, ids, dialogIds);
+            getMessagesStorage().deletePushMessages(dialogId, silentIds);
+            ArrayList<Long> dialogIds = getMessagesStorage().markMessagesAsDeleted(dialogId, silentIds, false, true, 0, 0);
+            getMessagesStorage().updateDialogsWithDeletedMessages(dialogId, channelId, silentIds, dialogIds);
         });
     }
 
@@ -21167,6 +21178,29 @@ public class MessagesController extends BaseController implements NotificationCe
         LongSparseIntArray markAsReadMessagesOutboxFinal = markAsReadMessagesOutbox;
         LongSparseArray<ArrayList<Integer>> markContentAsReadMessagesFinal = markContentAsReadMessages;
         SparseIntArray markAsReadEncryptedFinal = markAsReadEncrypted;
+        // SilentGram v2.0.34 anti-delete-chat (personal 1:1 only): a remote
+        // whole-chat delete arrives here as updateDeleteMessages with
+        // (nearly) every message id of the dialog. If the ids would wipe
+        // an entire personal dialog, drop them now — before the UI
+        // notification AND the storage delete below see them — so the
+        // chat and its messages stay on our side. Single-message deletes
+        // still apply (and are still recorded by Deleted History).
+        // Local deletions are unaffected: they are applied synchronously
+        // in deleteMessages before the server echo arrives, so their ids
+        // are already gone from the DB and pass straight through.
+        if (deletedMessages != null) {
+            ArrayList<Integer> silentUserDeletes = deletedMessages.get(0);
+            if (silentUserDeletes != null && !silentUserDeletes.isEmpty()) {
+                ArrayList<Integer> silentFiltered = getMessagesStorage().silentFilterRemoteDeletesSync(silentUserDeletes);
+                if (silentFiltered.isEmpty()) {
+                    deletedMessages.delete(0);
+                } else if (silentFiltered.size() != silentUserDeletes.size()) {
+                    silentUserDeletes.clear();
+                    silentUserDeletes.addAll(silentFiltered);
+                }
+            }
+        }
+
         LongSparseArray<ArrayList<Integer>> deletedMessagesFinal = deletedMessages;
         LongSparseArray<ArrayList<Integer>> deletedQuickRepliesMessagesFinal = deletedQuickReplyMessages;
         LongSparseArray<ArrayList<Integer>> scheduledDeletedMessagesFinal = scheduledDeletedMessages;

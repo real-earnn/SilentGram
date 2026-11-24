@@ -124,11 +124,34 @@ public class SilentMessageHistory {
     }
 
     /**
+     * SilentGram v2.0.34: Deleted & Edited History is PERSONAL-ONLY.
+     * A dialog counts as personal only when it is a 1:1 chat with a real
+     * user — not a group, channel, bot, Saved Messages (self) or secret
+     * chat. Groups/channels/bots are excluded because a group bot's
+     * auto-delete of spam would otherwise stay visible in history, which
+     * channel/group owners will not promote.
+     */
+    public static boolean isPersonalChat(int account, long dialogId) {
+        if (!DialogObject.isUserDialog(dialogId)) {
+            return false;
+        }
+        try {
+            TLRPC.User u = MessagesController.getInstance(account).getUser(dialogId);
+            if (u == null) {
+                return false;
+            }
+            return !UserObject.isUserSelf(u) && !UserObject.isBot(u);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
      * Called whenever a message is shown. If the text changed since we last
      * saw it, the OLD text is saved as edit history.
      */
-    public static void onMessageShown(long dialogId, int msgId, String text, String sender, long senderId, long time) {
-        if (text == null || text.isEmpty()) {
+    public static void onMessageShown(int account, long dialogId, int msgId, String text, String sender, long senderId, long time) {
+        if (text == null || text.isEmpty() || !isPersonalChat(account, dialogId)) {
             return;
         }
         loadCache();
@@ -139,7 +162,7 @@ public class SilentMessageHistory {
         }
         if (old != null && !text.equals(old[0])) {
             // Edited — keep the old text (and its sender, id included).
-            addHistory(new Entry(dialogId, msgId, old[0], old[1], silentCacheSenderId(old), Long.parseLong(old[2]), "edited"));
+            addHistory(account, new Entry(dialogId, msgId, old[0], old[1], silentCacheSenderId(old), Long.parseLong(old[2]), "edited"));
         }
         synchronized (cache) {
             cache.put(key, new String[]{text, sender == null ? "" : sender, String.valueOf(time), String.valueOf(senderId)});
@@ -148,8 +171,8 @@ public class SilentMessageHistory {
     }
 
     /** Called when messages are deleted in a chat — recover their cached text. */
-    public static void onMessagesDeleted(long dialogId, List<Integer> ids) {
-        if (ids == null || ids.isEmpty()) {
+    public static void onMessagesDeleted(int account, long dialogId, List<Integer> ids) {
+        if (ids == null || ids.isEmpty() || !isPersonalChat(account, dialogId)) {
             return;
         }
         loadCache();
@@ -160,14 +183,17 @@ public class SilentMessageHistory {
                 old = cache.remove(key);
             }
             if (old != null && old[0] != null && !old[0].isEmpty()) {
-                addHistory(new Entry(dialogId, id, old[0], old[1], silentCacheSenderId(old), Long.parseLong(old[2]), "deleted"));
+                addHistory(account, new Entry(dialogId, id, old[0], old[1], silentCacheSenderId(old), Long.parseLong(old[2]), "deleted"));
             }
         }
         saveCache();
     }
 
-    private static void addHistory(Entry e) {
-        List<Entry> list = getHistory(e.dialogId);
+    private static void addHistory(int account, Entry e) {
+        if (!isPersonalChat(account, e.dialogId)) {
+            return;
+        }
+        List<Entry> list = getHistoryRaw(e.dialogId);
         // Don't duplicate the same message+kind twice.
         for (Entry x : list) {
             if (x.msgId == e.msgId && x.kind.equals(e.kind) && x.text.equals(e.text)) {
@@ -181,7 +207,19 @@ public class SilentMessageHistory {
         saveHistory(e.dialogId, list);
     }
 
-    public static List<Entry> getHistory(long dialogId) {
+    /**
+     * Personal-only read: history of a group, channel, bot or Saved
+     * Messages never surfaces, even if it was stored by an older build.
+     */
+    public static List<Entry> getHistory(int account, long dialogId) {
+        if (!isPersonalChat(account, dialogId)) {
+            return new ArrayList<>();
+        }
+        return getHistoryRaw(dialogId);
+    }
+
+    /** Ungated read — only for internal capture/purge bookkeeping. */
+    private static List<Entry> getHistoryRaw(long dialogId) {
         ArrayList<Entry> out = new ArrayList<>();
         try {
             JSONArray arr = new JSONArray(prefs().getString("msg_history_" + dialogId, "[]"));
@@ -200,9 +238,9 @@ public class SilentMessageHistory {
      * versions a message had before its current text. Used by the inline
      * "View edit history" line under edited messages in the chat.
      */
-    public static List<Entry> getHistoryForMessage(long dialogId, int msgId) {
+    public static List<Entry> getHistoryForMessage(int account, long dialogId, int msgId) {
         ArrayList<Entry> out = new ArrayList<>();
-        for (Entry e : getHistory(dialogId)) {
+        for (Entry e : getHistory(account, dialogId)) {
             if (e.msgId == msgId && "edited".equals(e.kind)) {
                 out.add(e);
             }
@@ -244,7 +282,7 @@ public class SilentMessageHistory {
      */
     public static void removeEntry(long dialogId, int msgId) {
         try {
-            List<Entry> list = getHistory(dialogId);
+            List<Entry> list = getHistoryRaw(dialogId);
             boolean changed = false;
             Iterator<Entry> it = list.iterator();
             while (it.hasNext()) {
@@ -270,8 +308,8 @@ public class SilentMessageHistory {
         }
     }
 
-    /** All dialogIds that have any deleted/edited history. */
-    public static List<Long> getDialogsWithHistory() {
+    /** All PERSONAL dialogIds that have any deleted/edited history. */
+    public static List<Long> getDialogsWithHistory(int account) {
         ArrayList<Long> out = new ArrayList<>();
         try {
             java.util.Map<String, ?> all = prefs().getAll();
@@ -279,7 +317,10 @@ public class SilentMessageHistory {
                 if (key.startsWith("msg_history_")) {
                     try {
                         long did = Long.parseLong(key.substring("msg_history_".length()));
-                        if (!getHistory(did).isEmpty()) {
+                        if (!isPersonalChat(account, did)) {
+                            continue;
+                        }
+                        if (!getHistoryRaw(did).isEmpty()) {
                             out.add(did);
                         }
                     } catch (Exception e) {
@@ -292,8 +333,8 @@ public class SilentMessageHistory {
         }
         // Newest first (by latest entry time).
         out.sort((a, b) -> {
-            List<Entry> la = getHistory(a);
-            List<Entry> lb = getHistory(b);
+            List<Entry> la = getHistoryRaw(a);
+            List<Entry> lb = getHistoryRaw(b);
             long ta = la.isEmpty() ? 0 : la.get(0).time;
             long tb = lb.isEmpty() ? 0 : lb.get(0).time;
             return Long.compare(tb, ta);

@@ -89,7 +89,7 @@ public class SilentHistoryActivity extends BaseFragment {
     }
 
     private void reload() {
-        entries = SilentMessageHistory.getHistory(dialogId);
+        entries = SilentMessageHistory.getHistory(currentAccount, dialogId);
         if (adapter != null) {
             adapter.notifyDataSetChanged();
         }

@@ -1097,7 +1097,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             return null;
         }
         java.util.List<org.telegram.messenger.SilentMessageHistory.Entry> entries =
-                org.telegram.messenger.SilentMessageHistory.getHistoryForMessage(messageObject.getDialogId(), messageObject.getId());
+                org.telegram.messenger.SilentMessageHistory.getHistoryForMessage(messageObject.currentAccount, messageObject.getDialogId(), messageObject.getId());
         if (entries.isEmpty()) {
             return null;
         }
@@ -16232,7 +16232,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
             return; // already built for this message + state
         }
         java.util.List<org.telegram.messenger.SilentMessageHistory.Entry> entries =
-                org.telegram.messenger.SilentMessageHistory.getHistoryForMessage(dialogId, msgId);
+                org.telegram.messenger.SilentMessageHistory.getHistoryForMessage(currentAccount, dialogId, msgId);
         if (entries.isEmpty()) {
             silentEditHistoryText = null;
             silentEditHistoryPadding = 0;
@@ -16294,7 +16294,7 @@ public class ChatMessageCell extends BaseCell implements SeekBar.SeekBarDelegate
                     shownText = messageObject.messageText.toString();
                 }
                 org.telegram.messenger.SilentMessageHistory.onMessageShown(
-                        messageObject.getDialogId(), messageObject.getId(),
+                        currentAccount, messageObject.getDialogId(), messageObject.getId(),
                         shownText, sender, senderId,
                         (long) messageObject.messageOwner.date * 1000);
             }

@@ -70,8 +70,8 @@ public class SilentAllHistoryActivity extends BaseFragment {
 
     private void reload() {
         entries.clear();
-        for (long did : SilentMessageHistory.getDialogsWithHistory()) {
-            entries.addAll(SilentMessageHistory.getHistory(did));
+        for (long did : SilentMessageHistory.getDialogsWithHistory(currentAccount)) {
+            entries.addAll(SilentMessageHistory.getHistory(currentAccount, did));
         }
         entries.sort((a, b) -> Long.compare(b.time, a.time));
         if (adapter != null) {

@@ -18309,6 +18309,150 @@ public class MessagesStorage extends BaseController {
         return chat[0];
     }
 
+    // SilentGram v2.0.34: anti-delete-chat (personal 1:1 only).
+    //
+    // When the other person in a 1:1 chat deletes the WHOLE chat for
+    // both, the server sends TL_updateDeleteMessages with (nearly) every
+    // message id of the dialog. If those ids would wipe the entire
+    // dialog, they are dropped here, so the chat and its messages stay
+    // on our side. Single-message deletes still apply (and are still
+    // recorded by Deleted History) — only a wipe of the whole dialog
+    // is kept.
+    //
+    // Local deletions are structurally unaffected: our own deletes are
+    // applied synchronously in MessagesController.deleteMessages before
+    // the server echo arrives, so by the time an echo reaches this
+    // filter its ids are already gone from the DB and pass straight
+    // through. Groups, channels, bots and Saved Messages are never
+    // filtered (only a 1:1 dialog with a real user counts).
+    //
+    // Runs on the storage queue thread — direct DB access, no latch.
+    public ArrayList<Integer> silentFilterRemoteDeletes(ArrayList<Integer> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return ids == null ? new ArrayList<>() : ids;
+        }
+        try {
+            return silentFilterRemoteDeletesInternal(ids);
+        } catch (Exception e) {
+            checkSQLException(e);
+            return new ArrayList<>(ids);
+        }
+    }
+
+    /**
+     * Same filter, callable from a non-storage thread (e.g.
+     * MessagesController.processUpdateArray). Same CountDownLatch +
+     * storage queue pattern as getUserSync above.
+     */
+    public ArrayList<Integer> silentFilterRemoteDeletesSync(ArrayList<Integer> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return ids == null ? new ArrayList<>() : ids;
+        }
+        CountDownLatch countDownLatch = new CountDownLatch(1);
+        ArrayList<Integer>[] out = new ArrayList[1];
+        storageQueue.postRunnable(() -> {
+            try {
+                out[0] = silentFilterRemoteDeletesInternal(ids);
+            } catch (Exception e) {
+                checkSQLException(e);
+                out[0] = new ArrayList<>(ids);
+            }
+            countDownLatch.countDown();
+        });
+        try {
+            countDownLatch.await();
+        } catch (Exception e) {
+            checkSQLException(e);
+            return new ArrayList<>(ids);
+        }
+        return out[0] != null ? out[0] : new ArrayList<>(ids);
+    }
+
+    // Runs on the storage queue thread. Resolves each id to its dialog
+    // (messages_v2.uid) and drops the ids that would wipe an entire
+    // personal 1:1 dialog. Ids not found in the DB (already deleted —
+    // e.g. the echo of our own delete) pass through untouched.
+    private ArrayList<Integer> silentFilterRemoteDeletesInternal(ArrayList<Integer> ids) {
+        ArrayList<Integer> keep = new ArrayList<>(ids);
+        SQLiteCursor cursor = null;
+        try {
+            String in = TextUtils.join(",", ids);
+            androidx.collection.LongSparseArray<ArrayList<Integer>> byDialog = new androidx.collection.LongSparseArray<>();
+            cursor = database.queryFinalized(String.format(Locale.US, "SELECT uid, mid FROM messages_v2 WHERE mid IN(%s) AND is_channel = 0", in));
+            try {
+                while (cursor.next()) {
+                    long uid = cursor.longValue(0);
+                    int mid = cursor.intValue(1);
+                    ArrayList<Integer> list = byDialog.get(uid);
+                    if (list == null) {
+                        list = new ArrayList<>();
+                        byDialog.put(uid, list);
+                    }
+                    list.add(mid);
+                }
+            } catch (Exception e) {
+                checkSQLException(e);
+            }
+            cursor.dispose();
+            cursor = null;
+            for (int i = 0; i < byDialog.size(); i++) {
+                long uid = byDialog.keyAt(i);
+                ArrayList<Integer> group = byDialog.valueAt(i);
+                if (!silentIsPersonalDialog(uid)) {
+                    continue;
+                }
+                int total = silentCountMessagesInDialog(uid);
+                if (total > 0 && group.size() >= total) {
+                    keep.removeAll(group);
+                }
+            }
+        } catch (Exception e) {
+            checkSQLException(e);
+            return new ArrayList<>(ids);
+        } finally {
+            if (cursor != null) {
+                cursor.dispose();
+            }
+        }
+        return keep;
+    }
+
+    // Personal 1:1 only: a user dialog whose user is a real person
+    // (not a bot, not ourselves). Runs on the storage queue thread.
+    private boolean silentIsPersonalDialog(long dialogId) {
+        if (!DialogObject.isUserDialog(dialogId)) {
+            return false;
+        }
+        try {
+            TLRPC.User u = getUser(dialogId);
+            if (u == null) {
+                return false;
+            }
+            return !UserObject.isUserSelf(u) && !UserObject.isBot(u);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    // Number of messages currently stored for a dialog. Runs on the
+    // storage queue thread. 0 on any failure (fail open: never block).
+    private int silentCountMessagesInDialog(long dialogId) {
+        SQLiteCursor cursor = null;
+        try {
+            cursor = database.queryFinalized(String.format(Locale.US, "SELECT COUNT(*) FROM messages_v2 WHERE uid = %d AND is_channel = 0", dialogId));
+            if (cursor.next()) {
+                return cursor.intValue(0);
+            }
+        } catch (Exception e) {
+            checkSQLException(e);
+        } finally {
+            if (cursor != null) {
+                cursor.dispose();
+            }
+        }
+        return 0;
+    }
+
     public TLRPC.User getUser(long userId) {
         TLRPC.User user = null;
         try {
