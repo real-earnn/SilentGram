@@ -748,8 +748,14 @@ public class SilentFloatingWindow {
 
     /**
      * Launch the floating activity ONTO the virtual display. Returns false
-     * when the launch could not even be attempted (no display, or the
-     * system refuses the display) — the caller then recovers to fullscreen.
+     * when the launch could not even be attempted (no display) or the real
+     * startActivity() threw — the caller then recovers to fullscreen.
+     *
+     * v2.0.35 (2026-11-25): the API 29+ pre-flight
+     * isActivityStartAllowedOnDisplay() is advisory only — Samsung
+     * Android 12 (One UI 4, SM-N975U, API 31) refuses our own virtual
+     * display in the pre-flight, so a refusal is logged and the real
+     * launch is attempted anyway (see the pre-flight block below).
      *
      * v2.0.23 — why the v2.0.22 launch landed on display 0 (verified
      * against AOSP Android 10 ActivityStarter + the toast string):
@@ -814,13 +820,28 @@ public class SilentFloatingWindow {
         // not use throws SecurityException. Check first so a refusal is
         // a named error, not a crash — and so a launch that would land
         // on display 0 is never attempted blind.
+        // v2.0.35 (2026-11-25): the pre-flight is advisory ONLY — it
+        // must never refuse the launch by itself. On Samsung Android 12
+        // (One UI 4, SM-N975U, API 31) isActivityStartAllowedOnDisplay()
+        // returns false for our own PUBLIC|OWN_CONTENT_ONLY virtual
+        // display even though the display was created by this app and
+        // the launch is ours (device test on v2.0.34: "launch on virtual
+        // display 14 not allowed", floating never started, recoverToMain
+        // relaunched fullscreen — the "jolt" the user saw). On Android 9
+        // the pre-flight is skipped entirely (API 29+ gate) and the same
+        // launch works, which proves the display and the intent are fine
+        // and only the check is over-strict. So a refusal is now logged
+        // (with "(pre-flight)" so the debug report still names it) and
+        // the real startActivity() is attempted anyway — it is the
+        // authority, and its SecurityException is caught below.
+        // lastStartError is deliberately NOT set here: if the real
+        // launch then succeeds, the debug report must not show a stale
+        // error for a floating window that is actually running.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             try {
                 ActivityManager am = (ActivityManager) launchCtx.getSystemService(Context.ACTIVITY_SERVICE);
                 if (am != null && !am.isActivityStartAllowedOnDisplay(launchCtx, vdId, intent)) {
-                    lastStartError = "launch on virtual display " + vdId + " not allowed";
-                    FileLog.e("SilentFloatingWindow: " + lastStartError);
-                    return false;
+                    FileLog.e("SilentFloatingWindow: launch on virtual display " + vdId + " not allowed (pre-flight) — attempting real launch anyway");
                 }
             } catch (Exception e) {
                 FileLog.e(e);
