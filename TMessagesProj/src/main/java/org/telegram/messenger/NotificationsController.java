@@ -4000,7 +4000,7 @@ public class NotificationsController extends BaseController implements Notificat
             if (channel.getImportance() == NotificationManager.IMPORTANCE_NONE) {
                 return false;
             }
-            if (Build.VERSION.SDK_INT >= 29 && !channel.getAllowBubbles()) {
+            if (Build.VERSION.SDK_INT >= 30 && !channel.canBubble()) {
                 return false;
             }
             return true;
