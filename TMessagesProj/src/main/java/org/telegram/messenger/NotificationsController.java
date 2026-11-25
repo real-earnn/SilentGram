@@ -3742,24 +3742,33 @@ public class NotificationsController extends BaseController implements Notificat
     // The bubble is the system's own floating window (draggable, resizable
     // by the system chrome); BubbleActivity hosts the real chat in bubble
     // mode, so typing works (it is a real activity on the default display).
-    // How it works (Android Bubbles API):
+    // How it works (Android Bubbles API), v2.0.37:
+    // - Triggered from the quick-action panel ("Open in Bubble Chat",
+    //   SilentQuickActions), never on Home press and never from a Settings
+    //   row (both removed in v2.0.37). showBubbleForDialog() posts the
+    //   bubble notification with autoExpand OFF, so the bubble icon
+    //   appears on the side of the screen; tapping it opens the chat in
+    //   the pop-up, tapping again collapses it (system behaviour). The
+    //   caller then finishes the activity, so only the bubble remains.
+    // - The notification is posted on the DIALOG'S OWN notification
+    //   channel (the same channel Telegram's own message notifications
+    //   use for this dialog — see getDialogChannelId). There is no
+    //   dedicated "silent_bubble" channel: because the bubble shares the
+    //   dialog's channel, future messages in that chat become bubbles
+    //   through Telegram's own message-notification path (showExtraNotifications
+    //   -> createNotificationShortcut with the same "ndid_" + did shortcut
+    //   id), and the system's per-conversation bubble allowance is keyed
+    //   by that same shortcut id. Nothing custom is tracked.
     // - API 30+ only (SharedConfig.chatBubbles defaults to SDK >= 30; the
     //   bubble metadata itself needs API 29+, auto-expand needs API 31+).
-    //   Below API 30 this returns false and the caller just closes to home.
-    // - The notification is posted while the app is in the foreground (Home
-    //   press / onUserLeaveHint), so setAutoExpandBubble(true) opens the
-    //   bubble immediately (Android only auto-expands foreground posts).
-    //   If the system processes it after the app is backgrounded, the
-    //   bubble still appears as its floating icon — one tap opens the chat.
+    //   Below API 30 this returns false and the caller stays in the chat
+    //   and shows the error.
     // - setSuppressNotification(true) when the chat is already open, so no
     //   notification appears in the shade — only the bubble.
-    // - If the user/system has bubbles disabled, the notification is posted
-    //   but no bubble appears (and it stays suppressed from the shade while
-    //   foreground) — the user just goes home, which is the fallback.
-    // - The bubble lives on its own dedicated channel ("silent_bubble") so
-    //   it never touches the dialog's message-channel settings.
-    private static final String SILENT_BUBBLE_CHANNEL_ID = "silent_bubble";
-    /** Notification id for the Home-press bubble (per account). Far from the
+    // - If the user/system has bubbles disabled for the dialog's channel,
+    //   this returns false with an error instead of posting a notification
+    //   that would never show a bubble.
+    /** Notification id for the menu-triggered bubble (per account). Far from the
      * summary id (account+1) and the per-dialog wear ids. */
     private int lastBubbleNotificationId;
     private String lastBubbleError;
@@ -3797,7 +3806,11 @@ public class NotificationsController extends BaseController implements Notificat
                 lastBubbleError = "channels cannot bubble";
                 return false;
             }
-            ensureBubbleChannel();
+            String channelId = getDialogChannelId(dialogId, name, chat);
+            if (channelId == null) {
+                lastBubbleError = "bubbles are off for this chat's notification channel";
+                return false;
+            }
             Context ctx = ApplicationLoader.applicationContext;
             Intent bubbleIntent = new Intent(ctx, BubbleActivity.class);
             bubbleIntent.setAction("com.tmessages.openchat" + Math.random() + Integer.MAX_VALUE);
@@ -3807,7 +3820,7 @@ public class NotificationsController extends BaseController implements Notificat
                 bubbleIntent.putExtra("chatId", -dialogId);
             }
             bubbleIntent.putExtra("currentAccount", currentAccount);
-            NotificationCompat.Builder builder = new NotificationCompat.Builder(ctx, SILENT_BUBBLE_CHANNEL_ID)
+            NotificationCompat.Builder builder = new NotificationCompat.Builder(ctx, channelId)
                     .setSmallIcon(R.drawable.icon_plane_crescent)
                     .setContentTitle(name)
                     .setContentText(LocaleController.getString(R.string.SilentBubbleNotification))
@@ -3838,7 +3851,7 @@ public class NotificationsController extends BaseController implements Notificat
         return lastBubbleError;
     }
 
-    /** Dismiss the Home-press bubble (cancels its notification). */
+    /** Dismiss the menu-triggered bubble (cancels its notification). */
     public void dismissBubble() {
         try {
             if (lastBubbleNotificationId != 0) {
@@ -3855,22 +3868,144 @@ public class NotificationsController extends BaseController implements Notificat
         return openedInBubbleDialogs.contains(dialogId);
     }
 
-    /** The dedicated channel for the Home-press bubble notification. */
-    private void ensureBubbleChannel() {
+    /**
+     * The notification channel id for a bubble for this dialog — the
+     * dialog's OWN channel, resolved exactly the way Telegram's own
+     * message notifications resolve it, so the bubble and the messages
+     * share one channel and one per-conversation bubble allowance.
+     * 1) A custom channel the user set for this dialog (cached in the
+     *    notifications preferences under "org.telegram.key<did>_<topic>_<hash>";
+     *    the same key validateChannelId() writes). Used only when it can
+     *    actually show a bubble (importance above NONE, bubbles allowed).
+     * 2) Otherwise the type-default channel, created/validated with the
+     *    type-global sound/vibration/priority/LED settings exactly as the
+     *    message path does (validateChannelId with the same arguments).
+     * Returns null when neither channel can show a bubble (e.g. the user
+     * turned bubbles off for the dialog's channel, or the dialog is
+     * muted AND the type-default channel is unusable) — the caller then
+     * reports the failure instead of posting a notification that would
+     * never appear as a bubble. A muted dialog falls through to the
+     * type-default channel: the bubble-open notification is not a message,
+     * so the dialog's mute does not silence it.
+     */
+    private String getDialogChannelId(long dialogId, String name, TLRPC.Chat chat) {
         if (Build.VERSION.SDK_INT < 26) {
-            return;
+            return null;
+        }
+        String custom = findCustomDialogChannelId(dialogId);
+        if (custom != null && channelUsableForBubble(custom)) {
+            return custom;
+        }
+        boolean isChannel = chat != null && ChatObject.isChannel(chat) && !chat.megagroup;
+        int type;
+        String soundPath;
+        int vibrate;
+        int importance;
+        int ledColor;
+        SharedPreferences prefs = getAccountInstance().getNotificationsSettings();
+        String defaultPath = Settings.System.DEFAULT_NOTIFICATION_URI.getPath();
+        if (isChannel) {
+            type = TYPE_CHANNEL;
+            soundPath = prefs.getString("ChannelSoundPath", defaultPath);
+            vibrate = prefs.getInt("vibrate_channel", 0);
+            importance = prefs.getInt("priority_channel", 1);
+            ledColor = prefs.getInt("ChannelLed", 0xff0000ff);
+        } else if (chat != null) {
+            type = TYPE_GROUP;
+            soundPath = prefs.getString("GroupSoundPath", defaultPath);
+            vibrate = prefs.getInt("vibrate_group", 0);
+            importance = prefs.getInt("priority_group", 1);
+            ledColor = prefs.getInt("GroupLed", 0xff0000ff);
+        } else {
+            type = TYPE_PRIVATE;
+            soundPath = prefs.getString("GlobalSoundPath", defaultPath);
+            vibrate = prefs.getInt("vibrate_messages", 0);
+            importance = prefs.getInt("priority_messages", 1);
+            ledColor = prefs.getInt("MessagesLed", 0xff0000ff);
+        }
+        long[] vibrationPattern;
+        if (vibrate == 2) {
+            vibrationPattern = new long[]{0, 0};
+        } else if (vibrate == 1) {
+            vibrationPattern = new long[]{0, 100, 0, 100};
+        } else if (vibrate == 3) {
+            vibrationPattern = new long[]{0, 1000};
+        } else {
+            vibrationPattern = new long[]{};
+        }
+        Uri sound = null;
+        if (soundPath != null && !"NoSound".equals(soundPath)) {
+            if ("Default".equals(soundPath) || defaultPath.equals(soundPath)) {
+                sound = Settings.System.DEFAULT_NOTIFICATION_URI;
+            } else {
+                sound = Uri.parse(soundPath);
+            }
+        }
+        String channelId = validateChannelId(dialogId, 0, name, vibrationPattern, ledColor, sound, importance, true, false, false, type);
+        return channelUsableForBubble(channelId) ? channelId : null;
+    }
+
+    /**
+     * The custom notification channel id the user set for this dialog, if
+     * any — cached in the notifications preferences under
+     * "org.telegram.key<did>_<topicId>_<hash>" (the same key
+     * validateChannelId() writes when a custom channel is created).
+     * Keys ending "_s" are the settings hash, not a channel. Prefers the
+     * topic-0 entry (the whole dialog, not a forum topic). The "keyia"
+     * (in-app) keys are deliberately NOT matched — the bubble is an
+     * out-of-app notification, so it uses the out-of-app channel.
+     */
+    private String findCustomDialogChannelId(long dialogId) {
+        try {
+            SharedPreferences prefs = getAccountInstance().getNotificationsSettings();
+            String topic0Prefix = "org.telegram.key" + dialogId + "_0_";
+            String anyPrefix = "org.telegram.key" + dialogId + "_";
+            String fallback = null;
+            for (Map.Entry<String, ?> entry : prefs.getAll().entrySet()) {
+                String key = entry.getKey();
+                if (key == null || !key.startsWith(anyPrefix) || key.endsWith("_s")) {
+                    continue;
+                }
+                Object value = entry.getValue();
+                if (!(value instanceof String)) {
+                    continue;
+                }
+                String channelId = (String) value;
+                if (channelId.isEmpty()) {
+                    continue;
+                }
+                if (key.startsWith(topic0Prefix)) {
+                    return channelId;
+                }
+                if (fallback == null) {
+                    fallback = channelId;
+                }
+            }
+            return fallback;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** True when the given channel exists and can show a bubble. */
+    private boolean channelUsableForBubble(String channelId) {
+        if (channelId == null) {
+            return false;
         }
         try {
-            if (systemNotificationManager.getNotificationChannel(SILENT_BUBBLE_CHANNEL_ID) != null) {
-                return;
+            NotificationChannel channel = systemNotificationManager.getNotificationChannel(channelId);
+            if (channel == null) {
+                return false;
             }
-            NotificationChannel channel = new NotificationChannel(SILENT_BUBBLE_CHANNEL_ID, LocaleController.getString(R.string.SilentPopupView), NotificationManager.IMPORTANCE_HIGH);
-            if (Build.VERSION.SDK_INT >= 29) {
-                channel.setAllowBubbles(true);
+            if (channel.getImportance() == NotificationManager.IMPORTANCE_NONE) {
+                return false;
             }
-            systemNotificationManager.createNotificationChannel(channel);
+            if (Build.VERSION.SDK_INT >= 29 && !channel.getAllowBubbles()) {
+                return false;
+            }
+            return true;
         } catch (Exception e) {
-            FileLog.e(e);
+            return false;
         }
     }
 

@@ -87,9 +87,7 @@ import org.telegram.ui.Cells.TextCell;
 import org.telegram.ui.Wallet.GramWallet;
 import org.telegram.ui.Wallet.WalletActivity;
 import org.telegram.utils.settings.SharedSettings;
-import org.telegram.messenger.SilentFloatingWindow;
 import org.telegram.messenger.SilentPush;
-import org.telegram.messenger.SilentToast;
 import org.telegram.messenger.UserConfig;
 import org.telegram.messenger.UserObject;
 import org.telegram.messenger.browser.Browser;
@@ -818,9 +816,6 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         if (!TextUtils.isEmpty(BuildConfig.SILENT_PUSH_RELAY)) {
             items.add(UItem.asCheck(30, LocaleController.getString(R.string.SilentPush)).setChecked(SharedSettings.silentPushEnabled.get()));
         }
-        // SilentGram: pop-up view (Telegram's own bubble) on Home. Row id 29
-        // (free: upstream uses 1-3, 5-13, 15-27; ours are 30-38).
-        items.add(UItem.asCheck(29, LocaleController.getString(R.string.SilentPopupView)).setChecked(SharedSettings.silentPipEnabled.get()));
         items.add(UItem.asShadow(null));
 
         items.add(SettingCell.Factory.of(1, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_account, getString(R.string.SettingsAccount), getString(R.string.SettingsAccountInfo)));
@@ -1000,20 +995,6 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
                 break;
             case 19:
                 Browser.openUrl(getParentActivity(), LocaleController.getString(R.string.PrivacyPolicyUrl));
-                break;
-
-            case 29:
-                // SilentGram: pop-up view (Telegram's own bubble). ON/OFF
-                // toggle only — no overlay permission is needed for a
-                // bubble. Turning it OFF also dismisses a live bubble.
-                if (!SharedSettings.silentPipEnabled.get()) {
-                    SharedSettings.silentPipEnabled.set(true);
-                    SilentToast.show(getParentActivity(), LocaleController.getString(R.string.SilentFloatingEnabled));
-                } else {
-                    SharedSettings.silentPipEnabled.set(false);
-                    SilentFloatingWindow.getInstance().dismiss();
-                }
-                listView.adapter.update(false);
                 break;
 
             case 30:

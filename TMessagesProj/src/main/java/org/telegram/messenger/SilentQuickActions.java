@@ -53,6 +53,7 @@ public class SilentQuickActions {
                 LocaleController.getString(R.string.SilentQuickShareGroup),
                 LocaleController.getString(R.string.SilentQuickMemberChats),
                 LocaleController.getString(R.string.SilentQuickAutoDelete),
+                LocaleController.getString(R.string.SilentQuickOpenBubble),
                 LocaleController.getString(R.string.SilentQuickPrivateNote),
                 LocaleController.getString(R.string.SilentRemindMe)
         };
@@ -63,6 +64,7 @@ public class SilentQuickActions {
                 R.drawable.msg_link,
                 R.drawable.msg_expand,
                 R.drawable.msg_delete_auto,
+                R.drawable.menu_stream_pip,
                 R.drawable.msg_saved,
                 R.drawable.msg_recent
         };
@@ -89,9 +91,12 @@ public class SilentQuickActions {
                     showAutoDeletePicker(fragment, account, dialogId);
                     break;
                 case 6:
+                    openInBubbleChat(fragment, account, dialogId);
+                    break;
+                case 7:
                     showPrivateNote(fragment, targetUserId);
                     break;
-                case 7: {
+                case 8: {
                     TLRPC.User user = MessagesController.getInstance(account).getUser(targetUserId);
                     String name = user != null ? UserObject.getUserName(user) : "";
                     remindMeChat(fragment, account, dialogId, name);
@@ -105,6 +110,35 @@ public class SilentQuickActions {
     /** Old entry point — now opens the VIP panel (same actions). */
     public static void showMenu(BaseFragment fragment, int account, long dialogId, long targetUserId) {
         showVipPanel(fragment, account, dialogId, targetUserId);
+    }
+
+    /**
+     * "Open in Bubble Chat" (v2.0.37) — Telegram's OWN bubble, nothing of
+     * ours in between. Posts the bubble for this dialog (autoExpand OFF:
+     * the bubble icon appears on the side of the screen; tapping it opens
+     * the chat in the pop-up, tapping again collapses it — the system's
+     * own bubble behaviour) and then finishes the activity, so SilentGram
+     * closes and only the bubble icon remains. On failure the error is
+     * shown and the app stays in the chat. Broadcast channels are refused
+     * by Telegram's own code (showBubbleForDialog: "channels cannot
+     * bubble") — the row still appears, the tap just shows the error.
+     * Future messages in this chat become bubbles through Telegram's own
+     * message-notification path (same dialog channel + same shortcut id).
+     */
+    public static void openInBubbleChat(BaseFragment fragment, int account, long dialogId) {
+        if (fragment == null || fragment.getParentActivity() == null || dialogId == 0) {
+            return;
+        }
+        SilentFloatingWindow fw = SilentFloatingWindow.getInstance();
+        if (!fw.openBubble(fragment.getParentActivity(), dialogId)) {
+            String error = fw.getLastStartError();
+            if (error != null) {
+                SilentToast.show(fragment.getParentActivity(), error, android.widget.Toast.LENGTH_LONG);
+            }
+            return;
+        }
+        // Bubble posted — close the app so only the bubble icon remains.
+        fragment.getParentActivity().finish();
     }
 
     /** "Add Admin to Your Channels" — pick one of MY channels, open its admin page. */
@@ -244,6 +278,11 @@ public class SilentQuickActions {
             itemList.add(LocaleController.getString(R.string.Reactions));
             actionList.add(5);
         }
+        // "Open in Bubble Chat" (v2.0.37) — always last, in every chat
+        // type. Telegram's own bubble (SilentFloatingWindow.openBubble);
+        // the menu item is ours, the bubble is Telegram's own.
+        itemList.add(LocaleController.getString(R.string.SilentQuickOpenBubble));
+        actionList.add(7);
         CharSequence[] items = itemList.toArray(new CharSequence[0]);
         AlertDialog.Builder builder = new AlertDialog.Builder(context);
         builder.setTitle(LocaleController.getString(R.string.SilentAdministration));
@@ -300,6 +339,11 @@ public class SilentQuickActions {
                     // and every info read there is null-guarded, so opening
                     // without setInfo is safe.
                     fragment.presentFragment(bannedFragment);
+                    break;
+                case 7:
+                    // "Open in Bubble Chat" — Telegram's own bubble for
+                    // this channel/group (dialog id is -chatId).
+                    openInBubbleChat(fragment, account, -chatId);
                     break;
             }
         });

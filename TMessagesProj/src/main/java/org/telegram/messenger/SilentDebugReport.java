@@ -20,7 +20,6 @@ import org.telegram.messenger.voip.VoIPService;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.ProxyListActivity;
-import org.telegram.utils.settings.SharedSettings;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -261,9 +260,8 @@ public class SilentDebugReport {
         try {
             SilentFloatingWindow fw = SilentFloatingWindow.getInstance();
             JSONObject floating = new JSONObject();
-            floating.put("mechanism", "telegram-bubble");
+            floating.put("mechanism", "telegram-bubble (menu)");
             floating.put("active", fw.isActive());
-            floating.put("settingEnabled", SharedSettings.silentPipEnabled.get());
             floating.put("chatBubbles", SharedConfig.chatBubbles);
             floating.put("sdkInt", Build.VERSION.SDK_INT);
             floating.put("bubbleDialogId", fw.getBubbleDialogId());
