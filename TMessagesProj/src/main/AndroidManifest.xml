@@ -316,31 +316,6 @@
                 <data android:mimeType="vnd.android.cursor.item/vnd.org.telegram.messenger.android.call.video"/>
             </intent-filter>
         </activity-alias>
-        <!-- SilentGram: floating-window host. A second LaunchActivity instance
-             (standard launch mode — LaunchActivity itself is singleTask) that
-             runs on the floating window's virtual display. Never enters PiP.
-             v2.0.23: its OWN taskAffinity + singleTask. WITHOUT the affinity
-             the launch (NEW_TASK, no MULTIPLE_TASK) is delivered into the
-             existing main task on display 0 — AOSP ActivityStarter reuses
-             the affinity-matching task (setTaskFromIntentActivity /
-             getLaunchStack "We are reusing a task, keep the stack!") and
-             the setLaunchDisplayId virtual-display id is never consulted,
-             so the activity lands on display 0 and the system toasts "App
-             does not support launch on secondary displays". A distinct
-             affinity forces a fresh task, which IS created on the virtual
-             display; singleTask makes recovery re-launches deliver a new
-             intent to that same task (AOSP moves a singleTask task to the
-             preferred display) instead of stacking a second instance. -->
-        <activity
-            android:name="org.telegram.ui.SilentFloatingActivity"
-            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode|smallestScreenSize|screenLayout|density"
-            android:excludeFromRecents="true"
-            android:exported="false"
-            android:hardwareAccelerated="true"
-            android:launchMode="singleTask"
-            android:resizeableActivity="true"
-            android:taskAffinity="${applicationId}.floating"
-            android:windowSoftInputMode="adjustResize" />
         <activity
             android:name="org.telegram.ui.BubbleActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|uiMode|smallestScreenSize|screenLayout"

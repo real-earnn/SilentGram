@@ -17,6 +17,8 @@ import android.util.SparseIntArray;
 
 import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.NativeByteBuffer;
+import org.telegram.tgnet.QuickAckDelegate;
+import org.telegram.tgnet.RequestDelegate;
 import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
 
@@ -90,6 +92,31 @@ public class FileUploadOperation {
     protected long lastProgressUpdateTime;
 
     public volatile boolean caughtPremiumFloodWait;
+
+    // SilentGram v2.0.36: a saveFilePart RPC has no client-side timeout upstream.
+    // A lost response stalls the whole upload — no more parts start, no failure
+    // is reported, and a voice message just sits in "sending" forever. Bound
+    // every part: 3s without a server ack, up to 3 tries total. The quick ack
+    // proves the server has the part, so an acked part is never cut — a slow
+    // link keeps uploading. Only a part with no ack at all is cut and re-sent.
+    // After 3 tries the upload fails outright instead of hanging.
+    private static final long UPLOAD_PART_TIMEOUT_MS = 3000;
+    private static final int UPLOAD_PART_MAX_ATTEMPTS = 3;
+
+    private static class UploadPartState {
+        TLObject request;
+        RequestDelegate delegate;
+        int flags;
+        int connectionType;
+        int requestNumFinal;
+        int attempts;
+        int attemptId;
+        int token;
+        boolean acked;
+        Runnable timeoutRunnable;
+    }
+
+    private final SparseArray<UploadPartState> uploadPartStates = new SparseArray<>();
 
     public interface FileUploadOperationDelegate {
         void didFinishUploadingFile(FileUploadOperation operation, TLRPC.InputFile inputFile, TLRPC.InputEncryptedFile inputEncryptedFile, byte[] key, byte[] iv);
@@ -201,6 +228,7 @@ public class FileUploadOperation {
     }
 
     private void cleanup() {
+        cancelAllUploadPartTimeouts();
         if (preferences == null) {
             preferences = ApplicationLoader.applicationContext.getSharedPreferences("uploadinfo", Activity.MODE_PRIVATE);
         }
@@ -282,6 +310,80 @@ public class FileUploadOperation {
 
     public void setForceSmallFile() {
         forceSmallFile = true;
+    }
+
+    private void sendUploadPart(final UploadPartState partState) {
+        partState.attempts++;
+        partState.attemptId++;
+        final int attemptId = partState.attemptId;
+        QuickAckDelegate ackDelegate = () -> Utilities.stageQueue.postRunnable(() -> {
+            UploadPartState current = uploadPartStates.get(partState.requestNumFinal);
+            if (current != partState || partState.attemptId != attemptId) {
+                return;
+            }
+            partState.acked = true;
+            cancelUploadPartTimeout(partState);
+        });
+        RequestDelegate attemptDelegate = (response, error) -> {
+            UploadPartState current = uploadPartStates.get(partState.requestNumFinal);
+            if (current != partState || partState.attemptId != attemptId) {
+                return;
+            }
+            partState.delegate.run(response, error);
+        };
+        final int oldToken = partState.token;
+        partState.token = ConnectionsManager.getInstance(currentAccount).sendRequest(partState.request, attemptDelegate, ackDelegate, () -> Utilities.stageQueue.postRunnable(() -> {
+            startUploadRequests();
+        }), partState.flags | ConnectionsManager.RequestFlagNeedQuickAck, ConnectionsManager.DEFAULT_DATACENTER_ID, partState.connectionType, true);
+        requestTokens.put(partState.requestNumFinal, partState.token);
+        AndroidUtilities.runOnUIThread(() -> {
+            if (oldToken != 0) {
+                uiRequestTokens.remove((Integer) oldToken);
+            }
+            uiRequestTokens.add(partState.token);
+        });
+        scheduleUploadPartTimeout(partState, attemptId);
+    }
+
+    private void scheduleUploadPartTimeout(final UploadPartState partState, final int attemptId) {
+        cancelUploadPartTimeout(partState);
+        partState.timeoutRunnable = () -> onUploadPartTimeout(partState, attemptId);
+        Utilities.stageQueue.postRunnable(partState.timeoutRunnable, UPLOAD_PART_TIMEOUT_MS);
+    }
+
+    private void cancelUploadPartTimeout(UploadPartState partState) {
+        if (partState.timeoutRunnable != null) {
+            Utilities.stageQueue.cancelRunnable(partState.timeoutRunnable);
+            partState.timeoutRunnable = null;
+        }
+    }
+
+    private void cancelAllUploadPartTimeouts() {
+        for (int a = 0; a < uploadPartStates.size(); a++) {
+            cancelUploadPartTimeout(uploadPartStates.valueAt(a));
+        }
+        uploadPartStates.clear();
+    }
+
+    private void onUploadPartTimeout(final UploadPartState partState, final int attemptId) {
+        UploadPartState current = uploadPartStates.get(partState.requestNumFinal);
+        if (current != partState || partState.attemptId != attemptId || partState.acked) {
+            return;
+        }
+        if (state != 1) {
+            return;
+        }
+        if (partState.attempts < UPLOAD_PART_MAX_ATTEMPTS) {
+            FileLog.d("upload part timeout, retrying part=" + partState.requestNumFinal + " attempt=" + (partState.attempts + 1));
+            ConnectionsManager.getInstance(currentAccount).cancelRequest(partState.token, true);
+            sendUploadPart(partState);
+        } else {
+            FileLog.d("upload part timeout, giving up part=" + partState.requestNumFinal);
+            uploadPartStates.remove(partState.requestNumFinal);
+            state = 4;
+            delegate.didFailedUploadingFile(this);
+            cleanup();
+        }
     }
 
     private void startUploadRequest() {
@@ -578,14 +680,21 @@ public class FileUploadOperation {
         final int requestConnectionNum = connectionType >> 16;
         uploadRequestsPerConnection[requestConnectionNum]++;
         long time = System.currentTimeMillis();
-        int[] requestToken = new int[1];
-        requestToken[0] = ConnectionsManager.getInstance(currentAccount).sendRequest(finalRequest, (response, error) -> {
+        final UploadPartState partState = new UploadPartState();
+        partState.request = finalRequest;
+        partState.flags = forceSmallFile ? ConnectionsManager.RequestFlagCanCompress : 0;
+        partState.connectionType = connectionType;
+        partState.requestNumFinal = requestNumFinal;
+        uploadPartStates.put(requestNumFinal, partState);
+        RequestDelegate partDelegate = (response, error) -> {
+            cancelUploadPartTimeout(partState);
+            uploadPartStates.remove(requestNumFinal);
             if (currentOperationGuid != operationGuid) {
                 return;
             }
             uploadRequestsPerConnection[requestConnectionNum]--;
             if (BuildVars.LOGS_ENABLED) {
-                FileLog.d("debug_uploading: " + " response reqId " + requestToken[0] + " time" + uploadingFilePath);
+                FileLog.d("debug_uploading: " + " response reqId " + partState.token + " time" + uploadingFilePath);
             }
             int networkType = response != null ? response.networkType : ApplicationLoader.getCurrentNetworkType();
             if (currentType == ConnectionsManager.FileTypeAudio) {
@@ -605,7 +714,7 @@ public class FileUploadOperation {
                 freeRequestIvs.add(currentRequestIv);
             }
             requestTokens.delete(requestNumFinal);
-            AndroidUtilities.runOnUIThread(() -> uiRequestTokens.remove((Integer) requestToken[0]));
+            AndroidUtilities.runOnUIThread(() -> uiRequestTokens.remove((Integer) partState.token));
             if (response instanceof TLRPC.TL_boolTrue) {
                 if (state != 1) {
                     return;
@@ -703,13 +812,11 @@ public class FileUploadOperation {
                 delegate.didFailedUploadingFile(FileUploadOperation.this);
                 cleanup();
             }
-        }, null, () -> Utilities.stageQueue.postRunnable(() -> {
-            startUploadRequests();
-        }), forceSmallFile ? ConnectionsManager.RequestFlagCanCompress : 0, ConnectionsManager.DEFAULT_DATACENTER_ID, connectionType, true);
+        };
+        partState.delegate = partDelegate;
+        sendUploadPart(partState);
         if (BuildVars.LOGS_ENABLED) {
-            FileLog.d("debug_uploading: " + " send reqId " + requestToken[0] + " " + uploadingFilePath + " file_part=" + currentRequestPartNum + " isBig=" + isBigFile + " file_id=" + currentFileId);
+            FileLog.d("debug_uploading: " + " send reqId " + partState.token + " " + uploadingFilePath + " file_part=" + currentRequestPartNum + " isBig=" + isBigFile + " file_id=" + currentFileId);
         }
-        requestTokens.put(requestNumFinal, requestToken[0]);
-        AndroidUtilities.runOnUIThread(() -> uiRequestTokens.add(requestToken[0]));
     }
 }

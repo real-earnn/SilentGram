@@ -87,7 +87,6 @@ import org.telegram.ui.Cells.TextCell;
 import org.telegram.ui.Wallet.GramWallet;
 import org.telegram.ui.Wallet.WalletActivity;
 import org.telegram.utils.settings.SharedSettings;
-import org.telegram.utils.pip.PipEnvironment;
 import org.telegram.messenger.SilentFloatingWindow;
 import org.telegram.messenger.SilentPush;
 import org.telegram.messenger.SilentToast;
@@ -195,11 +194,6 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
     private View actionBarFadeView;
 
     private int versionViewPressCount = 0;
-
-    // SilentGram: set while the user is in system settings granting the
-    // overlay permission for the floating window; onResume then turns the
-    // toggle on (or tells the user it is still needed).
-    private boolean silentPipPermissionPending;
 
     public SettingsActivity() {
         this(null);
@@ -619,15 +613,6 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
     @Override
     public void onResume() {
         super.onResume();
-        if (silentPipPermissionPending) {
-            silentPipPermissionPending = false;
-            if (PipEnvironment.canDrawOverlays(getParentActivity())) {
-                SharedSettings.silentPipEnabled.set(true);
-                SilentToast.show(getParentActivity(), LocaleController.getString(R.string.SilentFloatingEnabled));
-            } else {
-                SilentToast.show(getParentActivity(), LocaleController.getString(R.string.SilentFloatingNeedPermission));
-            }
-        }
         if (listView.adapter != null) {
             listView.adapter.update(false);
         }
@@ -833,9 +818,9 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
         if (!TextUtils.isEmpty(BuildConfig.SILENT_PUSH_RELAY)) {
             items.add(UItem.asCheck(30, LocaleController.getString(R.string.SilentPush)).setChecked(SharedSettings.silentPushEnabled.get()));
         }
-        // SilentGram: whole-app Picture-in-Picture on Home. Row id 29 (free:
-        // upstream uses 1-3, 5-13, 15-27; ours are 30-38).
-        items.add(UItem.asCheck(29, LocaleController.getString(R.string.SilentPictureInPicture)).setChecked(SharedSettings.silentPipEnabled.get()));
+        // SilentGram: pop-up view (Telegram's own bubble) on Home. Row id 29
+        // (free: upstream uses 1-3, 5-13, 15-27; ours are 30-38).
+        items.add(UItem.asCheck(29, LocaleController.getString(R.string.SilentPopupView)).setChecked(SharedSettings.silentPipEnabled.get()));
         items.add(UItem.asShadow(null));
 
         items.add(SettingCell.Factory.of(1, IconBackgroundColors.BLUE.top, IconBackgroundColors.BLUE.bottom, R.drawable.settings_account, getString(R.string.SettingsAccount), getString(R.string.SettingsAccountInfo)));
@@ -1018,19 +1003,12 @@ public class SettingsActivity extends BaseFragment implements NotificationCenter
                 break;
 
             case 29:
-                // SilentGram: the toggle is the floating window now (same row
-                // and label). Turning it ON needs the overlay permission:
-                // ask for it first, and only turn the toggle on once it is
-                // granted (checked again in onResume). Turning it OFF also
-                // dismisses a live floating window.
+                // SilentGram: pop-up view (Telegram's own bubble). ON/OFF
+                // toggle only — no overlay permission is needed for a
+                // bubble. Turning it OFF also dismisses a live bubble.
                 if (!SharedSettings.silentPipEnabled.get()) {
-                    if (PipEnvironment.canDrawOverlays(getParentActivity())) {
-                        SharedSettings.silentPipEnabled.set(true);
-                        SilentToast.show(getParentActivity(), LocaleController.getString(R.string.SilentFloatingEnabled));
-                    } else {
-                        silentPipPermissionPending = true;
-                        showDialog(AlertsCreator.createDrawOverlayFloatingPermissionDialog(getParentActivity()));
-                    }
+                    SharedSettings.silentPipEnabled.set(true);
+                    SilentToast.show(getParentActivity(), LocaleController.getString(R.string.SilentFloatingEnabled));
                 } else {
                     SharedSettings.silentPipEnabled.set(false);
                     SilentFloatingWindow.getInstance().dismiss();

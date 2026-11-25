@@ -145,6 +145,91 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
     private final HashMap<String, MessageObject> waitingForLocation = new HashMap<>();
     private final HashMap<String, Boolean> waitingForCallback = new HashMap<>();
     private final HashMap<String, List<String>> waitingForCallbackMap = new HashMap<>();
+
+    // SilentGram v2.0.36: a getBotCallbackAnswer RPC has no client-side timeout
+    // upstream, and the native layer retries generic requests forever. A lost
+    // response leaves the button spinner spinning forever — the waitingForCallback
+    // key is only cleared by a response, an error, or a message edit. Bound every
+    // callback: 3s without a server ack, up to 3 tries total. The retry is only
+    // sent while the request is provably un-acked (it never reached the server),
+    // so a retried callback can never double-execute a bot action. Once acked,
+    // the request stays pending until the bot answers — a slow bot is not cut.
+    private static final long BOT_CALLBACK_TIMEOUT_MS = 3000;
+    private static final int BOT_CALLBACK_MAX_ATTEMPTS = 3;
+
+    private static class BotCallbackState {
+        TLObject request;
+        RequestDelegate delegate;
+        List<String> keys;
+        int attempts;
+        int attemptId;
+        int reqId;
+        Runnable timeoutRunnable;
+    }
+
+    private final HashMap<String, BotCallbackState> botCallbackStates = new HashMap<>();
+
+    private void sendBotCallbackRequest(final String key, final List<String> keys, final TLObject request, final RequestDelegate delegate) {
+        BotCallbackState state = botCallbackStates.get(key);
+        if (state == null) {
+            state = new BotCallbackState();
+            state.request = request;
+            state.delegate = delegate;
+            state.keys = keys;
+            botCallbackStates.put(key, state);
+        }
+        state.attempts++;
+        state.attemptId++;
+        final int attemptId = state.attemptId;
+        final BotCallbackState finalState = state;
+        state.reqId = getConnectionsManager().sendRequest(request, (response, error) -> {
+            BotCallbackState current = botCallbackStates.get(key);
+            if (current != finalState || finalState.attemptId != attemptId) {
+                return;
+            }
+            cancelBotCallbackTimeout(finalState);
+            botCallbackStates.remove(key);
+            delegate.run(response, error);
+        }, () -> AndroidUtilities.runOnUIThread(() -> {
+            BotCallbackState current = botCallbackStates.get(key);
+            if (current != finalState || finalState.attemptId != attemptId) {
+                return;
+            }
+            cancelBotCallbackTimeout(finalState);
+        }), ConnectionsManager.RequestFlagFailOnServerErrors | ConnectionsManager.RequestFlagNeedQuickAck);
+        scheduleBotCallbackTimeout(key, state);
+    }
+
+    private void scheduleBotCallbackTimeout(final String key, final BotCallbackState state) {
+        cancelBotCallbackTimeout(state);
+        state.timeoutRunnable = () -> onBotCallbackTimeout(key, state);
+        AndroidUtilities.runOnUIThread(state.timeoutRunnable, BOT_CALLBACK_TIMEOUT_MS);
+    }
+
+    private void cancelBotCallbackTimeout(BotCallbackState state) {
+        if (state.timeoutRunnable != null) {
+            AndroidUtilities.cancelRunOnUIThread(state.timeoutRunnable);
+            state.timeoutRunnable = null;
+        }
+    }
+
+    private void onBotCallbackTimeout(final String key, final BotCallbackState state) {
+        if (botCallbackStates.get(key) != state) {
+            return;
+        }
+        if (state.attempts < BOT_CALLBACK_MAX_ATTEMPTS) {
+            FileLog.d("bot callback timeout, retrying key=" + key + " attempt=" + (state.attempts + 1));
+            getConnectionsManager().cancelRequest(state.reqId, true);
+            sendBotCallbackRequest(key, state.keys, state.request, state.delegate);
+        } else {
+            FileLog.d("bot callback timeout, giving up key=" + key);
+            botCallbackStates.remove(key);
+            waitingForCallback.remove(key);
+            if (state.keys != null) {
+                state.keys.remove(key);
+            }
+        }
+    }
     private final HashMap<String, byte[]> waitingForVote = new HashMap<>();
     private final LongSparseArray<Long> voteSendTime = new LongSparseArray();
     private final HashMap<String, ImportingHistory> importingHistoryFiles = new HashMap<>();
@@ -3877,10 +3962,11 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 req.data = data;
             }
             List<String> finalKeys = keys;
-            getConnectionsManager().sendRequest(req, (response, error) -> AndroidUtilities.runOnUIThread(() -> {
+            RequestDelegate notificationDelegate = (response, error) -> AndroidUtilities.runOnUIThread(() -> {
                 waitingForCallback.remove(key);
                 finalKeys.remove(key);
-            }), ConnectionsManager.RequestFlagFailOnServerErrors);
+            });
+            sendBotCallbackRequest(key, finalKeys, req, notificationDelegate);
             getMessagesController().markDialogAsRead(dialogId, msgId, msgId, 0, false, 0, 0, true, 0);
         });
     }
@@ -4312,7 +4398,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                 req.button_id = buttonTypeUrlAuth.button_id;
                 req.flags |= 2;
                 request[0] = req;
-                getConnectionsManager().sendRequest(req, requestDelegate, ConnectionsManager.RequestFlagFailOnServerErrors);
+                sendBotCallbackRequest(key, finalKeys, req, requestDelegate);
             } else if (TLKeyboardHelper.isType(button, TL_keyboard.TL_inlineButtonTypeBuy.class)) {
                 if ((messageObject.messageOwner.media.flags & 4) == 0) {
                     TLRPC.TL_payments_getPaymentForm req = new TLRPC.TL_payments_getPaymentForm();
@@ -4327,13 +4413,13 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         req.flags |= 1;
                     }
                     request[0] = req;
-                    getConnectionsManager().sendRequest(req, requestDelegate, ConnectionsManager.RequestFlagFailOnServerErrors);
+                    sendBotCallbackRequest(key, finalKeys, req, requestDelegate);
                 } else {
                     TLRPC.TL_payments_getPaymentReceipt req = new TLRPC.TL_payments_getPaymentReceipt();
                     req.msg_id = messageObject.messageOwner.media.receipt_msg_id;
                     req.peer = getMessagesController().getInputPeer(messageObject.messageOwner.peer_id);
                     request[0] = req;
-                    getConnectionsManager().sendRequest(req, requestDelegate, ConnectionsManager.RequestFlagFailOnServerErrors);
+                    sendBotCallbackRequest(key, finalKeys, req, requestDelegate);
                 }
             } else {
                 if (messageObject.isEphemeral()) {
@@ -4341,7 +4427,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                     req.peer = getMessagesController().getInputPeer(messageObject.getDialogId());
                     req.id = messageObject.getEphemeralId();
                     req.data = button.getData();
-                    getConnectionsManager().sendRequest(req, requestDelegate, ConnectionsManager.RequestFlagFailOnServerErrors);
+                    sendBotCallbackRequest(key, finalKeys, req, requestDelegate);
                 } else {
                     TLRPC.TL_messages_getBotCallbackAnswer req = new TLRPC.TL_messages_getBotCallbackAnswer();
                     req.peer = getMessagesController().getInputPeer(messageObject.getDialogId());
@@ -4356,7 +4442,7 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
                         req.flags |= 1;
                         req.data = button.getData();
                     }
-                    getConnectionsManager().sendRequest(req, requestDelegate, ConnectionsManager.RequestFlagFailOnServerErrors);
+                    sendBotCallbackRequest(key, finalKeys, req, requestDelegate);
                 }
             }
         }

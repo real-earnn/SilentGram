@@ -84,11 +84,11 @@
     <string name="SilentMenuHeader">Your SilentGram features — everything in one place.</string>
     <string name="SilentSettingsHeader">Silent Features</string>
     <string name="SilentPush">Push notifications via SilentGram</string>
-    <string name="SilentPictureInPicture">Floating window</string>
+    <string name="SilentPopupView">Pop-up view</string>
+    <string name="SilentBubbleNotification">Chat in pop-up view</string>
     <string name="SilentFloatingPermissionTitle">Allow floating window</string>
     <string name="SilentFloatingPermissionText">SilentGram shows Telegram in a small floating window you can fully use while doing other things. Allow Display over other apps to turn this on.</string>
-    <string name="SilentFloatingEnabled">Floating window enabled</string>
-    <string name="SilentFloatingNeedPermission">Floating window needs Display over other apps permission</string>
+    <string name="SilentFloatingEnabled">Pop-up view enabled</string>
     <string name="SilentMenuDeveloperSub">About, links &amp; credits</string>
     <string name="SilentMenuTemplatesSub">Slash-trigger quick replies</string>
     <string name="SilentMenuBotTesterSub">Test any Bot API method</string>

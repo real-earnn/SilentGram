@@ -7256,8 +7256,9 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             actionBarLayout.onUserLeaveHint();
         }
         // SilentGram v2.0.18: system PiP is REMOVED entirely. Home only ever
-        // opens the floating window; if the overlay cannot start, the app
-        // just backgrounds normally — no system PiP window can appear.
+        // opens the pop-up view (Telegram's own bubble); if the bubble
+        // cannot start, the app just backgrounds normally — no system PiP
+        // window can appear.
         // v2.0.29: floating opens ONLY on the Home button. onUserLeaveHint
         // also fires for Recents, app-switch and leaving to another
         // activity (e.g. tapping a link that opens the Play Store) —
@@ -7280,9 +7281,10 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
     }
 
     /**
-     * SilentGram: enter the floating window instead of system PiP. Returns
-     * false when the toggle is off or the overlay cannot start; the caller
-     * then just backgrounds the app normally (no system PiP fallback).
+     * SilentGram: enter the pop-up view (Telegram's own bubble) instead of
+     * system PiP. Returns false when the toggle is off or the bubble cannot
+     * start; the caller then just backgrounds the app normally (no system
+     * PiP fallback).
      */
     private boolean tryEnterSilentFloating() {
         if (!SharedSettings.silentPipEnabled.get() || isFinishing()) {
@@ -7522,22 +7524,14 @@ public class LaunchActivity extends BasePermissionsActivity implements INavigati
             }
             processBoostDialog(dialogId, null, null, chatMessageCell);
         } else if (id == NotificationCenter.closeOtherAppActivities) {
+            // v2.0.36: the pop-up is Telegram's own bubble (BubbleActivity,
+            // not a LaunchActivity), so it never reaches this handler as
+            // `this`. Opening a bubble posts this notification to close the
+            // main app, and a fresh main activity while a bubble is open
+            // just opens normally — the bubble stays as its own task.
             if (args[0] != this) {
-                // v2.0.22: the floating activity NEVER finishes via this
-                // rule while its window is active — returning to the app
-                // via the launcher must not kill the floating window
-                // (Home must keep the same screen).
-                if (!(this instanceof SilentFloatingActivity) || !SilentFloatingWindow.getInstance().isActive()) {
-                    onFinish();
-                    finish();
-                }
-            } else if (!(this instanceof SilentFloatingActivity) && SilentFloatingWindow.getInstance().isActive()) {
-                // A fresh MAIN activity created (e.g. launcher tap)
-                // while the floating window is active: expand the
-                // floating window to fullscreen on the same screen
-                // instead of stacking a second fullscreen activity
-                // under the overlay.
-                SilentFloatingWindow.getInstance().expand();
+                onFinish();
+                finish();
             }
         } else if (id == NotificationCenter.didUpdateConnectionState) {
             int state = ConnectionsManager.getInstance(account).getConnectionState();

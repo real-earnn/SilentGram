@@ -3665,7 +3665,7 @@ public class NotificationsController extends BaseController implements Notificat
     }
 
     @SuppressLint("RestrictedApi")
-    private String createNotificationShortcut(NotificationCompat.Builder builder, long did, String name, TLRPC.User user, TLRPC.Chat chat, Person person, boolean supportsBubble) {
+    private String createNotificationShortcut(NotificationCompat.Builder builder, long did, String name, TLRPC.User user, TLRPC.Chat chat, Person person, boolean supportsBubble, boolean autoExpand) {
         if (unsupportedNotificationShortcut() || ChatObject.isChannel(chat) && !chat.megagroup) {
             return null;
         }
@@ -3722,7 +3722,7 @@ public class NotificationsController extends BaseController implements Notificat
                                 PendingIntent.getActivity(ApplicationLoader.applicationContext, 0, intent, PendingIntent.FLAG_MUTABLE | PendingIntent.FLAG_UPDATE_CURRENT),
                                 icon);
                 bubbleBuilder.setSuppressNotification(openedDialogId == did);
-                bubbleBuilder.setAutoExpandBubble(false);
+                bubbleBuilder.setAutoExpandBubble(autoExpand);
                 bubbleBuilder.setDesiredHeight(AndroidUtilities.dp(640));
                 builder.setBubbleMetadata(bubbleBuilder.build());
             } else {
@@ -3733,6 +3733,145 @@ public class NotificationsController extends BaseController implements Notificat
             FileLog.e(e);
         }
         return null;
+    }
+
+    // SilentGram v2.0.36: Telegram's own pop-up view (BubbleActivity).
+    // Home press posts a bubble notification for the CURRENT chat using
+    // Telegram's own bubble machinery (createNotificationShortcut +
+    // BubbleActivity) — no virtual display, no overlay, no reimplementation.
+    // The bubble is the system's own floating window (draggable, resizable
+    // by the system chrome); BubbleActivity hosts the real chat in bubble
+    // mode, so typing works (it is a real activity on the default display).
+    // How it works (Android Bubbles API):
+    // - API 30+ only (SharedConfig.chatBubbles defaults to SDK >= 30; the
+    //   bubble metadata itself needs API 29+, auto-expand needs API 31+).
+    //   Below API 30 this returns false and the caller just closes to home.
+    // - The notification is posted while the app is in the foreground (Home
+    //   press / onUserLeaveHint), so setAutoExpandBubble(true) opens the
+    //   bubble immediately (Android only auto-expands foreground posts).
+    //   If the system processes it after the app is backgrounded, the
+    //   bubble still appears as its floating icon — one tap opens the chat.
+    // - setSuppressNotification(true) when the chat is already open, so no
+    //   notification appears in the shade — only the bubble.
+    // - If the user/system has bubbles disabled, the notification is posted
+    //   but no bubble appears (and it stays suppressed from the shade while
+    //   foreground) — the user just goes home, which is the fallback.
+    // - The bubble lives on its own dedicated channel ("silent_bubble") so
+    //   it never touches the dialog's message-channel settings.
+    private static final String SILENT_BUBBLE_CHANNEL_ID = "silent_bubble";
+    /** Notification id for the Home-press bubble (per account). Far from the
+     * summary id (account+1) and the per-dialog wear ids. */
+    private int lastBubbleNotificationId;
+    private String lastBubbleError;
+
+    /** Whether this device can show a chat bubble at all. */
+    public boolean isBubbleSupported() {
+        return !unsupportedNotificationShortcut();
+    }
+
+    /** Post a bubble for the given dialog. Returns true when the bubble
+     * notification was posted. On false, getLastBubbleError() says why. */
+    public boolean showBubbleForDialog(long dialogId, boolean autoExpand) {
+        lastBubbleError = null;
+        if (unsupportedNotificationShortcut()) {
+            lastBubbleError = "bubbles not supported (needs Android 11+)";
+            return false;
+        }
+        try {
+            MessagesController mc = MessagesController.getInstance(currentAccount);
+            TLRPC.User user = null;
+            TLRPC.Chat chat = null;
+            String name;
+            if (DialogObject.isUserDialog(dialogId)) {
+                user = mc.getUser(dialogId);
+                name = user != null ? UserObject.getUserName(user) : "";
+            } else {
+                chat = mc.getChat(-dialogId);
+                name = chat != null ? chat.title : "";
+            }
+            if ((user == null && chat == null) || TextUtils.isEmpty(name)) {
+                lastBubbleError = "chat not found";
+                return false;
+            }
+            if (chat != null && ChatObject.isChannel(chat) && !chat.megagroup) {
+                lastBubbleError = "channels cannot bubble";
+                return false;
+            }
+            ensureBubbleChannel();
+            Context ctx = ApplicationLoader.applicationContext;
+            Intent bubbleIntent = new Intent(ctx, BubbleActivity.class);
+            bubbleIntent.setAction("com.tmessages.openchat" + Math.random() + Integer.MAX_VALUE);
+            if (DialogObject.isUserDialog(dialogId)) {
+                bubbleIntent.putExtra("userId", dialogId);
+            } else {
+                bubbleIntent.putExtra("chatId", -dialogId);
+            }
+            bubbleIntent.putExtra("currentAccount", currentAccount);
+            NotificationCompat.Builder builder = new NotificationCompat.Builder(ctx, SILENT_BUBBLE_CHANNEL_ID)
+                    .setSmallIcon(R.drawable.icon_plane_crescent)
+                    .setContentTitle(name)
+                    .setContentText(LocaleController.getString(R.string.SilentBubbleNotification))
+                    .setContentIntent(PendingIntent.getActivity(ctx, 0, bubbleIntent, PendingIntent.FLAG_MUTABLE | PendingIntent.FLAG_UPDATE_CURRENT))
+                    .setAutoCancel(true)
+                    .setOnlyAlertOnce(true);
+            String shortcutId = createNotificationShortcut(builder, dialogId, name, user, chat, null, true, autoExpand);
+            if (shortcutId == null) {
+                lastBubbleError = "bubble not supported for this chat";
+                return false;
+            }
+            int notifId = Integer.MAX_VALUE - 100 - currentAccount;
+            notificationManager.notify(notifId, builder.build());
+            lastBubbleNotificationId = notifId;
+            ArrayList<String> ids = new ArrayList<>();
+            ids.add(shortcutId);
+            ShortcutManagerCompat.removeDynamicShortcuts(ctx, ids);
+            return true;
+        } catch (Exception e) {
+            FileLog.e(e);
+            lastBubbleError = "error: " + String.valueOf(e.getMessage());
+            return false;
+        }
+    }
+
+    /** Why the last showBubbleForDialog() failed, or null. */
+    public String getLastBubbleError() {
+        return lastBubbleError;
+    }
+
+    /** Dismiss the Home-press bubble (cancels its notification). */
+    public void dismissBubble() {
+        try {
+            if (lastBubbleNotificationId != 0) {
+                notificationManager.cancel(lastBubbleNotificationId);
+                lastBubbleNotificationId = 0;
+            }
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
+    }
+
+    /** True when the given dialog currently has a bubble open. */
+    public boolean isDialogOpenedInBubble(long dialogId) {
+        return openedInBubbleDialogs.contains(dialogId);
+    }
+
+    /** The dedicated channel for the Home-press bubble notification. */
+    private void ensureBubbleChannel() {
+        if (Build.VERSION.SDK_INT < 26) {
+            return;
+        }
+        try {
+            if (systemNotificationManager.getNotificationChannel(SILENT_BUBBLE_CHANNEL_ID) != null) {
+                return;
+            }
+            NotificationChannel channel = new NotificationChannel(SILENT_BUBBLE_CHANNEL_ID, LocaleController.getString(R.string.SilentPopupView), NotificationManager.IMPORTANCE_HIGH);
+            if (Build.VERSION.SDK_INT >= 29) {
+                channel.setAllowBubbles(true);
+            }
+            systemNotificationManager.createNotificationChannel(channel);
+        } catch (Exception e) {
+            FileLog.e(e);
+        }
     }
 
     @TargetApi(26)
@@ -5809,7 +5948,7 @@ public class NotificationsController extends BaseController implements Notificat
             NotificationHolder holder = holders.get(a);
             ids.clear();
             if (Build.VERSION.SDK_INT >= 29 && !DialogObject.isEncryptedDialog(holder.dialogId)) {
-                String shortcutId = createNotificationShortcut(holder.notification, holder.dialogId, holder.name, holder.user, holder.chat, personCache.get(holder.dialogId), !holder.story);
+                String shortcutId = createNotificationShortcut(holder.notification, holder.dialogId, holder.name, holder.user, holder.chat, personCache.get(holder.dialogId), !holder.story, false);
                 if (shortcutId != null) {
                     ids.add(shortcutId);
                 }

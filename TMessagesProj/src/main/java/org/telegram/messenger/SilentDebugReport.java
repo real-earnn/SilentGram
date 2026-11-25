@@ -20,6 +20,7 @@ import org.telegram.messenger.voip.VoIPService;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.Theme;
 import org.telegram.ui.ProxyListActivity;
+import org.telegram.utils.settings.SharedSettings;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -260,34 +261,14 @@ public class SilentDebugReport {
         try {
             SilentFloatingWindow fw = SilentFloatingWindow.getInstance();
             JSONObject floating = new JSONObject();
+            floating.put("mechanism", "telegram-bubble");
             floating.put("active", fw.isActive());
-            floating.put("minimized", fw.isMinimized());
-            floating.put("virtualDisplayId", fw.getVirtualDisplayId());
-            floating.put("activityDisplayId", fw.getActivityDisplayId());
+            floating.put("settingEnabled", SharedSettings.silentPipEnabled.get());
+            floating.put("chatBubbles", SharedConfig.chatBubbles);
+            floating.put("sdkInt", Build.VERSION.SDK_INT);
+            floating.put("bubbleDialogId", fw.getBubbleDialogId());
             String startError = fw.getLastStartError();
             floating.put("lastStartError", startError == null ? "none" : startError);
-            String frameCheck = fw.getLastFrameCheck();
-            if (frameCheck == null) {
-                floating.put("frameCheck", "not run yet");
-            } else {
-                floating.put("frameCheck", frameCheck);
-                floating.put("frameCheckAt", formatTime(fw.getLastFrameCheckAtMs()));
-            }
-            JSONObject window = new JSONObject();
-            window.put("widthPx", fw.getWindowWidthPx());
-            window.put("heightPx", fw.getWindowHeightPx());
-            window.put("x", fw.getWindowX());
-            window.put("y", fw.getWindowY());
-            floating.put("window", window);
-            JSONObject display = new JSONObject();
-            display.put("widthPx", fw.getDisplayWidthPx());
-            display.put("heightPx", fw.getDisplayHeightPx());
-            display.put("densityDpi", fw.getDisplayDensityDpi());
-            floating.put("display", display);
-            JSONObject screen = new JSONObject();
-            screen.put("widthPx", fw.getScreenWidthPx());
-            screen.put("heightPx", fw.getScreenHeightPx());
-            floating.put("screen", screen);
             return floating;
         } catch (Throwable e) {
             return sectionError("floating", e);

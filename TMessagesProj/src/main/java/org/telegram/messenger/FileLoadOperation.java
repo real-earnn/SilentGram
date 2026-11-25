@@ -13,6 +13,8 @@ import android.os.SystemClock;
 import org.telegram.messenger.utils.ImmutableByteArrayOutputStream;
 import org.telegram.tgnet.ConnectionsManager;
 import org.telegram.tgnet.NativeByteBuffer;
+import org.telegram.tgnet.QuickAckDelegate;
+import org.telegram.tgnet.RequestDelegate;
 import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
 import org.telegram.tgnet.Vector;
@@ -122,6 +124,17 @@ public class FileLoadOperation {
         private boolean forceSmallChunk;
         public boolean cancelling, cancelled;
         public Runnable whenCancelled;
+        // SilentGram v2.0.36: per-chunk ack-watchdog state (see sendChunkRequest).
+        public TLObject chunkRequest;
+        public RequestDelegate chunkDelegate;
+        public int chunkFlags;
+        public int chunkDatacenterId;
+        public int chunkConnectionType;
+        public boolean chunkIsLast;
+        public int chunkAttempts;
+        public int chunkAttemptId;
+        public boolean chunkAcked;
+        public Runnable chunkTimeoutRunnable;
     }
 
     public static class Range {
@@ -1465,6 +1478,7 @@ public class FileLoadOperation {
                 RequestInfo requestInfo = requestInfos.get(a);
                 if (requestInfo.requestToken != 0) {
                     requestInfo.cancelling = true;
+                    cancelChunkTimeout(requestInfo);
                     if (fullyCancelled == null) {
                         requestInfo.cancelled = true;
                         FileLog.d("cancelRequests cancel " + requestInfo.requestToken);
@@ -1501,6 +1515,7 @@ public class FileLoadOperation {
     }
 
     private void cleanup() {
+        cancelAllChunkTimeouts();
         try {
             if (fileOutputStream != null) {
                 try {
@@ -2208,6 +2223,7 @@ public class FileLoadOperation {
             }
             if (info.requestToken != 0) {
                 info.cancelling = true;
+                cancelChunkTimeout(info);
                 if (acceptChunksAfterCancel) {
                     cancelledRequestInfos.add(info);
                     info.whenCancelled = () -> {
@@ -2286,6 +2302,86 @@ public class FileLoadOperation {
             FileLog.d("debug_loading: " + cacheFileFinal.getName() + " file reference expired ");
         }
         FileRefController.getInstance(currentAccount).requestReference(parentObject, location, this, requestInfo);
+    }
+
+    // SilentGram v2.0.36: a chunk request has no client-side timeout upstream.
+    // The native layer retries download requests on connection events, but if the
+    // connection stays up with a lost response, the chunk waits forever and the
+    // loader spins before the download even starts. Bound every chunk: 3s
+    // without a server ack, up to 3 tries total. The quick ack proves the server
+    // has the request, so an acked chunk is never cut — a long file on a slow
+    // link keeps downloading. Only a chunk with no ack at all is cut and
+    // re-sent. After 3 tries the operation fails outright instead of spinning.
+    private static final long CHUNK_TIMEOUT_MS = 3000;
+    private static final int CHUNK_MAX_ATTEMPTS = 3;
+
+    private void sendChunkRequest(final RequestInfo requestInfo) {
+        requestInfo.chunkAttempts++;
+        requestInfo.chunkAttemptId++;
+        final int attemptId = requestInfo.chunkAttemptId;
+        QuickAckDelegate ackDelegate = () -> Utilities.stageQueue.postRunnable(() -> {
+            if (requestInfo.chunkAttemptId == attemptId) {
+                requestInfo.chunkAcked = true;
+                cancelChunkTimeout(requestInfo);
+            }
+        });
+        RequestDelegate attemptDelegate = (response, error) -> {
+            if (requestInfo.chunkAttemptId != attemptId) {
+                return;
+            }
+            requestInfo.chunkDelegate.run(response, error);
+        };
+        final int oldToken = requestInfo.requestToken;
+        requestInfo.requestToken = ConnectionsManager.getInstance(currentAccount).sendRequestSync(requestInfo.chunkRequest, attemptDelegate, ackDelegate, null, requestInfo.chunkFlags | ConnectionsManager.RequestFlagNeedQuickAck, requestInfo.chunkDatacenterId, requestInfo.chunkConnectionType, requestInfo.chunkIsLast);
+        if (oldToken != 0) {
+            final int oldTokenFinal = oldToken;
+            AndroidUtilities.runOnUIThread(() -> uiRequestTokens.remove((Integer) oldTokenFinal));
+        }
+        AndroidUtilities.runOnUIThread(() -> uiRequestTokens.add(requestInfo.requestToken));
+        scheduleChunkTimeout(requestInfo, attemptId);
+    }
+
+    private void scheduleChunkTimeout(final RequestInfo requestInfo, final int attemptId) {
+        cancelChunkTimeout(requestInfo);
+        requestInfo.chunkTimeoutRunnable = () -> onChunkTimeout(requestInfo, attemptId);
+        Utilities.stageQueue.postRunnable(requestInfo.chunkTimeoutRunnable, CHUNK_TIMEOUT_MS);
+    }
+
+    private void cancelChunkTimeout(RequestInfo requestInfo) {
+        if (requestInfo.chunkTimeoutRunnable != null) {
+            Utilities.stageQueue.cancelRunnable(requestInfo.chunkTimeoutRunnable);
+            requestInfo.chunkTimeoutRunnable = null;
+        }
+    }
+
+    private void cancelAllChunkTimeouts() {
+        if (requestInfos != null) {
+            for (int a = 0; a < requestInfos.size(); a++) {
+                cancelChunkTimeout(requestInfos.get(a));
+            }
+        }
+        if (delayedRequestInfos != null) {
+            for (int a = 0; a < delayedRequestInfos.size(); a++) {
+                cancelChunkTimeout(delayedRequestInfos.get(a));
+            }
+        }
+    }
+
+    private void onChunkTimeout(final RequestInfo requestInfo, final int attemptId) {
+        if (requestInfo.chunkAttemptId != attemptId || requestInfo.chunkAcked) {
+            return;
+        }
+        if (state != stateDownloading || !requestInfos.contains(requestInfo)) {
+            return;
+        }
+        if (requestInfo.chunkAttempts < CHUNK_MAX_ATTEMPTS) {
+            FileLog.d("chunk timeout, retrying offset=" + requestInfo.offset + " attempt=" + (requestInfo.chunkAttempts + 1));
+            ConnectionsManager.getInstance(currentAccount).cancelRequest(requestInfo.requestToken, true);
+            sendChunkRequest(requestInfo);
+        } else {
+            FileLog.d("chunk timeout, giving up offset=" + requestInfo.offset);
+            onFail(false, 0);
+        }
     }
 
     protected void startDownloadRequest(int useConnectionType) {
@@ -2522,7 +2618,13 @@ public class FileLoadOperation {
             }
             flags |= ConnectionsManager.RequestFlagListenAfterCancel;
             int datacenterId = isCdn ? cdnDatacenterId : this.datacenterId;
-            final int requestToken = requestInfo.requestToken = ConnectionsManager.getInstance(currentAccount).sendRequestSync(request, (response, error) -> {
+            requestInfo.chunkRequest = request;
+            requestInfo.chunkFlags = flags;
+            requestInfo.chunkDatacenterId = datacenterId;
+            requestInfo.chunkConnectionType = connectionType;
+            requestInfo.chunkIsLast = isLast;
+            RequestDelegate chunkDelegate = (response, error) -> {
+                cancelChunkTimeout(requestInfo);
                 if (requestInfo.cancelled) {
                     FileLog.e("received chunk but definitely cancelled offset=" + requestInfo.offset + " size=" + requestInfo.chunkSize + " token=" + requestInfo.requestToken);
                     return;
@@ -2688,11 +2790,12 @@ public class FileLoadOperation {
                         requestInfo.whenCancelled.run();
                     }
                 }
-            }, null, null, flags, datacenterId, connectionType, isLast);
+            };
+            requestInfo.chunkDelegate = chunkDelegate;
+            sendChunkRequest(requestInfo);
             if (BuildVars.LOGS_ENABLED) {
                 FileLog.d("debug_loading: " + cacheFileFinal.getName() + " dc=" + datacenterId + " send reqId " + requestInfo.requestToken + " offset=" + requestInfo.offset + " conType=" + connectionType + " priority=" + priority);
             }
-            AndroidUtilities.runOnUIThread(() -> uiRequestTokens.add(requestToken));
             requestsCount++;
             if (downloadRequestPacer != null) {
                 long now = SystemClock.uptimeMillis();
