@@ -156,12 +156,20 @@ public class SilentProxyManager {
     // SilentGram A (2026-11-20): fetch the API list ONCE A DAY, not hourly.
     // The bot posts a fresh list every morning at 06:00 PKT; the app
     // fetches it on the first open after 06:00 PKT and keeps it all day.
-    // The persisted PKT calendar day is the guard — a fetch that already
-    // happened today is never repeated automatically. The safety nets
-    // still fetch: the open round finding <3 live saved proxies, the
-    // all-dead refetch, the manual Refresh button, and an empty
+    // v2.0.35 (2026-11-25): THREE fixed slots a day instead — slot 1 =
+    // 06:00-10:00, slot 2 = 10:00-14:00, slot 3 = 14:00-18:00 PKT. The
+    // persisted "yyyy-MM-dd:1,2" slot cache in the "silentgram" prefs is
+    // the guard — a slot that already delivered proxies today is never
+    // fetched again automatically, and a slot whose fetch delivered
+    // nothing stays due for the next open. Slot 1 keeps the 06:00 gate
+    // (the backend refreshes at 06:00); the backend list itself still
+    // refreshes only once a day, so slots 2 and 3 re-probe the same
+    // list (freshness re-probe + pickup if the bot re-posts). The safety
+    // nets still fetch: the open round finding <3 live saved proxies,
+    // the all-dead refetch, the manual Refresh button, and an empty
     // candidate set. The hourly REFRESH_INTERVAL_MS schedule is gone.
     private static final String DAILY_FETCH_DAY_KEY = "last_api_fetch_day_pkt";
+    private static final String SLOT_FETCH_KEY = "last_api_fetch_slots_pkt";
     private static final int DAILY_FETCH_HOUR_PKT = 6;
     private static final TimeZone PKT = TimeZone.getTimeZone("Asia/Karachi");
     // SilentGram A: when the current proxy is OUR proxy, any verified
@@ -530,32 +538,87 @@ public class SilentProxyManager {
         return fmt.format(new Date());
     }
 
-    /** True when the app has not yet fetched the API list today and it is past 06:00 PKT (when the bot's fresh list lands). */
-    private static boolean isDailyFetchDue() {
+    /** Fixed fetch slot for the current PKT hour: 1 = 06:00-10:00, 2 = 10:00-14:00, 3 = 14:00-18:00, 0 = outside any slot (before 06:00 or from 18:00). */
+    private static int currentSlotPkt() {
         try {
             SimpleDateFormat hourFmt = new SimpleDateFormat("HH", Locale.US);
             hourFmt.setTimeZone(PKT);
             int hour = Integer.parseInt(hourFmt.format(new Date()));
-            if (hour < DAILY_FETCH_HOUR_PKT) {
+            if (hour >= DAILY_FETCH_HOUR_PKT && hour < 10) {
+                return 1;
+            }
+            if (hour >= 10 && hour < 14) {
+                return 2;
+            }
+            if (hour >= 14 && hour < 18) {
+                return 3;
+            }
+            return 0;
+        } catch (Throwable e) {
+            return 0;
+        }
+    }
+
+    /** Completed slot numbers for today ("1,2"), or "" when no slot fetched today yet. Stored as "yyyy-MM-dd:1,2" so a new day starts empty. */
+    private static String fetchedSlotsToday() {
+        try {
+            String stored = silentPrefs().getString(SLOT_FETCH_KEY, "");
+            if (stored == null || stored.isEmpty()) {
+                return "";
+            }
+            int colon = stored.indexOf(':');
+            if (colon < 0) {
+                return "";
+            }
+            if (!pktToday().equals(stored.substring(0, colon))) {
+                return "";
+            }
+            return stored.substring(colon + 1);
+        } catch (Throwable e) {
+            return "";
+        }
+    }
+
+    /** True when slot s (1..3) already delivered proxies today. */
+    private static boolean isSlotDone(int slot) {
+        String slots = fetchedSlotsToday();
+        if (slots.isEmpty()) {
+            return false;
+        }
+        return ("," + slots + ",").contains("," + slot + ",");
+    }
+
+    /** True when the current slot has not yet fetched the API list today. Slot 1 keeps the 06:00 gate (the bot's fresh list lands at 06:00 PKT); outside 06:00-18:00 there is no slot and nothing is due. A slot whose last fetch delivered nothing stays due, so it is retried on the next open. */
+    private static boolean isDailyFetchDue() {
+        try {
+            int slot = currentSlotPkt();
+            if (slot == 0) {
                 return false;
             }
-            String lastDay = silentPrefs().getString(DAILY_FETCH_DAY_KEY, "");
-            return !pktToday().equals(lastDay);
+            return !isSlotDone(slot);
         } catch (Throwable e) {
             return false;
         }
     }
 
-    /** Record that today's API list was fetched (only called after a fetch actually delivered proxies). */
+    /** Record that the current slot's API fetch delivered proxies (only called after a fetch actually delivered proxies). The old day key is still written, so the "last fetch day" record stays true. A fetch outside any slot (a safety-net or manual fetch after 18:00) records the day only. */
     private static void markDailyFetchDone() {
         try {
-            silentPrefs().edit().putString(DAILY_FETCH_DAY_KEY, pktToday()).apply();
+            SharedPreferences.Editor ed = silentPrefs().edit();
+            ed.putString(DAILY_FETCH_DAY_KEY, pktToday());
+            int slot = currentSlotPkt();
+            if (slot != 0 && !isSlotDone(slot)) {
+                String slots = fetchedSlotsToday();
+                String updated = slots.isEmpty() ? String.valueOf(slot) : slots + "," + slot;
+                ed.putString(SLOT_FETCH_KEY, pktToday() + ":" + updated);
+            }
+            ed.apply();
         } catch (Throwable e) {
             FileLog.e(e);
         }
     }
 
-    /** Fetch the API list if the once-a-day rule says it is due; a no-op otherwise. */
+    /** Fetch the API list if the current slot has not fetched it yet today; a no-op otherwise. */
     private static void maybeDailyFetch() {
         if (isDailyFetchDue()) {
             refreshAsync();
@@ -585,10 +648,10 @@ public class SilentProxyManager {
         SilentConfig.refreshAsync();
         // SilentGram T: fast open — connect to OUR proxy first (always
         // live), then the last-connected proxy and the saved top 10.
-        // The API is NOT hit on every open; it is fetched once a day
-        // after 06:00 PKT (see maybeDailyFetch), or when the saved
-        // proxies are mostly dead (see the open-round hook in
-        // probeAndConnect).
+        // The API is NOT hit on every open; it is fetched once per slot
+        // (06:00-10:00, 10:00-14:00, 14:00-18:00 PKT — see
+        // maybeDailyFetch), or when the saved proxies are mostly dead
+        // (see the open-round hook in probeAndConnect).
         fastOpenRound();
         maybeDailyFetch();
         startDownloadWatchdog();
@@ -688,10 +751,10 @@ public class SilentProxyManager {
             } finally {
                 fetching = false;
                 // SilentGram A: no hourly re-schedule anymore — the list
-                // is fetched once a day (see maybeDailyFetch). Only a
-                // fetch that actually delivered proxies counts as
-                // today's fetch, so a failed fetch is retried on the
-                // next open instead of blocking until tomorrow.
+                // is fetched once per slot (see maybeDailyFetch). Only a
+                // fetch that actually delivered proxies counts as this
+                // slot's fetch, so a failed fetch is retried on the
+                // next open instead of blocking until the next slot.
                 if (ok) {
                     markDailyFetchDone();
                 }
@@ -2020,10 +2083,10 @@ public class SilentProxyManager {
                 refreshAsync();
                 return;
             }
-            // SilentGram A: the once-a-day fetch, for a session that
-            // started before 06:00 PKT and is still open when the fresh
-            // list lands — fetch it once, then the date guard stops any
-            // repeat today.
+            // SilentGram A: the per-slot fetch, for a session that
+            // started in an earlier slot and is still open when a new
+            // slot starts — fetch it once, then the slot guard stops
+            // any repeat this slot.
             if (isDailyFetchDue()) {
                 refreshAsync();
                 return;
