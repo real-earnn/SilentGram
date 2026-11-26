@@ -161,6 +161,7 @@
     <string name="SilentTranscribeTakingLong">Still transcribing… please try again in a moment.</string>
     <string name="SilentTranscribeNotSent">Wait until the voice message is sent, then try again.</string>
     <string name="SilentQuickOpenBubble">Open in Bubble Chat</string>
+    <string name="SilentBubbleEnableBubbles">Turn Bubbles on in Settings to open this chat in a bubble</string>
     <string name="SilentQuickPrivateNote">Private Note</string>
     <string name="SilentNotesEmpty">No private notes yet. Open any chat → quick actions → Private Note.</string>
     <string name="SilentNoteTitle">Private Note</string>

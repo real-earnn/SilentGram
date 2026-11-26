@@ -96,12 +96,12 @@ public class FileUploadOperation {
     // SilentGram v2.0.36: a saveFilePart RPC has no client-side timeout upstream.
     // A lost response stalls the whole upload — no more parts start, no failure
     // is reported, and a voice message just sits in "sending" forever. Bound
-    // every part: 3s without a server ack, up to 3 tries total. The quick ack
+    // every part: 10s without a server ack, up to 2 tries total. The quick ack
     // proves the server has the part, so an acked part is never cut — a slow
     // link keeps uploading. Only a part with no ack at all is cut and re-sent.
-    // After 3 tries the upload fails outright instead of hanging.
-    private static final long UPLOAD_PART_TIMEOUT_MS = 3000;
-    private static final int UPLOAD_PART_MAX_ATTEMPTS = 3;
+    // After 2 tries the upload fails outright instead of hanging.
+    private static final long UPLOAD_PART_TIMEOUT_MS = 10000;
+    private static final int UPLOAD_PART_MAX_ATTEMPTS = 2;
 
     private static class UploadPartState {
         TLObject request;

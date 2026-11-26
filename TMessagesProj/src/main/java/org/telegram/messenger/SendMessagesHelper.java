@@ -150,12 +150,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
     // upstream, and the native layer retries generic requests forever. A lost
     // response leaves the button spinner spinning forever — the waitingForCallback
     // key is only cleared by a response, an error, or a message edit. Bound every
-    // callback: 3s without a server ack, up to 3 tries total. The retry is only
+    // callback: 10s without a server ack, up to 2 tries total. The retry is only
     // sent while the request is provably un-acked (it never reached the server),
     // so a retried callback can never double-execute a bot action. Once acked,
     // the request stays pending until the bot answers — a slow bot is not cut.
-    private static final long BOT_CALLBACK_TIMEOUT_MS = 3000;
-    private static final int BOT_CALLBACK_MAX_ATTEMPTS = 3;
+    private static final long BOT_CALLBACK_TIMEOUT_MS = 10000;
+    private static final int BOT_CALLBACK_MAX_ATTEMPTS = 2;
 
     private static class BotCallbackState {
         TLObject request;

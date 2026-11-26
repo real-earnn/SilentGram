@@ -2307,13 +2307,13 @@ public class FileLoadOperation {
     // SilentGram v2.0.36: a chunk request has no client-side timeout upstream.
     // The native layer retries download requests on connection events, but if the
     // connection stays up with a lost response, the chunk waits forever and the
-    // loader spins before the download even starts. Bound every chunk: 3s
-    // without a server ack, up to 3 tries total. The quick ack proves the server
+    // loader spins before the download even starts. Bound every chunk: 10s
+    // without a server ack, up to 2 tries total. The quick ack proves the server
     // has the request, so an acked chunk is never cut — a long file on a slow
     // link keeps downloading. Only a chunk with no ack at all is cut and
-    // re-sent. After 3 tries the operation fails outright instead of spinning.
-    private static final long CHUNK_TIMEOUT_MS = 3000;
-    private static final int CHUNK_MAX_ATTEMPTS = 3;
+    // re-sent. After 2 tries the operation fails outright instead of spinning.
+    private static final long CHUNK_TIMEOUT_MS = 10000;
+    private static final int CHUNK_MAX_ATTEMPTS = 2;
 
     private void sendChunkRequest(final RequestInfo requestInfo) {
         requestInfo.chunkAttempts++;

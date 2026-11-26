@@ -114,22 +114,36 @@ public class SilentQuickActions {
 
     /**
      * "Open in Bubble Chat" (v2.0.37) — Telegram's OWN bubble, nothing of
-     * ours in between. Posts the bubble for this dialog (autoExpand OFF:
-     * the bubble icon appears on the side of the screen; tapping it opens
-     * the chat in the pop-up, tapping again collapses it — the system's
-     * own bubble behaviour) and then finishes the activity, so SilentGram
-     * closes and only the bubble icon remains. On failure the error is
-     * shown and the app stays in the chat. Broadcast channels are refused
-     * by Telegram's own code (showBubbleForDialog: "channels cannot
-     * bubble") — the row still appears, the tap just shows the error.
-     * Future messages in this chat become bubbles through Telegram's own
-     * message-notification path (same dialog channel + same shortcut id).
+     * ours in between. v2.0.38: FIRST check whether bubbles are allowed
+     * (app-level Bubbles preference is ALL — see
+     * NotificationsController.isBubbleAllowed()); when it is not, open
+     * the system Bubbles settings page instead of attempting a bubble
+     * that could never appear, and stay in the chat. When allowed, post
+     * the bubble for this dialog (autoExpand OFF: the bubble icon appears
+     * on the side of the screen; tapping it opens the chat in the
+     * pop-up, tapping again collapses it — the system's own bubble
+     * behaviour) and then finish the activity, so SilentGram closes and
+     * only the bubble icon remains. On failure the error is shown and the
+     * app stays in the chat. Only personal chats and bots have this row
+     * (channels/groups were removed in v2.0.38 — they do not support
+     * bubbles). Future messages in this chat become bubbles through
+     * Telegram's own message-notification path (same dialog channel +
+     * same shortcut id).
      */
     public static void openInBubbleChat(BaseFragment fragment, int account, long dialogId) {
         if (fragment == null || fragment.getParentActivity() == null || dialogId == 0) {
             return;
         }
         SilentFloatingWindow fw = SilentFloatingWindow.getInstance();
+        if (!fw.isBubbleAllowed()) {
+            // Bubbles are off (not ALL) — send the user to the system
+            // Bubbles setting instead of failing; they set it to ALL and
+            // tap again. Stay in the chat either way.
+            if (!fw.openBubbleSettings(fragment.getParentActivity())) {
+                SilentToast.show(fragment.getParentActivity(), LocaleController.getString(R.string.SilentBubbleEnableBubbles), android.widget.Toast.LENGTH_LONG);
+            }
+            return;
+        }
         if (!fw.openBubble(fragment.getParentActivity(), dialogId)) {
             String error = fw.getLastStartError();
             if (error != null) {
@@ -278,11 +292,9 @@ public class SilentQuickActions {
             itemList.add(LocaleController.getString(R.string.Reactions));
             actionList.add(5);
         }
-        // "Open in Bubble Chat" (v2.0.37) — always last, in every chat
-        // type. Telegram's own bubble (SilentFloatingWindow.openBubble);
-        // the menu item is ours, the bubble is Telegram's own.
-        itemList.add(LocaleController.getString(R.string.SilentQuickOpenBubble));
-        actionList.add(7);
+        // v2.0.38: NO "Open in Bubble Chat" here — channels and groups
+        // do not support bubbles, so the row is personal/bot chats only
+        // (showVipPanel). The bubble itself is Telegram's own.
         CharSequence[] items = itemList.toArray(new CharSequence[0]);
         AlertDialog.Builder builder = new AlertDialog.Builder(context);
         builder.setTitle(LocaleController.getString(R.string.SilentAdministration));
@@ -339,11 +351,6 @@ public class SilentQuickActions {
                     // and every info read there is null-guarded, so opening
                     // without setInfo is safe.
                     fragment.presentFragment(bannedFragment);
-                    break;
-                case 7:
-                    // "Open in Bubble Chat" — Telegram's own bubble for
-                    // this channel/group (dialog id is -chatId).
-                    openInBubbleChat(fragment, account, -chatId);
                     break;
             }
         });

@@ -3765,9 +3765,29 @@ public class NotificationsController extends BaseController implements Notificat
     //   and shows the error.
     // - setSuppressNotification(true) when the chat is already open, so no
     //   notification appears in the shade — only the bubble.
-    // - If the user/system has bubbles disabled for the dialog's channel,
-    //   this returns false with an error instead of posting a notification
-    //   that would never show a bubble.
+    // - v2.0.38 ROOT CAUSE (why the v2.0.37 tap never bubbled, while an
+    //   incoming message did): the tap path gated on
+    //   NotificationChannel.canBubble() (channelUsableForBubble). That
+    //   gate is dead on Android 11+: AOSP NotificationChannel (Android 12,
+    //   android-12.0.0_r1) starts mAllowBubbles at DEFAULT_ALLOW_BUBBLE
+    //   (-1), canBubble() returns mAllowBubbles == ALLOW_BUBBLE_ON, and
+    //   setAllowBubbles() is documented "As of Android 11 this value is
+    //   no longer respected". Telegram never calls setAllowBubbles(), so
+    //   canBubble() is false for EVERY Telegram channel, on every device,
+    //   whatever the app-level Bubbles setting is — the gate refused every
+    //   tap ("bubbles are off for this chat's notification channel").
+    //   The incoming-message path never consults canBubble(): it attaches
+    //   BubbleMetadata and posts, and the SYSTEM decides from the
+    //   app-level bubble preference (NotificationManager
+    //   .getBubblePreference() / areBubblesAllowed()) plus the
+    //   conversation shortcut. So the fix is: drop the canBubble() check
+    //   entirely (channelUsableForBubble now only requires the channel to
+    //   exist with importance above NONE) and check the permission the
+    //   way the system does (isBubbleAllowed()). The rest of the tap
+    //   path already matches the message path exactly (same shortcut
+    //   push, same BubbleMetadata, same notify, same dynamic-shortcut
+    //   removal right after posting — showExtraNotifications does the
+    //   same at its holder loop).
     /** Notification id for the menu-triggered bubble (per account). Far from the
      * summary id (account+1) and the per-dialog wear ids. */
     private int lastBubbleNotificationId;
@@ -3776,6 +3796,46 @@ public class NotificationsController extends BaseController implements Notificat
     /** Whether this device can show a chat bubble at all. */
     public boolean isBubbleSupported() {
         return !unsupportedNotificationShortcut();
+    }
+
+    /**
+     * v2.0.38: whether the system will actually show a bubble for this
+     * app right now — the permission the tap flow gates on BEFORE
+     * attempting a bubble (SilentFloatingWindow / SilentQuickActions open
+     * the system Bubbles settings page when this is false, instead of
+     * posting a notification that would never appear as a bubble).
+     * This reads the APP-LEVEL bubble preference the way the system does:
+     * getBubblePreference() == ALL on API 31+, areBubblesAllowed() on
+     * API 29-30. It deliberately does NOT consult
+     * NotificationChannel.canBubble(): that value is dead on Android 11+
+     * (AOSP: channels start at DEFAULT_ALLOW_BUBBLE (-1), canBubble()
+     * needs ALLOW_BUBBLE_ON, setAllowBubbles() is "no longer respected")
+     * — Telegram never sets it, so canBubble() is false for every
+     * Telegram channel whatever the user chose in Settings, and gating
+     * on it refused every tap in v2.0.37 while incoming messages bubbled
+     * fine. Per-conversation allowance (SELECTED mode) is owned by the
+     * system and has no public query API; in ALL mode every conversation
+     * may bubble.
+     */
+    @SuppressWarnings("deprecation")
+    public boolean isBubbleAllowed() {
+        if (unsupportedNotificationShortcut()) {
+            return false;
+        }
+        try {
+            if (systemNotificationManager == null) {
+                return false;
+            }
+            if (Build.VERSION.SDK_INT >= 31) {
+                return systemNotificationManager.getBubblePreference() == NotificationManager.BUBBLE_PREFERENCE_ALL;
+            }
+            if (Build.VERSION.SDK_INT >= 29) {
+                return systemNotificationManager.areBubblesAllowed();
+            }
+            return false;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /** Post a bubble for the given dialog. Returns true when the bubble
@@ -3808,7 +3868,7 @@ public class NotificationsController extends BaseController implements Notificat
             }
             String channelId = getDialogChannelId(dialogId, name, chat);
             if (channelId == null) {
-                lastBubbleError = "bubbles are off for this chat's notification channel";
+                lastBubbleError = "notifications are blocked for this chat's channel";
                 return false;
             }
             Context ctx = ApplicationLoader.applicationContext;
@@ -3875,18 +3935,20 @@ public class NotificationsController extends BaseController implements Notificat
      * share one channel and one per-conversation bubble allowance.
      * 1) A custom channel the user set for this dialog (cached in the
      *    notifications preferences under "org.telegram.key<did>_<topic>_<hash>";
-     *    the same key validateChannelId() writes). Used only when it can
-     *    actually show a bubble (importance above NONE, bubbles allowed).
+     *    the same key validateChannelId() writes). Used only when a
+     *    notification on it can be shown at all (importance above NONE).
      * 2) Otherwise the type-default channel, created/validated with the
      *    type-global sound/vibration/priority/LED settings exactly as the
      *    message path does (validateChannelId with the same arguments).
-     * Returns null when neither channel can show a bubble (e.g. the user
-     * turned bubbles off for the dialog's channel, or the dialog is
-     * muted AND the type-default channel is unusable) — the caller then
-     * reports the failure instead of posting a notification that would
-     * never appear as a bubble. A muted dialog falls through to the
-     * type-default channel: the bubble-open notification is not a message,
-     * so the dialog's mute does not silence it.
+     * Returns null when neither channel can show a notification at all
+     * (e.g. the dialog's channel is blocked at importance NONE) — the
+     * caller then reports the failure instead of posting a notification
+     * that would never appear. v2.0.38: this no longer checks
+     * channel.canBubble() (dead on Android 11+, see
+     * channelUsableForBubble); bubble permission is checked the way the
+     * system does it, in isBubbleAllowed(). A muted dialog falls through
+     * to the type-default channel: the bubble-open notification is not a
+     * message, so the dialog's mute does not silence it.
      */
     private String getDialogChannelId(long dialogId, String name, TLRPC.Chat chat) {
         if (Build.VERSION.SDK_INT < 26) {
@@ -3987,7 +4049,18 @@ public class NotificationsController extends BaseController implements Notificat
         }
     }
 
-    /** True when the given channel exists and can show a bubble. */
+    /**
+     * True when the given channel exists and a notification posted to it
+     * can be shown at all (importance above NONE). v2.0.38: this used to
+     * also require channel.canBubble() — removed, because that value is
+     * dead on Android 11+ (AOSP NotificationChannel: channels start at
+     * DEFAULT_ALLOW_BUBBLE (-1), canBubble() needs ALLOW_BUBBLE_ON, and
+     * setAllowBubbles() is "no longer respected"; Telegram never sets
+     * it, so canBubble() is false for every Telegram channel). The
+     * system decides bubble eligibility from the app-level bubble
+     * preference (see isBubbleAllowed()), not from this flag — the
+     * incoming-message path posts the same way and bubbles fine.
+     */
     private boolean channelUsableForBubble(String channelId) {
         if (channelId == null) {
             return false;
@@ -3998,9 +4071,6 @@ public class NotificationsController extends BaseController implements Notificat
                 return false;
             }
             if (channel.getImportance() == NotificationManager.IMPORTANCE_NONE) {
-                return false;
-            }
-            if (Build.VERSION.SDK_INT >= 30 && !channel.canBubble()) {
                 return false;
             }
             return true;

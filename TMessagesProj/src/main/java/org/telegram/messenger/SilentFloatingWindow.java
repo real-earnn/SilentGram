@@ -3,7 +3,9 @@ package org.telegram.messenger;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.os.Build;
 import android.os.SystemClock;
+import android.provider.Settings;
 import android.widget.PopupWindow;
 
 import org.telegram.ui.LaunchActivity;
@@ -24,7 +26,8 @@ import org.telegram.utils.pip.PipCoordinator;
  * How the pop-up works now (v2.0.37, all Telegram's own machinery):
  * - The user taps "Open in Bubble Chat" in the quick-action panel
  *   (SilentQuickActions — below Auto-Delete Timer for personal/bot
- *   chats, at the end for channels/groups). openBubble() here posts a
+ *   chats only; channels/groups have no bubble row since v2.0.38 —
+ *   they do not support bubbles). openBubble() here posts a
  *   bubble notification for THAT dialog via
  *   NotificationsController.showBubbleForDialog(), which reuses
  *   Telegram's own createNotificationShortcut() (dynamic shortcut +
@@ -42,9 +45,12 @@ import org.telegram.utils.pip.PipCoordinator;
  * - There is NO Settings row and NO Home-press trigger (both removed in
  *   v2.0.37): Home just closes the app normally.
  * - Needs Android 11+ (SharedConfig.chatBubbles defaults to SDK >= 30)
- *   and bubbles enabled for the app. Below that, or when bubbles are
- *   disabled, openBubble() returns false and the app stays open — the
- *   caller shows the error.
+ *   and bubbles enabled for the app. The tap flow checks the permission
+ *   FIRST (isBubbleAllowed()): when bubbles are not ALL, it opens the
+ *   system Bubbles settings page instead of attempting a bubble that
+ *   could never appear — v2.0.38, see NotificationsController
+ *   .isBubbleAllowed() for why the old channel.canBubble() gate was
+ *   dropped (dead on Android 11+: false for every Telegram channel).
  * - A content PiP (group call / live stream) owns the screen: openBubble()
  *   refuses while one is active, as before.
  */
@@ -64,6 +70,47 @@ public class SilentFloatingWindow {
     private int bubbleAccount = -1;
     private long bubblePostedAtMs;
     private String lastStartError;
+
+    /**
+     * v2.0.38: whether the system will show a bubble for this app right
+     * now (app-level Bubbles preference is ALL — see
+     * NotificationsController.isBubbleAllowed()). The tap flow checks
+     * this FIRST: when false, openBubbleSettings() is used instead of
+     * attempting a bubble that could never appear.
+     */
+    public boolean isBubbleAllowed() {
+        return NotificationsController.getInstance(UserConfig.selectedAccount).isBubbleAllowed();
+    }
+
+    /**
+     * v2.0.38: open the system page where the user turns Bubbles on for
+     * SilentGram (Settings -> Apps -> SilentGram -> Notifications ->
+     * Bubbles -> All). API 31+ has a dedicated bubble-settings page
+     * (ACTION_APP_NOTIFICATION_BUBBLE_SETTINGS); below that the app's
+     * notification settings page carries the same Bubbles row. Returns
+     * false when no settings activity could be opened (caller then falls
+     * back to the error path).
+     */
+    public boolean openBubbleSettings(Activity activity) {
+        if (activity == null || activity.isFinishing()) {
+            return false;
+        }
+        try {
+            String pkg = ApplicationLoader.applicationContext.getPackageName();
+            Intent intent;
+            if (Build.VERSION.SDK_INT >= 31) {
+                intent = new Intent(Settings.ACTION_APP_NOTIFICATION_BUBBLE_SETTINGS);
+            } else {
+                intent = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+            }
+            intent.putExtra(Settings.EXTRA_APP_PACKAGE, pkg);
+            activity.startActivity(intent);
+            return true;
+        } catch (Exception e) {
+            FileLog.e(e);
+            return false;
+        }
+    }
 
     /**
      * Post a bubble for the given dialog (menu-triggered, v2.0.37).
