@@ -3665,7 +3665,7 @@ public class NotificationsController extends BaseController implements Notificat
     }
 
     @SuppressLint("RestrictedApi")
-    private String createNotificationShortcut(NotificationCompat.Builder builder, long did, String name, TLRPC.User user, TLRPC.Chat chat, Person person, boolean supportsBubble, boolean autoExpand) {
+    private String createNotificationShortcut(NotificationCompat.Builder builder, long did, String name, TLRPC.User user, TLRPC.Chat chat, Person person, boolean supportsBubble, boolean autoExpand, boolean suppressNotification) {
         if (unsupportedNotificationShortcut() || ChatObject.isChannel(chat) && !chat.megagroup) {
             return null;
         }
@@ -3721,7 +3721,7 @@ public class NotificationsController extends BaseController implements Notificat
                         new NotificationCompat.BubbleMetadata.Builder(
                                 PendingIntent.getActivity(ApplicationLoader.applicationContext, 0, intent, PendingIntent.FLAG_MUTABLE | PendingIntent.FLAG_UPDATE_CURRENT),
                                 icon);
-                bubbleBuilder.setSuppressNotification(openedDialogId == did);
+                bubbleBuilder.setSuppressNotification(suppressNotification);
                 bubbleBuilder.setAutoExpandBubble(autoExpand);
                 bubbleBuilder.setDesiredHeight(AndroidUtilities.dp(640));
                 builder.setBubbleMetadata(bubbleBuilder.build());
@@ -3788,6 +3788,21 @@ public class NotificationsController extends BaseController implements Notificat
     //   push, same BubbleMetadata, same notify, same dynamic-shortcut
     //   removal right after posting — showExtraNotifications does the
     //   same at its holder loop).
+    // - v2.0.39 (why the v2.0.38 tap STILL showed no bubble, while an
+    //   incoming message did): the post itself succeeded (no error, the app
+    //   closed as designed) but the system never rendered a bubble for it.
+    //   The tap notification differed from a working message notification
+    //   in three ways, and v2.0.39 removes all three: (1) its content was
+    //   bare static text with no MessagingStyle — now it carries the
+    //   dialog's last message as a MessagingStyle (getShortStringForMessage,
+    //   the same helper the message path uses; static text only as fallback);
+    //   (2) it was suppressed (openedDialogId == did, because the chat is
+    //   open when tapped) — now suppression is always false on the tap path
+    //   (createNotificationShortcut takes the value as a parameter; the
+    //   message path still passes openedDialogId == dialogId); (3) the
+    //   dynamic shortcut was removed right after posting — now it is kept.
+    //   Channel, shortcut id, notification id, BubbleActivity intent,
+    //   permission gate and media retry are all unchanged.
     /** Notification id for the menu-triggered bubble (per account). Far from the
      * summary id (account+1) and the per-dialog wear ids. */
     private int lastBubbleNotificationId;
@@ -3838,6 +3853,31 @@ public class NotificationsController extends BaseController implements Notificat
         }
     }
 
+    /** Last (newest) message of a dialog, from the in-memory dialogs list.
+     * Returns null when the dialog has no loaded message (the caller then
+     * falls back to the static bubble text). Picks the newest by date
+     * instead of trusting list order. */
+    private MessageObject getLastDialogMessage(long dialogId) {
+        try {
+            ArrayList<MessageObject> messages = MessagesController.getInstance(currentAccount).dialogMessage.get(dialogId);
+            if (messages == null || messages.isEmpty()) {
+                return null;
+            }
+            MessageObject last = null;
+            int lastDate = Integer.MIN_VALUE;
+            for (int i = 0; i < messages.size(); i++) {
+                MessageObject msg = messages.get(i);
+                if (msg != null && msg.messageOwner != null && msg.messageOwner.date > lastDate) {
+                    lastDate = msg.messageOwner.date;
+                    last = msg;
+                }
+            }
+            return last;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /** Post a bubble for the given dialog. Returns true when the bubble
      * notification was posted. On false, getLastBubbleError() says why. */
     public boolean showBubbleForDialog(long dialogId, boolean autoExpand) {
@@ -3880,14 +3920,51 @@ public class NotificationsController extends BaseController implements Notificat
                 bubbleIntent.putExtra("chatId", -dialogId);
             }
             bubbleIntent.putExtra("currentAccount", currentAccount);
+            // v2.0.39: post the tap notification exactly like a real message
+            // notification, so the system renders it as a bubble. v2.0.38 posted
+            // bare static text with suppression ON (the chat is open when tapped);
+            // the system accepted the post but showed no bubble, while incoming
+            // message notifications (real conversation content, MessagingStyle,
+            // not suppressed) bubble fine. The last message is best-effort: any
+            // failure falls back to the static text, never to a failed bubble.
+            MessageObject lastMessage = getLastDialogMessage(dialogId);
+            String senderName = name;
+            if (lastMessage != null && lastMessage.isOut()) {
+                TLRPC.User self = getUserConfig().getCurrentUser();
+                if (self != null) {
+                    senderName = UserObject.getUserName(self);
+                }
+            }
+            Person senderPerson = new Person.Builder().setName(senderName).build();
+            String lastText = null;
+            if (lastMessage != null) {
+                try {
+                    lastText = getShortStringForMessage(lastMessage, new String[1], new boolean[1]);
+                } catch (Exception e) {
+                    FileLog.e(e);
+                    lastText = null;
+                }
+            }
             NotificationCompat.Builder builder = new NotificationCompat.Builder(ctx, channelId)
                     .setSmallIcon(R.drawable.icon_plane_crescent)
                     .setContentTitle(name)
-                    .setContentText(LocaleController.getString(R.string.SilentBubbleNotification))
                     .setContentIntent(PendingIntent.getActivity(ctx, 0, bubbleIntent, PendingIntent.FLAG_MUTABLE | PendingIntent.FLAG_UPDATE_CURRENT))
                     .setAutoCancel(true)
                     .setOnlyAlertOnce(true);
-            String shortcutId = createNotificationShortcut(builder, dialogId, name, user, chat, null, true, autoExpand);
+            if (!TextUtils.isEmpty(lastText)) {
+                NotificationCompat.MessagingStyle messagingStyle = new NotificationCompat.MessagingStyle(senderPerson);
+                boolean isGroupChat = DialogObject.isChatDialog(dialogId);
+                if (Build.VERSION.SDK_INT < 28 || isGroupChat || UserObject.isReplyUser(dialogId)) {
+                    messagingStyle.setConversationTitle(name);
+                }
+                messagingStyle.setGroupConversation(Build.VERSION.SDK_INT < 28 || isGroupChat || UserObject.isReplyUser(dialogId));
+                messagingStyle.addMessage(lastText, ((long) lastMessage.messageOwner.date) * 1000L, senderPerson);
+                builder.setStyle(messagingStyle);
+                builder.setContentText(lastText);
+            } else {
+                builder.setContentText(LocaleController.getString(R.string.SilentBubbleNotification));
+            }
+            String shortcutId = createNotificationShortcut(builder, dialogId, name, user, chat, senderPerson, true, autoExpand, false);
             if (shortcutId == null) {
                 lastBubbleError = "bubble not supported for this chat";
                 return false;
@@ -3895,9 +3972,9 @@ public class NotificationsController extends BaseController implements Notificat
             int notifId = Integer.MAX_VALUE - 100 - currentAccount;
             notificationManager.notify(notifId, builder.build());
             lastBubbleNotificationId = notifId;
-            ArrayList<String> ids = new ArrayList<>();
-            ids.add(shortcutId);
-            ShortcutManagerCompat.removeDynamicShortcuts(ctx, ids);
+            // v2.0.39: keep the dynamic shortcut — removing it right after posting
+            // is one more difference from the working message path, and a leftover
+            // conversation shortcut is harmless (the next message re-pushes it).
             return true;
         } catch (Exception e) {
             FileLog.e(e);
@@ -6153,7 +6230,7 @@ public class NotificationsController extends BaseController implements Notificat
             NotificationHolder holder = holders.get(a);
             ids.clear();
             if (Build.VERSION.SDK_INT >= 29 && !DialogObject.isEncryptedDialog(holder.dialogId)) {
-                String shortcutId = createNotificationShortcut(holder.notification, holder.dialogId, holder.name, holder.user, holder.chat, personCache.get(holder.dialogId), !holder.story, false);
+                String shortcutId = createNotificationShortcut(holder.notification, holder.dialogId, holder.name, holder.user, holder.chat, personCache.get(holder.dialogId), !holder.story, false, openedDialogId == holder.dialogId);
                 if (shortcutId != null) {
                     ids.add(shortcutId);
                 }
